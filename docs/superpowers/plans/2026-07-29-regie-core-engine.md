@@ -16,7 +16,7 @@
 - Gate decisions come only from commands the harness runs itself — never from an agent's exit code or self-report.
 - Every agent invocation runs in its own process group; kill = SIGTERM then SIGKILL to the group.
 - Runs live outside any target repo: default `~/.regie`, overridden by env var `REGIE_HOME` (tests always set it to a tmp dir).
-- Escalation ladder: 2 retries same binding → 1 retry stronger binding (profiles already at the top rung skip to halt) → halt.
+- Escalation ladder: 3 attempts total per stage — 2 on the original binding, then 1 on the next-stronger binding (profiles already at the top rung skip to halt) → halt. (Wording ratified during final review to match ladder.py/Task 8 semantics.)
 - Severity rubric enum is exactly: `blocker | major | minor`. Minors never re-enter the loop.
 - Builder may not modify test files — enforced post-hoc via `git diff` against configured `test_globs`.
 - Package name `regie`, CLI command `regie`. Conventional commits.
@@ -2141,6 +2141,18 @@ git commit -m "test(e2e): full fake-agent run with crash injection and resume"
 ---
 
 ## What Plan B covers (next plan, after this one executes)
+
+**Carried over from Plan A execution (parked with ruling):** the reviewer
+binding-flip (cross-model rule — reviewer must bind the opposite family of the
+builder's *actual* attempt binding) is not implemented in Plan A's pipeline,
+because with only the fake adapter every profile shares one CLI and the flip is
+untestable dead code. Plan B MUST implement it at review dispatch when real
+adapters land.
+
+**Also carried from Plan A's final review:** friendly CLI errors (duplicate
+run-id on same day, missing tasks.json currently raise raw tracebacks) · the
+spec's "refuse two live runs against the same target repo" guard · quota-halt
+resume semantics revisited alongside real quota detection.
 
 Real `claude`/`codex` adapters (result-JSON/JSONL parsing, quota detection, `--json-schema`) · gitops extensions (run worktree + branch creation off pinned base SHA, squash with backup ref + tree-identity check, push, `gh pr create`, CI watch) · planner stage replacing `tasks.json` (OpenSpec output, criteria parse gate, `regie approve` checkpoint) · finalize stage (full suite, eval-trigger predicate, rebase-halt) · debugger rounds · desktop notification · `regie clean` · ai-search-platform prerequisites (Make targets, suite timing, `regie.toml`).
 
