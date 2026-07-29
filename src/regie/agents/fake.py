@@ -7,7 +7,14 @@ from regie.agents.base import AgentRequest, AgentResult, register
 
 _SCRIPT = """
 import json, os, pathlib, time
-spec = json.loads(pathlib.Path(".fake_agent.json").read_text())
+qdir = pathlib.Path(".fake_agent_queue")
+queued = sorted((int(p.stem), p) for p in qdir.glob("*.json")) if qdir.is_dir() else []
+if queued:
+    _n, _p = queued[0]
+    spec = json.loads(_p.read_text())
+    _p.rename(_p.with_name(_p.name + ".done"))
+else:
+    spec = json.loads(pathlib.Path(".fake_agent.json").read_text())
 for rel, content in spec.get("writes", {}).items():
     p = pathlib.Path(rel); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content)
