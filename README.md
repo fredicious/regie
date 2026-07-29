@@ -17,12 +17,14 @@ inspectable, resumable, auditable.
 
 ## Status
 
-Design phase. See:
+Plan A (core engine) merged: state machine, gates, ladder, CLI — 52 tests. Real
+Claude/Codex adapters land in Plan B. See:
 
 - `docs/superpowers/specs/2026-07-29-agent-harness-v1-design.md` — v1 design
+- `docs/USAGE.md` — install (via `uv tool install`) and usage
 - `docs/ROADMAP.md` — deferred v1.5/v2/v3 ideas
 
-## Planned CLI
+## CLI
 
 ```
 regie run brief.md      # start a run: brief → spec → tasks → build → PR
