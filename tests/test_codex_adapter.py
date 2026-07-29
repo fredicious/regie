@@ -51,3 +51,8 @@ def test_parse_blocked_and_structured(tmp_path):
 def test_parse_no_message_is_error():
     assert get_adapter("codex").parse("", 0).outcome == "error"
     assert get_adapter("codex").parse("garbage\nlines", 0).outcome == "error"
+
+
+def test_parse_blocked_precedence_over_exit_code():
+    out = _lines({"type": "agent_message", "text": "blocked: why?"})
+    assert get_adapter("codex").parse(out, 1).outcome == "blocked"

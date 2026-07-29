@@ -43,12 +43,12 @@ class CodexAdapter:
             return AgentResult(outcome=outcome, text=error_msg[-2000:])
         if text is None:
             return AgentResult(outcome="error", text=stdout[-2000:])
-        if exit_code != 0:
-            return AgentResult(outcome="error", text=text[-2000:])
         for line in text.splitlines():
             if line.strip().lower().startswith("blocked:"):
                 return AgentResult(outcome="blocked", text=text, turns=turns,
                                    blocked_question=line.split(":", 1)[1].strip())
+        if exit_code != 0:
+            return AgentResult(outcome="error", text=text[-2000:])
         structured = None
         try:
             parsed = json.loads(text)
