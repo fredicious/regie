@@ -196,6 +196,34 @@ def run_tasks_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
     rundir.write_state(run)
 
 
+def reconcile(rundir: RunDir, run: RunState, repo: Path) -> int:
+    """Resume reconciliation: any WAL intent without a recorded attempt means we
+    crashed mid-dispatch — mark it failed and discard uncommitted worktree edits."""
+    from collections import Counter
+
+    from regie.gitops import git
+    from regie.models import Binding
+
+    intents = Counter()
+    bindings: dict[tuple[str, str], dict] = {}
+    for rec in rundir.read_intents():
+        key = (rec["task"], rec["stage"])
+        intents[key] += 1
+        bindings[key] = rec.get("binding", {"cli": "fake", "model": "?"})
+    fixed = 0
+    for (task_id, stage), count in intents.items():
+        attempts = run.tasks[task_id].attempts[stage]
+        while len(attempts) < count:
+            attempts.append(Attempt(binding=Binding(**bindings[(task_id, stage)]),
+                                    outcome="failed"))
+            fixed += 1
+    if fixed:
+        git(repo, "checkout", "--", ".")
+        git(repo, "clean", "-fd")
+        rundir.write_state(run)
+    return fixed
+
+
 def _conventions(repo: Path) -> str:
     parts = []
     for name in ("CLAUDE.md", "AGENTS.md"):

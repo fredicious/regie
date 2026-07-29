@@ -11,18 +11,6 @@ PROFILES_FAKE = None  # built by fixture below
 
 
 @pytest.fixture
-def fake_profiles(tmp_path) -> Path:
-    d = tmp_path / "profiles"
-    d.mkdir()
-    for name in ("planner", "test-writer", "builder", "reviewer"):
-        (d / f"{name}.yaml").write_text(
-            "binding: { cli: fake, model: m1 }\n"
-            "budgets: { turns: 5, wall_minutes: 1, stall_minutes: 1 }\n")
-        (d / f"{name}.md").write_text(f"You are {name}.")
-    return d
-
-
-@pytest.fixture
 def cfg(fixture_repo, fake_profiles):
     (fixture_repo / "regie.toml").write_text("""
 test_globs = ["tests/**"]

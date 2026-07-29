@@ -5,6 +5,18 @@ import pytest
 
 
 @pytest.fixture
+def fake_profiles(tmp_path) -> Path:
+    d = tmp_path / "profiles"
+    d.mkdir()
+    for name in ("planner", "test-writer", "builder", "reviewer"):
+        (d / f"{name}.yaml").write_text(
+            "binding: { cli: fake, model: m1 }\n"
+            "budgets: { turns: 5, wall_minutes: 1, stall_minutes: 1 }\n")
+        (d / f"{name}.md").write_text(f"You are {name}.")
+    return d
+
+
+@pytest.fixture
 def regie_home(tmp_path, monkeypatch) -> Path:
     home = tmp_path / "regie-home"
     home.mkdir()
