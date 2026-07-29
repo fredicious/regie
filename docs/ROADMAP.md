@@ -48,9 +48,6 @@ session (see `docs/superpowers/specs/2026-07-29-agent-harness-v1-design.md`).
 - **Open-source release** — generic packaging: configurable workflows/profiles,
   docs, multi-repo support, the web dashboard grown into a workflow/profile
   editor UI ("define your own workflows/agents").
-- **n8n as a front-end** — alternative to building a workflow-editor UI: n8n
-  nodes that call the harness CLI, using n8n for triggering/visualization while
-  the harness stays the execution engine.
 - **Rust rewrite** — only if the OSS/product path demands single-binary
   distribution and the design has stabilized. Explicitly a nice problem to have.
 - **Mutation testing as a gate** — score test-writer output by mutation kill
