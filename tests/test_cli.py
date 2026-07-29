@@ -101,7 +101,8 @@ def test_run_command_executes_tasks_from_tasks_json(regie_home, fixture_repo,
         {"result": {"outcome": "blocked", "blocked_question": "?"}}))
     commit_all(fixture_repo, "chore: fake agent script")
     result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
-                                 "--profiles", str(fake_profiles)])
+                                 "--profiles", str(fake_profiles),
+                                 "--tasks-file", str(tmp_path / "tasks.json")])
     assert result.exit_code == 1  # halted on blocked
     assert "halted" in result.output.lower()
 
@@ -117,9 +118,11 @@ def test_run_duplicate_id_friendly_error(regie_home, fixture_repo, fake_profiles
     (tmp_path / "tasks.json").write_text("[]")
     _toml(fixture_repo)
     runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
-                        "--profiles", str(fake_profiles)])
+                        "--profiles", str(fake_profiles),
+                        "--tasks-file", str(tmp_path / "tasks.json")])
     result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
-                                 "--profiles", str(fake_profiles)])
+                                 "--profiles", str(fake_profiles),
+                                 "--tasks-file", str(tmp_path / "tasks.json")])
     assert result.exit_code == 2 and "already exists" in result.output
 
 
@@ -134,7 +137,8 @@ def test_run_executes_in_worktree_not_checkout(regie_home, fixture_repo, fake_pr
         {"result": {"outcome": "blocked", "blocked_question": "?"}}))
     commit_all(fixture_repo, "chore: fake agent script")
     result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
-                                 "--profiles", str(fake_profiles)])
+                                 "--profiles", str(fake_profiles),
+                                 "--tasks-file", str(tmp_path / "tasks.json")])
     assert result.exit_code == 1, result.output
     state = RunDir.open(regie_home, _last_run_id(regie_home)).read_state()
     assert state.worktree_path and state.worktree_path != str(fixture_repo)
@@ -156,9 +160,26 @@ def test_clean_removes_worktree_and_branch(regie_home, fixture_repo, fake_profil
         {"result": {"outcome": "blocked", "blocked_question": "?"}}))
     commit_all(fixture_repo, "chore: fake agent script")
     runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
-                        "--profiles", str(fake_profiles)])
+                        "--profiles", str(fake_profiles),
+                        "--tasks-file", str(tmp_path / "tasks.json")])
 
     rid = _last_run_id(regie_home)
     result = runner.invoke(app, ["clean", rid, "--repo", str(fixture_repo)])
     assert result.exit_code == 0
     assert not Path(RunDir.open(regie_home, rid).read_state().worktree_path).exists()
+
+
+def test_approve_flips_stage_to_tasks(regie_home, fixture_repo):
+    rd = RunDir.create(regie_home, "r1")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   stage="approve")
+    rd.write_state(run)
+    result = runner.invoke(app, ["approve", "r1"])
+    assert result.exit_code == 0
+    assert RunDir.open(regie_home, "r1").read_state().stage == "tasks"
+
+
+def test_approve_on_non_approve_run_is_an_error(regie_home, fixture_repo):
+    _seed_run(regie_home, fixture_repo)  # stage="tasks"
+    result = runner.invoke(app, ["approve", "r1"])
+    assert result.exit_code == 2

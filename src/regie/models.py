@@ -55,6 +55,7 @@ class TaskSpec(BaseModel):
     file_scope: list[str] = Field(default_factory=list)
     checklist: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
+    planned_tests: list[str] = Field(default_factory=list)
 
 
 TaskStage = Literal["test", "build", "review"]

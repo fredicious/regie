@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -11,7 +12,16 @@ from regie.dispatch import run_agent
 from regie.gates import diff_gate, red_test_gate, run_command_gate
 from regie.gitops import commit_all, git
 from regie.ladder import next_action
-from regie.models import Attempt, Binding, Finding, GateResult, RunState
+from regie.models import (
+    Attempt,
+    Binding,
+    CycleError,
+    Finding,
+    GateResult,
+    RunState,
+    TaskSpec,
+    TaskState,
+)
 from regie.packets import render_packet, write_packet
 from regie.rundir import RunDir
 
@@ -20,6 +30,14 @@ if TYPE_CHECKING:
 
 FINDINGS_SCHEMA = {"type": "object", "properties": {"findings": {"type": "array"}},
                    "required": ["findings"]}
+
+PLAN_SCHEMA = {"type": "object", "required": ["spec_markdown", "tasks"],
+              "properties": {"spec_markdown": {"type": "string"},
+                             "tasks": {"type": "array"}}}
+
+CRITERION_RE = re.compile(r"given.+when.+then", re.IGNORECASE | re.DOTALL)
+
+_PLAN_TASK_ID = "PLAN"
 
 
 @dataclass
@@ -202,6 +220,121 @@ def _write_note(rundir: RunDir, task_id: str, stage: str, note: str) -> None:
 def _notes_for(rundir: RunDir, task_id: str, stage: str) -> str:
     path = rundir.task_dir(task_id) / f"note-{stage}.md"
     return path.read_text() if path.exists() else ""
+
+
+def _render_plan_packet(brief_text: str, conventions: str, decisions: str,
+                        extra: str) -> str:
+    return "\n\n".join([
+        f"# Brief\n{brief_text}",
+        f"## Conventions\n{conventions}",
+        f"## Decisions so far\n{decisions or '(none yet)'}",
+        f"## Notes\n{extra or '(none)'}",
+    ]) + "\n"
+
+
+def _validate_plan(structured: dict | None, cfg: RegieConfig) -> list[str]:
+    errors: list[str] = []
+    if not structured or "spec_markdown" not in structured or "tasks" not in structured:
+        return ["planner output missing spec_markdown or tasks"]
+    specs: list[TaskSpec] = []
+    for i, raw in enumerate(structured["tasks"]):
+        try:
+            spec = TaskSpec(**raw)
+        except Exception as exc:  # noqa: BLE001 - any pydantic validation error
+            errors.append(f"task[{i}]: invalid task spec: {exc}")
+            continue
+        if not spec.planned_tests:
+            errors.append(f"task {spec.id}: planned_tests must be non-empty")
+        for criterion in spec.criteria:
+            if not CRITERION_RE.search(criterion):
+                errors.append(f"task {spec.id}: criterion not Given/When/Then: {criterion}")
+        if spec.profile not in cfg.profiles:
+            errors.append(f"task {spec.id}: unknown profile '{spec.profile}'")
+        specs.append(spec)
+    if specs:
+        probe = RunState(id="probe", target_repo="", branch="")
+        probe.tasks = {s.id: TaskState(spec=s) for s in specs}
+        try:
+            probe.ordered_task_ids()
+        except CycleError:
+            errors.append("task DAG has a cycle")
+    return errors
+
+
+def _halt_run(rundir: RunDir, run: RunState, reason: str) -> None:
+    run.stage = "halted"
+    run.halt_reason = reason
+    rundir.write_state(run)
+
+
+def _apply_plan(rundir: RunDir, run: RunState, structured: dict) -> None:
+    spec_dir = rundir.path / "spec"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "spec.md").write_text(structured["spec_markdown"])
+    specs = [TaskSpec(**t) for t in structured["tasks"]]
+    run.tasks = {s.id: TaskState(spec=s) for s in specs}
+    run.stage = "tasks" if run.autonomous else "approve"
+    rundir.write_state(run)
+
+
+def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) -> None:
+    """Advance the run from stage "plan" to "approve" (or "tasks" when
+    run.autonomous). Mirrors run_task's dispatch/ladder shape over
+    run.planner_attempts, using the pseudo-task dir tasks/PLAN/."""
+    brief_text = (rundir.path / "brief.md").read_text()
+    decisions_path = rundir.path / "decisions.md"
+    decisions = decisions_path.read_text() if decisions_path.exists() else ""
+    conventions = _conventions(worktree)
+    profile = cfg.profiles["planner"]
+
+    while True:
+        attempts = run.planner_attempts
+        if attempts:
+            action, _ = next_action(attempts, attempts[-1].binding, cfg.binding_strength)
+            if action == "halt":
+                _halt_run(rundir, run, "planner ladder exhausted")
+                return
+
+        extra = _notes_for(rundir, _PLAN_TASK_ID, "plan")
+        packet = _render_plan_packet(brief_text, conventions, decisions, extra)
+        write_packet(rundir.task_dir(_PLAN_TASK_ID), packet)
+
+        binding = profile.binding
+        if attempts:
+            _action, binding = next_action(attempts, attempts[-1].binding,
+                                           cfg.binding_strength)
+        req = AgentRequest(prompt=profile.prompt_text() + "\n\n" + packet, cwd=worktree,
+                           binding=binding, budgets=profile.budgets,
+                           output_schema=PLAN_SCHEMA)
+        attempt = Attempt(binding=binding, prompt_hash=profile.prompt_hash())
+        result = run_agent(rundir, _PLAN_TASK_ID, "plan", len(attempts) + 1, req)
+        attempt.outcome = {"done": "done", "blocked": "blocked",
+                           "quota": "quota"}.get(result.outcome, "failed")
+        attempt.blocked_question = result.blocked_question
+        attempt.usage, attempt.turns = result.usage, result.turns
+        attempts.append(attempt)
+        rundir.write_state(run)
+
+        if attempt.outcome == "quota":
+            _halt_run(rundir, run, "quota exhausted during plan")
+            return
+        if attempt.outcome == "blocked":
+            _halt_run(rundir, run, f"blocked: {attempt.blocked_question or ''}")
+            return
+        if attempt.outcome == "failed":
+            continue
+
+        errors = _validate_plan(result.structured, cfg)
+        if errors:
+            attempt.outcome = "failed"
+            _write_note(rundir, _PLAN_TASK_ID, "plan",
+                       "Previous plan failed validation:\n" + "\n".join(
+                           f"- {e}" for e in errors))
+            rundir.write_state(run)
+            continue
+
+        _apply_plan(rundir, run, result.structured)
+        return
 
 
 def run_tasks_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,

@@ -22,7 +22,7 @@ from regie.gitops import (
 )
 from regie.models import RunState, TaskSpec, TaskState
 from regie.notify import notify
-from regie.pipeline import reconcile, run_tasks_stage
+from regie.pipeline import plan_stage, reconcile, run_tasks_stage
 from regie.rundir import RunDir, RunLocked
 
 app = typer.Typer(add_completion=False)
@@ -90,10 +90,28 @@ def _ensure_worktree(repo: Path, branch: str, base_sha: str, path: Path) -> Path
         return path
 
 
+def _print_approve_hint(rundir: RunDir, state: RunState) -> None:
+    typer.echo(f"spec ready: {rundir.path / 'spec' / 'spec.md'}")
+    typer.echo(f"run `regie approve {state.id}` to continue")
+
+
+def _after_plan_stage(rundir: RunDir, state: RunState) -> bool:
+    """Handles the outcomes of plan_stage that stop this invocation here.
+    Returns True if the caller should return now."""
+    if state.stage == "approve":
+        _print_approve_hint(rundir, state)
+        return True
+    if state.stage == "halted":
+        _finish(state)
+        return True
+    return False
+
+
 @app.command()
 def run(brief: Path, repo: Annotated[Path, typer.Option()],
         profiles: Annotated[Path, typer.Option()] = _DEFAULT_PROFILES,
-        autonomous: Annotated[bool, typer.Option("--autonomous")] = False):
+        autonomous: Annotated[bool, typer.Option("--autonomous")] = False,
+        tasks_file: Annotated[Path | None, typer.Option("--tasks-file")] = None):
     if not brief.exists():
         typer.echo(f"brief not found: {brief}", err=True)
         raise typer.Exit(2)
@@ -110,20 +128,25 @@ def run(brief: Path, repo: Annotated[Path, typer.Option()],
     _guard_and_mark(home, repo, run_id)
 
     (rundir.path / "brief.md").write_text(brief.read_text())
-    tasks_file = brief.parent / "tasks.json"  # Plan A stand-in for the planner stage
-    if not tasks_file.exists():
-        typer.echo(f"missing {tasks_file} (planner stage not implemented yet)", err=True)
-        raise typer.Exit(2)
-    specs = [TaskSpec(**t) for t in json.loads(tasks_file.read_text())]
 
     base = _resolve_base_sha(repo, cfg.base_branch)
     wt = create_run_worktree(repo, f"regie/{run_id}", base, home / "worktrees" / run_id)
 
     state = RunState(id=run_id, target_repo=str(repo), branch=f"regie/{run_id}",
                      base_sha=base, base_branch=cfg.base_branch, worktree_path=str(wt),
-                     autonomous=autonomous, stage="tasks",
-                     tasks={s.id: TaskState(spec=s) for s in specs})
-    rundir.write_state(state)
+                     autonomous=autonomous, stage="plan")
+
+    if tasks_file is not None:
+        specs = [TaskSpec(**t) for t in json.loads(tasks_file.read_text())]
+        state.tasks = {s.id: TaskState(spec=s) for s in specs}
+        state.stage = "tasks"
+        rundir.write_state(state)
+    else:
+        rundir.write_state(state)
+        plan_stage(rundir, state, cfg, Path(state.worktree_path))
+        if _after_plan_stage(rundir, state):
+            return
+
     run_tasks_stage(rundir, state, cfg, Path(state.worktree_path))
     _finish(state)
 
@@ -152,18 +175,46 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
     if fixed:
         typer.echo(f"reconciled {fixed} orphaned attempt(s)")
     if state.stage == "halted":
-        state.stage = "tasks"
         state.halt_reason = None
-        for t in state.tasks.values():
-            if t.status in ("failed", "blocked", "running"):
-                t.status = "pending"
-                # A human-mediated resume deserves a fresh ladder: recorded
-                # attempts would otherwise re-trigger _should_halt instantly.
-                # The audit trail survives in events.jsonl and task_dir
-                # transcripts, so nothing is lost by clearing them here.
-                t.attempts = {"test": [], "build": [], "review": []}
+        if state.tasks:
+            state.stage = "tasks"
+            for t in state.tasks.values():
+                if t.status in ("failed", "blocked", "running"):
+                    t.status = "pending"
+                    # A human-mediated resume deserves a fresh ladder: recorded
+                    # attempts would otherwise re-trigger _should_halt instantly.
+                    # The audit trail survives in events.jsonl and task_dir
+                    # transcripts, so nothing is lost by clearing them here.
+                    t.attempts = {"test": [], "build": [], "review": []}
+        else:
+            # Halted before any tasks existed: the halt happened during
+            # planning. A fresh ladder means clearing planner_attempts too.
+            state.stage = "plan"
+            state.planner_attempts = []
+
+    if state.stage == "plan":
+        plan_stage(rundir, state, cfg, worktree)
+        if _after_plan_stage(rundir, state):
+            return
+
+    if state.stage == "approve":
+        _print_approve_hint(rundir, state)
+        return
+
     run_tasks_stage(rundir, state, cfg, worktree)
     _finish(state)
+
+
+@app.command()
+def approve(run_id: str):
+    rundir = RunDir.open(_home(), run_id)
+    state = rundir.read_state()
+    if state.stage != "approve":
+        typer.echo(f"run {run_id} is not awaiting approval (stage={state.stage})", err=True)
+        raise typer.Exit(2)
+    state.stage = "tasks"
+    rundir.write_state(state)
+    typer.echo(f"approved — run `regie resume {run_id} --repo <path>`")
 
 
 @app.command()

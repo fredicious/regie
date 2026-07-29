@@ -87,7 +87,8 @@ def _setup(regie_home, fixture_repo, fake_profiles, tmp_path):
 def test_full_run_reaches_finalize(regie_home, fixture_repo, fake_profiles, tmp_path):
     brief = _setup(regie_home, fixture_repo, fake_profiles, tmp_path)
     result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
-                                 "--profiles", str(fake_profiles)])
+                                 "--profiles", str(fake_profiles),
+                                 "--tasks-file", str(tmp_path / "tasks.json")])
     assert result.exit_code == 0, result.output
     run_id = next(l for l in result.output.splitlines() if "→" in l).split()[1]
     state = RunDir.open(regie_home, run_id).read_state()
@@ -125,7 +126,8 @@ def test_crash_then_resume_completes(regie_home, fixture_repo, fake_profiles,
 
     monkeypatch.setattr(pipeline, "run_agent", crashing)
     result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
-                                 "--profiles", str(fake_profiles)])
+                                 "--profiles", str(fake_profiles),
+                                 "--tasks-file", str(tmp_path / "tasks.json")])
     assert result.exit_code != 0  # crashed
     dirty = calls["dirty"]
     assert dirty.exists()  # the in-flight edit landed before the crash
