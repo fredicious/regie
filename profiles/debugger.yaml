@@ -1,0 +1,2 @@
+binding: { cli: claude, model: strongest, auth: subscription }
+budgets: { turns: 40, wall_minutes: 30, stall_minutes: 5 }

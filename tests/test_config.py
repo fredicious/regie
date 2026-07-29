@@ -23,7 +23,7 @@ def _repo_with(tmp_path, toml_text):
 def test_loads_commands_globs_and_profiles(tmp_path):
     cfg = load_config(_repo_with(tmp_path, GOOD_TOML), PROFILES)
     assert cfg.commands["test"] == "pytest -q"
-    assert set(cfg.profiles) == {"planner", "test-writer", "builder", "reviewer"}
+    assert set(cfg.profiles) == {"planner", "test-writer", "builder", "reviewer", "debugger"}
     assert cfg.profiles["builder"].binding.cli == "codex"
     assert len(cfg.profiles["builder"].prompt_hash()) == 64
 

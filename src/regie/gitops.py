@@ -149,6 +149,15 @@ def create_pr(worktree: Path, base_branch: str, title: str, body_file: Path) -> 
     return out.strip()
 
 
+def ci_failures(worktree: Path) -> str:
+    """Raw `gh pr checks` output for feeding a debugger round's failure
+    context. Best-effort: a nonzero exit (still no checks reported, `gh`
+    missing, etc.) is tolerated and its output captured regardless."""
+    proc = subprocess.run(["gh", "pr", "checks"], cwd=str(worktree),
+                          capture_output=True, text=True, check=False)
+    return (proc.stdout + proc.stderr)[-4000:]
+
+
 def ci_status(worktree: Path) -> str:
     try:
         out = _tool(worktree, "gh", "pr", "checks", "--json", "state",

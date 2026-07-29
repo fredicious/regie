@@ -22,7 +22,13 @@ from regie.gitops import (
 )
 from regie.models import RunState, TaskSpec, TaskState
 from regie.notify import notify
-from regie.pipeline import finalize_stage, plan_stage, reconcile, run_tasks_stage
+from regie.pipeline import (
+    finalize_stage,
+    plan_stage,
+    pr_stage,
+    reconcile,
+    run_tasks_stage,
+)
 from regie.rundir import RunDir, RunLocked
 
 app = typer.Typer(add_completion=False)
@@ -96,8 +102,8 @@ def _print_approve_hint(rundir: RunDir, state: RunState) -> None:
 
 
 def _advance(rundir: RunDir, state: RunState, cfg: RegieConfig, worktree: Path) -> None:
-    """From stage "tasks" onward: run tasks, then finalize, then stop at "pr"
-    (a placeholder until Task 9 adds the PR stage)."""
+    """From stage "tasks" onward: run tasks, then finalize, then the PR stage
+    (squash, scribe, push, CI watch with gated debugger rounds)."""
     if state.stage == "tasks":
         run_tasks_stage(rundir, state, cfg, worktree)
     if state.stage == "halted":
@@ -109,8 +115,14 @@ def _advance(rundir: RunDir, state: RunState, cfg: RegieConfig, worktree: Path) 
         _finish(state)
         return
     if state.stage == "pr":
-        typer.echo("ready for PR stage (Task 9)")
-        raise typer.Exit(0)
+        pr_stage(rundir, state, cfg, worktree)
+    if state.stage == "halted":
+        _finish(state)
+        return
+    if state.stage == "done":
+        typer.echo(f"PR ready: {state.pr_url}")
+        notify("regie PR ready", f"{state.id}: {state.pr_url}")
+        return
     _finish(state)
 
 

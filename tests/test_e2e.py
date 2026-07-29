@@ -2,6 +2,8 @@
 and a simulated crash mid-run resumes to completion."""
 import gc
 import json
+import os
+import stat
 import subprocess
 from pathlib import Path
 
@@ -12,6 +14,19 @@ from regie.gitops import commit_all
 from regie.rundir import RunDir
 
 runner = CliRunner()
+
+
+def _stub_gh_green(tmp_path, monkeypatch):
+    """A `gh` stub that always reports CI green, so the PR stage (Task 9)
+    reaches "done" without needing real GitHub access."""
+    gh = tmp_path / "bin" / "gh"
+    gh.parent.mkdir(parents=True, exist_ok=True)
+    gh.write_text("#!/bin/sh\n"
+                  'if [ "$1 $2" = "pr create" ]; then echo "https://github.com/x/y/pull/1"; exit 0; fi\n'
+                  'if [ "$1 $2" = "pr checks" ]; then echo "SUCCESS"; exit 0; fi\n'
+                  'exit 1\n')
+    gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{gh.parent}:{os.environ['PATH']}")
 
 TASKS = [
     {"id": "T1", "title": "divide", "profile": "builder",
@@ -92,7 +107,8 @@ def _setup(regie_home, fixture_repo, fake_profiles, tmp_path, remote_repo=None):
 
 
 def test_full_run_reaches_pr(regie_home, fixture_repo, remote_repo, fake_profiles,
-                             tmp_path):
+                             tmp_path, monkeypatch):
+    _stub_gh_green(tmp_path, monkeypatch)
     brief = _setup(regie_home, fixture_repo, fake_profiles, tmp_path, remote_repo)
     result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
                                  "--profiles", str(fake_profiles),
@@ -100,7 +116,8 @@ def test_full_run_reaches_pr(regie_home, fixture_repo, remote_repo, fake_profile
     assert result.exit_code == 0, result.output
     run_id = max((regie_home / "runs").iterdir()).name
     state = RunDir.open(regie_home, run_id).read_state()
-    assert state.stage == "pr"
+    assert state.stage == "done"
+    assert state.pr_url == "https://github.com/x/y/pull/1"
     assert all(t.status == "done" for t in state.tasks.values())
 
     # T2's review dispatch (queue entry 5) is the run's last dispatch, so its
@@ -119,6 +136,7 @@ def test_full_run_reaches_pr(regie_home, fixture_repo, remote_repo, fake_profile
 
 def test_crash_then_resume_completes(regie_home, fixture_repo, remote_repo,
                                      fake_profiles, tmp_path, monkeypatch):
+    _stub_gh_green(tmp_path, monkeypatch)
     brief = _setup(regie_home, fixture_repo, fake_profiles, tmp_path, remote_repo)
     # Crash injection: on the SECOND dispatch, do what the real dispatch.run_agent
     # does first -- write the WAL intent -- then crash before an Attempt is ever
