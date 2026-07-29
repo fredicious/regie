@@ -69,6 +69,7 @@ class TaskState(BaseModel):
     stage: TaskStage = "test"
     status: Literal["pending", "running", "done", "blocked", "failed"] = "pending"
     attempts: dict[str, list[Attempt]] = Field(default_factory=_empty_attempts)
+    escaped: bool = False
 
 
 RunStage = Literal["intake", "plan", "approve", "tasks", "finalize", "pr", "done", "halted"]

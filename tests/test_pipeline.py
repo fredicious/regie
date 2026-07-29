@@ -120,6 +120,49 @@ def test_halt_after_ladder_exhaustion(regie_home, fixture_repo, cfg):
     assert run.stage == "halted" and run.tasks[tid].status == "failed"
 
 
+def test_escape_hatch_persists_across_resume(regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+    _script(fixture_repo, [RED_TEST])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    _script(fixture_repo, [{"result": {"outcome": "blocked",
+                                       "blocked_question": "bad-test: divide should floor, not truncate"}}])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    assert run.tasks[tid].stage == "test"
+    assert run.tasks[tid].escaped is True
+    persisted = rd.read_state()
+    assert persisted.tasks[tid].escaped is True
+
+
+def test_repeat_bad_test_claim_absorbed_as_failed_attempt(regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+    _script(fixture_repo, [RED_TEST])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    bad_test_claim = {"result": {"outcome": "blocked",
+                                 "blocked_question": "bad-test: divide should floor, not truncate"}}
+    _script(fixture_repo, [bad_test_claim])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    assert run.tasks[tid].escaped is True
+    red_test_again = {"result": {"outcome": "done"}, "writes": {
+        "tests/test_div.py": "from src.calc import divide\n\n"
+                             "def test_div():\n    assert divide(6, 3) == 2  # re-affirmed\n",
+        "src/calc.py": "def add(a, b):\n    return a + b\n\n"
+                       "def divide(a, b):\n    raise NotImplementedError\n"}}
+    _script(fixture_repo, [red_test_again])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)  # re-pass test stage
+    _script(fixture_repo, [bad_test_claim])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    assert run.stage != "halted"
+    attempts = run.tasks[tid].attempts["build"]
+    assert attempts and attempts[-1].outcome == "failed"
+    assert run.tasks[tid].stage == "build"
+
+
 def test_run_tasks_stage_skips_done_tasks(regie_home, fixture_repo, cfg):
     rd = RunDir.create(regie_home, "r1")
     run, tid = _run_state(fixture_repo)

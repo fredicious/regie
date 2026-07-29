@@ -91,7 +91,6 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
     task = run.tasks[task_id]
     task.status = "running"
     dispatched = 0
-    escaped_once = False
 
     while task.status == "running":
         if max_dispatches is not None and dispatched >= max_dispatches:
@@ -111,10 +110,17 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             return
         if attempt.outcome == "blocked":
             question = attempt.blocked_question or ""
-            if stage == "build" and question.startswith("bad-test:") and not escaped_once:
-                escaped_once = True
-                task.stage = "test"
-                _write_note(rundir, task_id, "test", f"Builder claims: {question}")
+            if stage == "build" and question.startswith("bad-test:"):
+                if not task.escaped:
+                    task.escaped = True
+                    task.stage = "test"
+                    _write_note(rundir, task_id, "test", f"Builder claims: {question}")
+                    rundir.write_state(run)
+                    continue
+                # No ping-pong: one escape per task. A repeat bad-test claim is
+                # absorbed as a failed build attempt so the ladder can retry,
+                # escalate, or eventually halt through exhaustion.
+                attempt.outcome = "failed"
                 rundir.write_state(run)
                 continue
             _halt(rundir, run, task_id, f"blocked: {question}")
