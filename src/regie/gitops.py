@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -87,3 +88,73 @@ def delete_branch(repo: Path, branch: str) -> None:
 
 def push_branch(worktree: Path, branch: str) -> None:
     git(worktree, "push", "-u", "origin", branch)
+
+
+_GROUP_KEY_RE = re.compile(r"^(?:test|feat|fix)\(([^)]+)\):")
+
+
+def run_commit_groups(worktree: Path, base_sha: str) -> list[tuple[str, list[str]]]:
+    out = git(worktree, "log", "--reverse", "--format=%H%x09%s", f"{base_sha}..HEAD")
+    groups: list[tuple[str, list[str]]] = []
+    keys: list[str | None] = []
+    for line in out.splitlines():
+        if not line:
+            continue
+        sha, _, subject = line.partition("\t")
+        m = _GROUP_KEY_RE.match(subject)
+        key = m.group(1) if m else None
+        if groups and key is not None and keys[-1] == key:
+            groups[-1] = (subject, groups[-1][1] + [sha])
+        elif groups and key is None:
+            # Non-matching commits join the current group without changing
+            # its default message.
+            groups[-1] = (groups[-1][0], groups[-1][1] + [sha])
+        else:
+            groups.append((subject, [sha]))
+            keys.append(key)
+    return groups
+
+
+def rebuild_history(worktree: Path, base_sha: str,
+                     groups: list[tuple[str, list[str]]], run_id: str) -> None:
+    pre_tree = git(worktree, "rev-parse", "HEAD^{tree}").strip()
+    backup_ref = f"refs/regie/backup/{run_id}"
+    git(worktree, "update-ref", backup_ref, "HEAD")
+    git(worktree, "reset", "--hard", base_sha)
+    for message, shas in groups:
+        git(worktree, "cherry-pick", "-n", *shas)
+        git(worktree, "commit", "-m", message)
+    post_tree = git(worktree, "rev-parse", "HEAD^{tree}").strip()
+    if post_tree != pre_tree:
+        git(worktree, "reset", "--hard", backup_ref)
+        raise GitError("tree mismatch after rewrite")
+
+
+def _tool(cwd: Path, *argv: str) -> str:
+    proc = subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise GitError(f"{' '.join(argv)}: {proc.stderr.strip()}")
+    return proc.stdout
+
+
+def create_pr(worktree: Path, base_branch: str, title: str, body_file: Path) -> str:
+    out = _tool(worktree, "gh", "pr", "create", "--base", base_branch,
+                "--title", title, "--body-file", str(body_file))
+    return out.strip()
+
+
+def ci_status(worktree: Path) -> str:
+    try:
+        out = _tool(worktree, "gh", "pr", "checks", "--json", "state",
+                    "--jq", "[.[].state] | unique | join(\",\")")
+    except GitError:
+        return "green"
+    states = out.strip()
+    if not states:
+        return "green"
+    parts = states.split(",")
+    if "FAILURE" in parts:
+        return "red"
+    if all(p == "SUCCESS" for p in parts):
+        return "green"
+    return "pending"
