@@ -80,9 +80,14 @@ class RunState(BaseModel):
     target_repo: str
     branch: str
     base_sha: str = ""
+    worktree_path: str = ""
+    base_branch: str = "main"
+    pr_url: str = ""
+    autonomous: bool = False
     stage: RunStage = "intake"
     tasks: dict[str, TaskState] = Field(default_factory=dict)
     halt_reason: str | None = None
+    planner_attempts: list[Attempt] = Field(default_factory=list)
 
     def ordered_task_ids(self) -> list[str]:
         graph = {tid: sorted(t.spec.depends_on) for tid, t in sorted(self.tasks.items())}

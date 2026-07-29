@@ -33,6 +33,7 @@ class RegieConfig(BaseModel):
     eval_trigger_globs: list[str] = []
     binding_strength: list[str]
     profiles: dict[str, Profile]
+    base_branch: str = "main"
 
 
 def _load_profiles(profiles_dir: Path, errors: list[str]) -> dict[str, Profile]:
@@ -80,4 +81,5 @@ def load_config(repo: Path, profiles_dir: Path) -> RegieConfig:
         eval_trigger_globs=data.get("eval_trigger_globs", []),
         binding_strength=data["binding_strength"],
         profiles=profiles,
+        base_branch=data.get("base_branch", "main"),
     )

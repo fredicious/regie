@@ -2,10 +2,12 @@
 and a simulated crash mid-run resumes to completion."""
 import gc
 import json
+from pathlib import Path
 
 from typer.testing import CliRunner
 
 from regie.cli import app
+from regie.gitops import commit_all
 from regie.rundir import RunDir
 
 runner = CliRunner()
@@ -76,6 +78,9 @@ def _setup(regie_home, fixture_repo, fake_profiles, tmp_path):
     brief.write_text("# two functions")
     (tmp_path / "tasks.json").write_text(json.dumps(TASKS))
     _queue(fixture_repo, QUEUE)
+    # The run worktree is checked out from base_sha, so the queue directory
+    # must be committed to be present in the worktree the fake adapter reads.
+    commit_all(fixture_repo, "chore: fake agent queue")
     return brief
 
 
@@ -101,13 +106,16 @@ def test_crash_then_resume_completes(regie_home, fixture_repo, fake_profiles,
     # no corresponding attempt, worktree dirty.
     from regie import pipeline
     real = pipeline.run_agent
-    calls = {"n": 0}
-    dirty = fixture_repo / "src" / "dirty.py"
+    calls = {"n": 0, "dirty": None}
 
     def crashing(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 2:
             rundir, task_id, stage, attempt_no, req = args
+            # req.cwd is the run's worktree (dispatch always runs there, never
+            # the user's checkout) -- the in-flight edit lands there too.
+            dirty = req.cwd / "src" / "dirty.py"
+            calls["dirty"] = dirty
             dirty.write_text("dirty\n")  # in-flight edit the crash never cleaned up
             rundir.append_intent({"task": task_id, "stage": stage,
                                   "attempt": attempt_no,
@@ -119,6 +127,7 @@ def test_crash_then_resume_completes(regie_home, fixture_repo, fake_profiles,
     result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
                                  "--profiles", str(fake_profiles)])
     assert result.exit_code != 0  # crashed
+    dirty = calls["dirty"]
     assert dirty.exists()  # the in-flight edit landed before the crash
 
     # In a real crash the OS closes the run.lock fd (and its flock) when the
@@ -135,10 +144,13 @@ def test_crash_then_resume_completes(regie_home, fixture_repo, fake_profiles,
     # entry is needed: reconcile's synthetic failed attempt satisfies the
     # ladder's retry slot without itself consuming a dispatch, so the next
     # real dispatch still consumes the same (T1 build) entry as before.
-    _queue(fixture_repo, QUEUE[1:], start=1)
+    # The worktree already exists from the crashed run (it persists across
+    # resume), so the requeue writes must target it, not the user's checkout.
+    run_id = max((regie_home / "runs").iterdir()).name
+    worktree = Path(RunDir.open(regie_home, run_id).read_state().worktree_path)
+    _queue(worktree, QUEUE[1:], start=1)
 
     monkeypatch.setattr(pipeline, "run_agent", real)
-    run_id = max((regie_home / "runs").iterdir()).name
     result = runner.invoke(app, ["resume", run_id, "--repo", str(fixture_repo),
                                  "--profiles", str(fake_profiles)])
     assert result.exit_code == 0, result.output
