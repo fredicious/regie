@@ -3,16 +3,20 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from regie.agents.base import AgentRequest
 from regie.config import Profile, RegieConfig
 from regie.dispatch import run_agent
 from regie.gates import diff_gate, red_test_gate, run_command_gate
-from regie.gitops import commit_all
+from regie.gitops import commit_all, git
 from regie.ladder import next_action
 from regie.models import Attempt, Finding, GateResult, RunState
 from regie.packets import render_packet, write_packet
 from regie.rundir import RunDir
+
+if TYPE_CHECKING:
+    from regie.agents.base import AgentResult
 
 FINDINGS_SCHEMA = {"type": "object", "properties": {"findings": {"type": "array"}},
                    "required": ["findings"]}
@@ -31,13 +35,13 @@ def _decisions(ctx: PipelineContext) -> str:
 
 def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
               profile: Profile, cfg: RegieConfig, repo: Path,
-              ctx: PipelineContext, extra: str) -> tuple[Attempt, "AgentResult"]:
+              ctx: PipelineContext, extra: str) -> tuple[Attempt, AgentResult]:
     task = run.tasks[task_id]
     attempts = task.attempts[stage]
     binding = profile.binding
     if attempts:
-        action, binding = next_action(attempts, attempts[-1].binding,
-                                      cfg.binding_strength)
+        _action, binding = next_action(attempts, attempts[-1].binding,
+                                       cfg.binding_strength)
         # caller already checked for halt; retry keeps binding, escalate upgrades
     packet = render_packet(task.spec, ctx.spec_excerpt, _decisions(ctx),
                            ctx.conventions, extra=extra)
@@ -74,13 +78,22 @@ def _should_halt(rundir: RunDir, run: RunState, task_id: str, stage: str,
     return False
 
 
-def _gate_and_advance(rundir, run, task_id, stage, gates: list[GateResult],
-                      attempt: Attempt, on_pass) -> None:
+def _gate_and_advance(rundir: RunDir, run: RunState, task_id: str, stage: str,
+                      gates: list[GateResult], attempt: Attempt, on_pass,
+                      repo: Path) -> None:
     attempt.gate_results = gates
     if all(g.passed for g in gates):
         on_pass()
     else:
         attempt.outcome = "failed"
+        failed = [g for g in gates if not g.passed]
+        _write_note(rundir, task_id, stage,
+                    "Previous attempt failed gates:\n" + "\n".join(
+                        f"- {g.name}: {g.detail[:1500]}" for g in failed))
+        # Discard the failed attempt's uncommitted worktree edits so the next
+        # attempt starts from a clean tree instead of building on top of them.
+        git(repo, "checkout", "--", ".")
+        git(repo, "clean", "-fd")
     rundir.write_state(run)
 
 
@@ -135,7 +148,8 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             def _pass_test():
                 commit_all(repo, f"test({task_id}): red tests")
                 task.stage = "build"
-            _gate_and_advance(rundir, run, task_id, stage, gates, attempt, _pass_test)
+            _gate_and_advance(rundir, run, task_id, stage, gates, attempt,
+                              _pass_test, repo)
         elif stage == "build":
             gates = [run_command_gate("test", cfg.commands["test"], repo,
                                       rerun_on_fail=True),
@@ -144,7 +158,8 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             def _pass_build():
                 commit_all(repo, f"feat({task_id}): implement")
                 task.stage = "review"
-            _gate_and_advance(rundir, run, task_id, stage, gates, attempt, _pass_build)
+            _gate_and_advance(rundir, run, task_id, stage, gates, attempt,
+                              _pass_build, repo)
         else:  # review
             findings = [Finding(**f) for f in
                         (result.structured or {}).get("findings", [])]
@@ -201,7 +216,6 @@ def reconcile(rundir: RunDir, run: RunState, repo: Path) -> int:
     crashed mid-dispatch — mark it failed and discard uncommitted worktree edits."""
     from collections import Counter
 
-    from regie.gitops import git
     from regie.models import Binding
 
     intents = Counter()

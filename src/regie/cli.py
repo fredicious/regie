@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import sys
-from datetime import date
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -15,16 +15,18 @@ from regie.rundir import RunDir, RunLocked
 
 app = typer.Typer(add_completion=False)
 
+_DEFAULT_PROFILES = Path(__file__).parent.parent.parent / "profiles"
+
 
 def _home() -> Path:
     return Path(os.environ.get("REGIE_HOME", Path.home() / ".regie"))
 
 
 @app.command()
-def run(brief: Path, repo: Path = typer.Option(...),
-        profiles: Path = typer.Option(Path(__file__).parent.parent.parent / "profiles")):
+def run(brief: Path, repo: Annotated[Path, typer.Option()],
+        profiles: Annotated[Path, typer.Option()] = _DEFAULT_PROFILES):
     cfg = load_config(repo, profiles)
-    run_id = f"{date.today().isoformat()}-{brief.stem}"
+    run_id = f"{datetime.now(tz=UTC).date().isoformat()}-{brief.stem}"
     rundir = RunDir.create(_home(), run_id)
     rundir.acquire_lock()
     (rundir.path / "brief.md").write_text(brief.read_text())
@@ -39,8 +41,8 @@ def run(brief: Path, repo: Path = typer.Option(...),
 
 
 @app.command()
-def resume(run_id: str, repo: Path = typer.Option(...),
-           profiles: Path = typer.Option(Path(__file__).parent.parent.parent / "profiles")):
+def resume(run_id: str, repo: Annotated[Path, typer.Option()],
+           profiles: Annotated[Path, typer.Option()] = _DEFAULT_PROFILES):
     cfg = load_config(repo, profiles)
     rundir = RunDir.open(_home(), run_id)
     try:
@@ -58,6 +60,11 @@ def resume(run_id: str, repo: Path = typer.Option(...),
         for t in state.tasks.values():
             if t.status in ("failed", "blocked", "running"):
                 t.status = "pending"
+                # A human-mediated resume deserves a fresh ladder: recorded
+                # attempts would otherwise re-trigger _should_halt instantly.
+                # The audit trail survives in events.jsonl and task_dir
+                # transcripts, so nothing is lost by clearing them here.
+                t.attempts = {"test": [], "build": [], "review": []}
     run_tasks_stage(rundir, state, cfg, repo)
     _finish(state)
 

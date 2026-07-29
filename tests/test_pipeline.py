@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from regie.config import load_config
 from regie.models import RunState, TaskSpec, TaskState
 from regie.pipeline import PipelineContext, run_task, run_tasks_stage
@@ -91,6 +92,26 @@ def test_builder_editing_tests_fails_diff_gate(regie_home, fixture_repo, cfg):
     attempts = run.tasks[tid].attempts["build"]
     assert attempts and attempts[-1].outcome == "failed"
     assert any(not g.passed and g.name == "diff-guard" for g in attempts[-1].gate_results)
+    # The failed attempt's uncommitted edit to the test file must not persist
+    # into the next attempt (diff-gate poisoning).
+    assert (fixture_repo / "tests" / "test_div.py").read_text() != cheat[
+        "writes"]["tests/test_div.py"]
+
+
+def test_gate_failure_writes_note_naming_failing_gate(regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+    _script(fixture_repo, [RED_TEST])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    cheat = {"result": {"outcome": "done"}, "writes": {
+        "tests/test_div.py": "def test_div():\n    assert True\n"}}
+    _script(fixture_repo, [cheat])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    note_path = rd.task_dir(tid) / "note-build.md"
+    assert note_path.exists()
+    assert "diff-guard" in note_path.read_text()
 
 
 def test_halt_after_ladder_exhaustion(regie_home, fixture_repo, cfg):
