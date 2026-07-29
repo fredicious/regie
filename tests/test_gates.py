@@ -59,6 +59,16 @@ def test_diff_gate_blocks_rename_into_tests(fixture_repo):
     assert "calc_snuck_in.py" in result.detail
 
 
+def test_diff_gate_blocks_rename_with_space_into_tests(fixture_repo):
+    subprocess.run(
+        ["git", "mv", "src/calc.py", "tests/test file.py"],
+        cwd=fixture_repo, check=True,
+    )
+    result = diff_gate(fixture_repo, ["tests/**"])
+    assert not result.passed
+    assert "test file.py" in result.detail
+
+
 def test_diff_gate_matches_root_level_file_with_leading_globstar(fixture_repo):
     (fixture_repo / "foo.test.js").write_text("// new file\n")
     result = diff_gate(fixture_repo, ["**/*.test.*"])

@@ -22,20 +22,29 @@ def git(repo: Path, *args: str) -> str:
 
 
 def changed_files(repo: Path) -> list[str]:
-    out = git(repo, "status", "--porcelain")
+    # -z gives NUL-separated records with paths never quoted (plain
+    # --porcelain C-quotes paths containing spaces/special chars, e.g.
+    # `"b file.txt"`, which then fails to match any glob). For renames/copies
+    # the record is `XY new_path\0orig_path\0` — the original path is a
+    # separate NUL-terminated field, not " -> "-joined as in plain mode.
+    out = git(repo, "status", "--porcelain", "-z")
+    tokens = out.split("\0")
     paths: list[str] = []
-    for line in out.splitlines():
-        if not line.strip():
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if not token:
+            i += 1
             continue
-        entry = line[3:].strip()
-        # Renames are reported as "orig -> new"; a rename is as suspicious as
-        # a plain edit on either side, so report both paths.
-        if " -> " in entry:
-            old, new = entry.split(" -> ", 1)
-            paths.append(old)
-            paths.append(new)
-        else:
-            paths.append(entry)
+        status, path = token[:2], token[3:]
+        paths.append(path)
+        # A rename is as suspicious as a plain edit on either side, so report
+        # both paths.
+        if "R" in status or "C" in status:
+            i += 1
+            if i < len(tokens) and tokens[i]:
+                paths.append(tokens[i])
+        i += 1
     return paths
 
 
