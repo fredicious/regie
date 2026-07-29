@@ -72,7 +72,9 @@ def remove_run_worktree(repo: Path, dest: Path) -> None:
     try:
         git(repo, "worktree", "remove", "--force", str(dest))
     except GitError:
-        pass
+        listed = str(dest) in git(repo, "worktree", "list", "--porcelain")
+        if dest.exists() or listed:
+            raise
     finally:
         git(repo, "worktree", "prune")
 

@@ -2,6 +2,7 @@ import subprocess
 
 import pytest
 
+from regie import gitops
 from regie.gitops import (
     GitError,
     create_run_worktree,
@@ -39,3 +40,19 @@ def test_fetch_base_and_push(fixture_repo, remote_repo, tmp_path):
 def test_delete_branch_refuses_non_regie(fixture_repo):
     with pytest.raises(GitError):
         delete_branch(fixture_repo, "main")
+
+
+def test_remove_run_worktree_surfaces_genuine_failure(fixture_repo, tmp_path, monkeypatch):
+    base = head_sha(fixture_repo)
+    wt = create_run_worktree(fixture_repo, "regie/r3", base, tmp_path / "wt3")
+    real_git = gitops.git
+
+    def flaky_git(repo, *args):
+        if args[:2] == ("worktree", "remove"):
+            raise GitError("simulated: locked or permission denied")
+        return real_git(repo, *args)
+
+    monkeypatch.setattr(gitops, "git", flaky_git)
+    assert wt.exists()
+    with pytest.raises(GitError):
+        remove_run_worktree(fixture_repo, wt)
