@@ -11,7 +11,7 @@ from regie.dispatch import run_agent
 from regie.gates import diff_gate, red_test_gate, run_command_gate
 from regie.gitops import commit_all, git
 from regie.ladder import next_action
-from regie.models import Attempt, Finding, GateResult, RunState
+from regie.models import Attempt, Binding, Finding, GateResult, RunState
 from regie.packets import render_packet, write_packet
 from regie.rundir import RunDir
 
@@ -33,12 +33,22 @@ def _decisions(ctx: PipelineContext) -> str:
     return ctx.decisions_path.read_text() if ctx.decisions_path.exists() else ""
 
 
+def _review_binding(run: RunState, task_id: str, cfg: RegieConfig) -> Binding:
+    """Cross-model rule: reviewer must not share the builder's model family."""
+    reviewer = cfg.profiles["reviewer"].binding
+    builds = run.tasks[task_id].attempts["build"]
+    if builds and builds[-1].binding.cli == reviewer.cli:
+        return cfg.profiles["builder"].binding
+    return reviewer
+
+
 def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
               profile: Profile, cfg: RegieConfig, repo: Path,
               ctx: PipelineContext, extra: str) -> tuple[Attempt, AgentResult]:
     task = run.tasks[task_id]
     attempts = task.attempts[stage]
-    binding = profile.binding
+    binding = (_review_binding(run, task_id, cfg) if stage == "review"
+               else profile.binding)
     if attempts:
         _action, binding = next_action(attempts, attempts[-1].binding,
                                        cfg.binding_strength)
