@@ -23,7 +23,20 @@ def git(repo: Path, *args: str) -> str:
 
 def changed_files(repo: Path) -> list[str]:
     out = git(repo, "status", "--porcelain")
-    return [line[3:].strip() for line in out.splitlines() if line.strip()]
+    paths: list[str] = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        entry = line[3:].strip()
+        # Renames are reported as "orig -> new"; a rename is as suspicious as
+        # a plain edit on either side, so report both paths.
+        if " -> " in entry:
+            old, new = entry.split(" -> ", 1)
+            paths.append(old)
+            paths.append(new)
+        else:
+            paths.append(entry)
+    return paths
 
 
 def commit_all(repo: Path, message: str) -> str:

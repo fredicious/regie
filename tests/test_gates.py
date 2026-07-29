@@ -1,4 +1,6 @@
-from regie.gates import diff_gate, red_test_gate, run_command_gate
+import subprocess
+
+from regie.gates import _glob_match, diff_gate, red_test_gate, run_command_gate
 from regie.gitops import commit_all
 
 
@@ -45,3 +47,38 @@ def test_red_gate_rejects_green_tests(fixture_repo):
     (fixture_repo / "tests" / "test_new.py").write_text("def test_new():\n    assert True\n")
     result = red_test_gate(fixture_repo, "python -m pytest tests/test_new.py -q")
     assert not result.passed and "unexpectedly-green" in result.detail
+
+
+def test_diff_gate_blocks_rename_into_tests(fixture_repo):
+    subprocess.run(
+        ["git", "mv", "src/calc.py", "tests/calc_snuck_in.py"],
+        cwd=fixture_repo, check=True,
+    )
+    result = diff_gate(fixture_repo, ["tests/**"])
+    assert not result.passed
+    assert "calc_snuck_in.py" in result.detail
+
+
+def test_diff_gate_matches_root_level_file_with_leading_globstar(fixture_repo):
+    (fixture_repo / "foo.test.js").write_text("// new file\n")
+    result = diff_gate(fixture_repo, ["**/*.test.*"])
+    assert not result.passed
+    assert "foo.test.js" in result.detail
+
+
+def test_diff_gate_single_star_does_not_cross_directories(fixture_repo):
+    nested = fixture_repo / "apps" / "webapp" / "nested" / "tests"
+    nested.mkdir(parents=True)
+    (nested / "foo.py").write_text("# nested test-like file\n")
+    result = diff_gate(fixture_repo, ["apps/*/tests/**"])
+    assert result.passed
+
+
+def test_glob_translator_table():
+    assert _glob_match("foo.test.js", "**/*.test.*")
+    assert _glob_match("a/b/foo.test.js", "**/*.test.*")
+    assert _glob_match("apps/webapp/tests/foo.py", "apps/*/tests/**")
+    assert not _glob_match("apps/webapp/nested/tests/foo.py", "apps/*/tests/**")
+    assert _glob_match("tests/test_calc.py", "tests/**")
+    assert _glob_match("tests", "tests/**")
+    assert not _glob_match("src/calc.py", "tests/**")
