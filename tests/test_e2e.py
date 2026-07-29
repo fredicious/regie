@@ -103,6 +103,19 @@ def test_full_run_reaches_pr(regie_home, fixture_repo, remote_repo, fake_profile
     assert state.stage == "pr"
     assert all(t.status == "done" for t in state.tasks.values())
 
+    # T2's review dispatch (queue entry 5) is the run's last dispatch, so its
+    # ".fake_agent_queue" consumption-rename (fake.py's side effect) is never
+    # swept into a later stage's gated commit the way entries 0-4 are -- it's
+    # ungated leftover at finalize time. Prove finalize_stage discarded it
+    # instead of sneaking it into the squashed history via an unreviewed
+    # commit.
+    log = subprocess.run(
+        ["git", "-C", state.worktree_path, "log", "--name-only",
+         f"{state.base_sha}..HEAD"], capture_output=True, text=True, check=True
+    ).stdout
+    assert "5.json.done" not in log
+    assert ".regie_schema.json" not in log
+
 
 def test_crash_then_resume_completes(regie_home, fixture_repo, remote_repo,
                                      fake_profiles, tmp_path, monkeypatch):

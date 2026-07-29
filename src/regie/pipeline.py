@@ -10,7 +10,7 @@ from regie.agents.base import AgentRequest
 from regie.config import Profile, RegieConfig
 from regie.dispatch import run_agent
 from regie.gates import diff_gate, match_globs, red_test_gate, run_command_gate
-from regie.gitops import GitError, changed_files, commit_all, git
+from regie.gitops import GitError, commit_all, git
 from regie.ladder import next_action
 from regie.models import (
     Attempt,
@@ -370,6 +370,14 @@ def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
     """Advance the run from stage "finalize" to "pr": full command gates, the
     eval predicate, then rebase onto the base branch. Debugger rounds on gate
     failure only exist at the PR stage in v1 -- any failure here halts."""
+    # Every artifact that passed gates was already committed by its stage via
+    # commit_all. Anything still uncommitted here is by definition ungated
+    # (e.g. agent-invocation scaffolding) and must never enter the squashed
+    # PR -- discard it, matching reconcile's discard idiom, rather than
+    # committing it.
+    git(worktree, "checkout", "--", ".")
+    git(worktree, "clean", "-fd")
+
     gates = [run_command_gate("test", cfg.commands["test"], worktree,
                               rerun_on_fail=True),
              run_command_gate("lint", cfg.commands["lint"], worktree)]
@@ -389,12 +397,6 @@ def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
         if not eval_gate.passed:
             _halt_run(rundir, run, f"eval gate failed: {eval_gate.detail[:500]}")
             return
-
-    # Review is analysis-only and shouldn't touch the tree, but nothing
-    # enforces that -- commit any leftover uncommitted state now so it isn't
-    # silently lost and doesn't block the rebase below.
-    if changed_files(worktree):
-        commit_all(worktree, "chore: finalize cleanup")
 
     try:
         git(worktree, "fetch", "origin")
