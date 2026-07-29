@@ -2,6 +2,7 @@
 and a simulated crash mid-run resumes to completion."""
 import gc
 import json
+import subprocess
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -70,7 +71,7 @@ def _queue(fixture_repo, entries, start=0):
         (qdir / f"{start + i}.json").write_text(json.dumps(entry))
 
 
-def _setup(regie_home, fixture_repo, fake_profiles, tmp_path):
+def _setup(regie_home, fixture_repo, fake_profiles, tmp_path, remote_repo=None):
     (fixture_repo / "regie.toml").write_text(
         'test_globs = ["tests/**"]\nbinding_strength = ["fake:m1"]\n'
         '[commands]\ntest = "python -m pytest tests -q"\nlint = "true"\n')
@@ -81,24 +82,31 @@ def _setup(regie_home, fixture_repo, fake_profiles, tmp_path):
     # The run worktree is checked out from base_sha, so the queue directory
     # must be committed to be present in the worktree the fake adapter reads.
     commit_all(fixture_repo, "chore: fake agent queue")
+    if remote_repo is not None:
+        # finalize_stage fetches/rebases onto origin/main, so origin must have
+        # this commit too -- otherwise the run's base_sha (resolved from
+        # origin/main) would predate the fake-agent-queue commit.
+        subprocess.run(["git", "-C", str(fixture_repo), "push", "-q", "origin", "main"],
+                      check=True)
     return brief
 
 
-def test_full_run_reaches_finalize(regie_home, fixture_repo, fake_profiles, tmp_path):
-    brief = _setup(regie_home, fixture_repo, fake_profiles, tmp_path)
+def test_full_run_reaches_pr(regie_home, fixture_repo, remote_repo, fake_profiles,
+                             tmp_path):
+    brief = _setup(regie_home, fixture_repo, fake_profiles, tmp_path, remote_repo)
     result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
                                  "--profiles", str(fake_profiles),
                                  "--tasks-file", str(tmp_path / "tasks.json")])
     assert result.exit_code == 0, result.output
-    run_id = next(l for l in result.output.splitlines() if "→" in l).split()[1]
+    run_id = max((regie_home / "runs").iterdir()).name
     state = RunDir.open(regie_home, run_id).read_state()
-    assert state.stage == "finalize"
+    assert state.stage == "pr"
     assert all(t.status == "done" for t in state.tasks.values())
 
 
-def test_crash_then_resume_completes(regie_home, fixture_repo, fake_profiles,
-                                     tmp_path, monkeypatch):
-    brief = _setup(regie_home, fixture_repo, fake_profiles, tmp_path)
+def test_crash_then_resume_completes(regie_home, fixture_repo, remote_repo,
+                                     fake_profiles, tmp_path, monkeypatch):
+    brief = _setup(regie_home, fixture_repo, fake_profiles, tmp_path, remote_repo)
     # Crash injection: on the SECOND dispatch, do what the real dispatch.run_agent
     # does first -- write the WAL intent -- then crash before an Attempt is ever
     # recorded in state, and before the fake script runs (so an uncommitted edit

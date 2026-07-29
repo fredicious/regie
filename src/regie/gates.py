@@ -65,6 +65,10 @@ def _glob_match(path: str, pattern: str) -> bool:
     return _glob_to_regex(pattern).match(path) is not None
 
 
+def match_globs(path: str, globs: list[str]) -> bool:
+    return any(_glob_match(path, g) for g in globs)
+
+
 def _run(cmd: str, cwd: Path) -> tuple[int, str]:
     # shell=True is deliberate: cmd is an operator-authored shell string from
     # regie.toml (same trust level as a Makefile), never agent output or task
@@ -90,8 +94,7 @@ def run_command_gate(name: str, cmd: str, cwd: Path,
 
 
 def diff_gate(repo: Path, test_globs: list[str]) -> GateResult:
-    hits = [f for f in changed_files(repo)
-            if any(_glob_match(f, g) for g in test_globs)]
+    hits = [f for f in changed_files(repo) if match_globs(f, test_globs)]
     if hits:
         return GateResult(name="diff-guard", passed=False,
                           detail=f"test files modified: {', '.join(hits)}")

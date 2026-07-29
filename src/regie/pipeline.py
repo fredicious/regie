@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 from regie.agents.base import AgentRequest
 from regie.config import Profile, RegieConfig
 from regie.dispatch import run_agent
-from regie.gates import diff_gate, red_test_gate, run_command_gate
-from regie.gitops import commit_all, git
+from regie.gates import diff_gate, match_globs, red_test_gate, run_command_gate
+from regie.gitops import GitError, changed_files, commit_all, git
 from regie.ladder import next_action
 from regie.models import (
     Attempt,
@@ -362,6 +362,53 @@ def run_tasks_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
         if run.stage == "halted":
             return
     run.stage = "finalize"
+    rundir.write_state(run)
+
+
+def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
+                   worktree: Path) -> None:
+    """Advance the run from stage "finalize" to "pr": full command gates, the
+    eval predicate, then rebase onto the base branch. Debugger rounds on gate
+    failure only exist at the PR stage in v1 -- any failure here halts."""
+    gates = [run_command_gate("test", cfg.commands["test"], worktree,
+                              rerun_on_fail=True),
+             run_command_gate("lint", cfg.commands["lint"], worktree)]
+    if "typecheck" in cfg.commands:
+        gates.append(run_command_gate("typecheck", cfg.commands["typecheck"], worktree))
+    for gate in gates:
+        if not gate.passed:
+            _halt_run(rundir, run, f"{gate.name} gate failed: {gate.detail[:500]}")
+            return
+
+    changed = [p for p in
+              git(worktree, "diff", "--name-only", f"{run.base_sha}..HEAD").splitlines()
+              if p]
+    if cfg.commands.get("eval") and any(match_globs(p, cfg.eval_trigger_globs)
+                                        for p in changed):
+        eval_gate = run_command_gate("eval", cfg.commands["eval"], worktree)
+        if not eval_gate.passed:
+            _halt_run(rundir, run, f"eval gate failed: {eval_gate.detail[:500]}")
+            return
+
+    # Review is analysis-only and shouldn't touch the tree, but nothing
+    # enforces that -- commit any leftover uncommitted state now so it isn't
+    # silently lost and doesn't block the rebase below.
+    if changed_files(worktree):
+        commit_all(worktree, "chore: finalize cleanup")
+
+    try:
+        git(worktree, "fetch", "origin")
+        git(worktree, "rebase", f"origin/{run.base_branch}")
+    except GitError:
+        try:
+            git(worktree, "rebase", "--abort")
+        except GitError:
+            pass  # best-effort -- the halt below is what matters
+        _halt_run(rundir, run,
+                 f"rebase conflict — resolve manually in {worktree} then regie resume")
+        return
+
+    run.stage = "pr"
     rundir.write_state(run)
 
 
