@@ -37,25 +37,31 @@ class ClaudeAdapter:
         doc = _last_json_object(stdout)
         if doc is None:
             return AgentResult(outcome="error", text=stdout[-2000:])
-        text = str(doc.get("result", ""))
+        result = doc.get("result", "")
+        if isinstance(result, dict):
+            structured = result
+            text = json.dumps(result)
+        else:
+            text = str(result)
+            structured = None
         reason = str(doc.get("terminal_reason", ""))
         if (doc.get("api_error_status") in _QUOTA_STATUS
                 or re.search(r"quota|limit", reason, re.IGNORECASE)
                 or (doc.get("is_error") and _QUOTA_TEXT.search(text))):
             return AgentResult(outcome="quota", text=text[-2000:])
-        if doc.get("is_error") or exit_code != 0:
-            return AgentResult(outcome="error", text=text[-2000:] or stdout[-2000:])
         for line in text.splitlines():
             if line.strip().lower().startswith("blocked:"):
                 return AgentResult(outcome="blocked", text=text,
                                    blocked_question=line.split(":", 1)[1].strip())
-        structured = None
-        try:
-            parsed = json.loads(text)
-            if isinstance(parsed, dict):
-                structured = parsed
-        except (json.JSONDecodeError, TypeError):
-            pass
+        if doc.get("is_error") or exit_code != 0:
+            return AgentResult(outcome="error", text=text[-2000:] or stdout[-2000:])
+        if structured is None:
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    structured = parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
         usage = dict(doc.get("usage") or {})
         usage["total_cost_usd"] = doc.get("total_cost_usd")
         usage["modelUsage"] = doc.get("modelUsage") or {}

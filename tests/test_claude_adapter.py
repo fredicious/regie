@@ -66,3 +66,24 @@ def test_parse_blocked_line():
 def test_parse_error_on_garbage_and_nonzero_exit():
     assert get_adapter("claude").parse("not json at all", 0).outcome == "error"
     assert get_adapter("claude").parse(_doc(), 1).outcome == "error"
+
+
+def test_parse_blocked_precedence_over_error():
+    r = get_adapter("claude").parse(
+        _doc(is_error=True, result="analysis...\nblocked: which cache?"), 1)
+    assert r.outcome == "blocked" and "which cache" in r.blocked_question
+
+
+def test_parse_result_as_native_dict():
+    base = {"is_error": False, "subtype": "success",
+            "result": {"findings": ["a", "b"]},
+            "num_turns": 2, "usage": {}, "modelUsage": {}, "total_cost_usd": 0.05}
+    r = get_adapter("claude").parse(json.dumps(base), 0)
+    assert r.outcome == "done" and r.structured == {"findings": ["a", "b"]}
+    assert json.loads(r.text) == {"findings": ["a", "b"]}
+
+
+def test_parse_quota_from_error_text():
+    r = get_adapter("claude").parse(
+        _doc(is_error=True, result="You have hit your usage limit"), 0)
+    assert r.outcome == "quota"
