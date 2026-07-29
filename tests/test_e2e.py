@@ -93,21 +93,33 @@ def test_full_run_reaches_finalize(regie_home, fixture_repo, fake_profiles, tmp_
 def test_crash_then_resume_completes(regie_home, fixture_repo, fake_profiles,
                                      tmp_path, monkeypatch):
     brief = _setup(regie_home, fixture_repo, fake_profiles, tmp_path)
-    # Crash injection: make the SECOND dispatch raise inside run_agent.
+    # Crash injection: on the SECOND dispatch, do what the real dispatch.run_agent
+    # does first -- write the WAL intent -- then crash before an Attempt is ever
+    # recorded in state, and before the fake script runs (so an uncommitted edit
+    # is left behind, simulating a killed agent's in-flight write). This is the
+    # exact scenario the WAL/reconcile machinery exists for: intent logged,
+    # no corresponding attempt, worktree dirty.
     from regie import pipeline
     real = pipeline.run_agent
     calls = {"n": 0}
+    dirty = fixture_repo / "src" / "dirty.py"
 
     def crashing(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 2:
-            raise KeyboardInterrupt  # simulated hard crash mid-run
+            rundir, task_id, stage, attempt_no, req = args
+            dirty.write_text("dirty\n")  # in-flight edit the crash never cleaned up
+            rundir.append_intent({"task": task_id, "stage": stage,
+                                  "attempt": attempt_no,
+                                  "binding": req.binding.model_dump()})
+            raise KeyboardInterrupt  # simulated hard crash after WAL write
         return real(*args, **kwargs)
 
     monkeypatch.setattr(pipeline, "run_agent", crashing)
     result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
                                  "--profiles", str(fake_profiles)])
     assert result.exit_code != 0  # crashed
+    assert dirty.exists()  # the in-flight edit landed before the crash
 
     # In a real crash the OS closes the run.lock fd (and its flock) when the
     # process dies. Here the crash is simulated in-process, and click's
@@ -119,7 +131,10 @@ def test_crash_then_resume_completes(regie_home, fixture_repo, fake_profiles,
 
     # The crashed dispatch never reached the fake script, so queue entries
     # 1..5 are untouched -- but re-create them from the reconciled position
-    # anyway so resume doesn't depend on that timing detail.
+    # anyway so resume doesn't depend on that timing detail. No extra queue
+    # entry is needed: reconcile's synthetic failed attempt satisfies the
+    # ladder's retry slot without itself consuming a dispatch, so the next
+    # real dispatch still consumes the same (T1 build) entry as before.
     _queue(fixture_repo, QUEUE[1:], start=1)
 
     monkeypatch.setattr(pipeline, "run_agent", real)
@@ -127,5 +142,9 @@ def test_crash_then_resume_completes(regie_home, fixture_repo, fake_profiles,
     result = runner.invoke(app, ["resume", run_id, "--repo", str(fixture_repo),
                                  "--profiles", str(fake_profiles)])
     assert result.exit_code == 0, result.output
+    assert "reconciled 1 orphaned attempt" in result.output
+
     state = RunDir.open(regie_home, run_id).read_state()
+    assert not dirty.exists()  # reconcile's git clean discarded the crash's edit
+    assert state.tasks["T1"].attempts["build"][0].outcome == "failed"  # orphan repair
     assert all(t.status == "done" for t in state.tasks.values())
