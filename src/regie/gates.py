@@ -71,7 +71,8 @@ def _run(cmd: str, cwd: Path) -> tuple[int, str]:
     # data. Invariant: nothing agent-generated is ever interpolated into a gate
     # command string; agents can only influence gate outcomes through the files
     # the commands inspect.
-    proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True,
+                          check=False)
     return proc.returncode, (proc.stdout + proc.stderr)[-_TAIL:]
 
 

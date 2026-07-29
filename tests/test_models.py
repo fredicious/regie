@@ -1,5 +1,6 @@
 import pydantic
 import pytest
+
 from regie.models import Attempt, Binding, CycleError, RunState, TaskSpec, TaskState
 
 

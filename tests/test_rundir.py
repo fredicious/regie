@@ -1,6 +1,7 @@
 import json
 
 import pytest
+
 from regie.models import RunState
 from regie.rundir import RunDir, RunLocked
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from regie.models import RunState
@@ -19,13 +19,13 @@ class RunDir:
         self._lock_fh = None
 
     @classmethod
-    def create(cls, home: Path, run_id: str) -> "RunDir":
+    def create(cls, home: Path, run_id: str) -> RunDir:
         path = home / "runs" / run_id
         (path / "tasks").mkdir(parents=True)
         return cls(path)
 
     @classmethod
-    def open(cls, home: Path, run_id: str) -> "RunDir":
+    def open(cls, home: Path, run_id: str) -> RunDir:
         path = home / "runs" / run_id
         if not path.is_dir():
             raise FileNotFoundError(path)
@@ -76,7 +76,7 @@ class RunDir:
         return out
 
     def append_event(self, record: dict) -> None:
-        self._append_jsonl("events.jsonl", {"ts": datetime.now(timezone.utc).isoformat(), **record})
+        self._append_jsonl("events.jsonl", {"ts": datetime.now(UTC).isoformat(), **record})
 
     def task_dir(self, task_id: str) -> Path:
         d = self.path / "tasks" / task_id

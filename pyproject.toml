@@ -1,7 +1,7 @@
 [project]
 name = "regie"
 version = "0.1.0"
-description = "Add your description here"
+description = "Régie — multi-model agent orchestration harness: product brief in, reviewed tested PR out."
 readme = "README.md"
 authors = [
     { name = "Frederic Cabassut", email = "frederic.cabassut@arte.tv" }

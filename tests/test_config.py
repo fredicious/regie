@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+
 from regie.config import ConfigError, load_config
 
 PROFILES = Path(__file__).parent.parent / "profiles"

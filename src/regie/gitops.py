@@ -15,7 +15,7 @@ class GitError(Exception):
 def git(repo: Path, *args: str) -> str:
     proc = subprocess.run(["git", "-C", str(repo), *args],
                           capture_output=True, text=True,
-                          env={**os.environ, **_AUTHOR_ENV})
+                          env={**os.environ, **_AUTHOR_ENV}, check=False)
     if proc.returncode != 0:
         raise GitError(f"git {' '.join(args)}: {proc.stderr.strip()}")
     return proc.stdout
