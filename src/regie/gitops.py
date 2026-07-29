@@ -52,3 +52,36 @@ def commit_all(repo: Path, message: str) -> str:
     git(repo, "add", "-A")
     git(repo, "commit", "-m", message)
     return git(repo, "rev-parse", "--short", "HEAD").strip()
+
+
+def head_sha(repo: Path, ref: str = "HEAD") -> str:
+    return git(repo, "rev-parse", ref).strip()
+
+
+def fetch_base_sha(repo: Path, base_branch: str) -> str:
+    git(repo, "fetch", "origin", base_branch)
+    return git(repo, "rev-parse", f"origin/{base_branch}").strip()
+
+
+def create_run_worktree(repo: Path, branch: str, base_sha: str, dest: Path) -> Path:
+    git(repo, "worktree", "add", "-b", branch, str(dest), base_sha)
+    return dest
+
+
+def remove_run_worktree(repo: Path, dest: Path) -> None:
+    try:
+        git(repo, "worktree", "remove", "--force", str(dest))
+    except GitError:
+        pass
+    finally:
+        git(repo, "worktree", "prune")
+
+
+def delete_branch(repo: Path, branch: str) -> None:
+    if not branch.startswith("regie/"):
+        raise GitError(f"refusing to delete non-regie branch: {branch}")
+    git(repo, "branch", "-D", branch)
+
+
+def push_branch(worktree: Path, branch: str) -> None:
+    git(worktree, "push", "-u", "origin", branch)
