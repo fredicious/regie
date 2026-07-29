@@ -117,13 +117,19 @@ def run_commit_groups(worktree: Path, base_sha: str) -> list[tuple[str, list[str
 
 def rebuild_history(worktree: Path, base_sha: str,
                      groups: list[tuple[str, list[str]]], run_id: str) -> None:
+    if changed_files(worktree):
+        raise GitError("worktree dirty — refusing history rewrite")
     pre_tree = git(worktree, "rev-parse", "HEAD^{tree}").strip()
     backup_ref = f"refs/regie/backup/{run_id}"
     git(worktree, "update-ref", backup_ref, "HEAD")
     git(worktree, "reset", "--hard", base_sha)
-    for message, shas in groups:
-        git(worktree, "cherry-pick", "-n", *shas)
-        git(worktree, "commit", "-m", message)
+    try:
+        for message, shas in groups:
+            git(worktree, "cherry-pick", "-n", *shas)
+            git(worktree, "commit", "-m", message)
+    except GitError:
+        git(worktree, "reset", "--hard", backup_ref)
+        raise
     post_tree = git(worktree, "rev-parse", "HEAD^{tree}").strip()
     if post_tree != pre_tree:
         git(worktree, "reset", "--hard", backup_ref)

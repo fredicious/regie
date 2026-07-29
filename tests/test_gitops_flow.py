@@ -113,6 +113,37 @@ def test_rebuild_history_restores_on_tree_mismatch(fixture_repo, tmp_path):
     assert head_sha(wt) == head_before  # restored from backup ref
 
 
+def test_rebuild_history_restores_on_cherry_pick_failure(fixture_repo, tmp_path):
+    import pytest
+
+    from regie.gitops import GitError, create_run_worktree, head_sha
+    base = head_sha(fixture_repo)
+    wt = create_run_worktree(fixture_repo, "regie/r5", base, tmp_path / "wt5")
+    _mk_task_commits(wt)
+    head_before = head_sha(wt)
+    groups = run_commit_groups(wt, base)
+    bad = [("feat: bogus", ["0" * 40]), ("feat: rest", groups[1][1])]
+    with pytest.raises(GitError):
+        rebuild_history(wt, base, bad, "r5")
+    assert head_sha(wt) == head_before  # fully restored, not half-rebuilt
+
+
+def test_rebuild_history_refuses_dirty_worktree(fixture_repo, tmp_path):
+    import pytest
+
+    from regie.gitops import GitError, create_run_worktree, head_sha
+    base = head_sha(fixture_repo)
+    wt = create_run_worktree(fixture_repo, "regie/r6", base, tmp_path / "wt6")
+    _mk_task_commits(wt)
+    groups = run_commit_groups(wt, base)
+    head_before = head_sha(wt)
+    (wt / "src" / "calc.py").write_text("dirty\n")
+    with pytest.raises(GitError):
+        rebuild_history(wt, base, [("feat(t1): task one", groups[0][1])], "r6")
+    assert head_sha(wt) == head_before
+    assert (wt / "src" / "calc.py").read_text() == "dirty\n"  # untouched
+
+
 def _stub_gh(tmp_path, monkeypatch, checks_json):
     gh = tmp_path / "bin" / "gh"
     gh.parent.mkdir(parents=True, exist_ok=True)
