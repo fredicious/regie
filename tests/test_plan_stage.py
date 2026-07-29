@@ -4,7 +4,7 @@ import pytest
 
 from regie.config import load_config
 from regie.models import RunState
-from regie.pipeline import plan_stage
+from regie.pipeline import plan_stage, reconcile
 from regie.rundir import RunDir
 
 PLAN = {"spec_markdown": "# Spec\n...", "tasks": [
@@ -68,3 +68,41 @@ def test_plan_stage_rejects_unknown_profile(regie_home, fixture_repo, cfg):
     rd, run = _seed(regie_home, fixture_repo, bad)
     plan_stage(rd, run, cfg, fixture_repo)
     assert run.stage == "halted"
+
+
+def test_plan_stage_rejects_dangling_depends_on(regie_home, fixture_repo, cfg):
+    bad = {"spec_markdown": "s", "tasks": [{"id": "T1", "title": "t",
+           "profile": "builder", "criteria": ["Given a When b Then c"],
+           "planned_tests": ["test_x"], "depends_on": ["T-does-not-exist"]}]}
+    rd, run = _seed(regie_home, fixture_repo, bad)
+    plan_stage(rd, run, cfg, fixture_repo)
+    assert run.stage == "halted"
+    note = (rd.path / "tasks" / "PLAN" / "note-plan.md").read_text()
+    assert "T-does-not-exist" in note
+
+
+def test_plan_stage_rejects_duplicate_task_ids(regie_home, fixture_repo, cfg):
+    bad = {"spec_markdown": "s", "tasks": [
+        {"id": "T1", "title": "t", "profile": "builder",
+         "criteria": ["Given a When b Then c"], "planned_tests": ["test_x"]},
+        {"id": "T1", "title": "t2", "profile": "builder",
+         "criteria": ["Given a When b Then c"], "planned_tests": ["test_y"]}]}
+    rd, run = _seed(regie_home, fixture_repo, bad)
+    plan_stage(rd, run, cfg, fixture_repo)
+    assert run.stage == "halted"
+    note = (rd.path / "tasks" / "PLAN" / "note-plan.md").read_text()
+    assert "duplicate" in note.lower()
+
+
+def test_reconcile_marks_orphaned_plan_intent_failed(regie_home, fixture_repo):
+    rd = RunDir.create(regie_home, "r1")
+    (rd.path / "brief.md").write_text("# brief")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   stage="plan", worktree_path=str(fixture_repo))
+    rd.write_state(run)
+    rd.append_intent({"task": "PLAN", "stage": "plan", "attempt": 1,
+                      "binding": {"cli": "fake", "model": "m1"}})
+    count = reconcile(rd, run, fixture_repo)
+    assert count == 1
+    assert len(run.planner_attempts) == 1
+    assert run.planner_attempts[0].outcome == "failed"

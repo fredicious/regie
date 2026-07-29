@@ -237,12 +237,16 @@ def _validate_plan(structured: dict | None, cfg: RegieConfig) -> list[str]:
     if not structured or "spec_markdown" not in structured or "tasks" not in structured:
         return ["planner output missing spec_markdown or tasks"]
     specs: list[TaskSpec] = []
+    seen_ids: set[str] = set()
     for i, raw in enumerate(structured["tasks"]):
         try:
             spec = TaskSpec(**raw)
         except Exception as exc:  # noqa: BLE001 - any pydantic validation error
             errors.append(f"task[{i}]: invalid task spec: {exc}")
             continue
+        if spec.id in seen_ids:
+            errors.append(f"task {spec.id}: duplicate task id")
+        seen_ids.add(spec.id)
         if not spec.planned_tests:
             errors.append(f"task {spec.id}: planned_tests must be non-empty")
         for criterion in spec.criteria:
@@ -251,6 +255,13 @@ def _validate_plan(structured: dict | None, cfg: RegieConfig) -> list[str]:
         if spec.profile not in cfg.profiles:
             errors.append(f"task {spec.id}: unknown profile '{spec.profile}'")
         specs.append(spec)
+
+    all_ids = {s.id for s in specs}
+    for spec in specs:
+        for dep in spec.depends_on:
+            if dep not in all_ids:
+                errors.append(f"task {spec.id}: depends_on unknown task '{dep}'")
+
     if specs:
         probe = RunState(id="probe", target_repo="", branch="")
         probe.tasks = {s.id: TaskState(spec=s) for s in specs}
@@ -369,7 +380,12 @@ def reconcile(rundir: RunDir, run: RunState, repo: Path) -> int:
         bindings[key] = rec.get("binding", {"cli": "fake", "model": "?"})
     fixed = 0
     for (task_id, stage), count in intents.items():
-        attempts = run.tasks[task_id].attempts[stage]
+        if task_id == _PLAN_TASK_ID:
+            attempts = run.planner_attempts
+        elif task_id in run.tasks:
+            attempts = run.tasks[task_id].attempts[stage]
+        else:
+            continue  # stale intent referencing a task that no longer exists
         while len(attempts) < count:
             attempts.append(Attempt(binding=Binding(**bindings[(task_id, stage)]),
                                     outcome="failed"))

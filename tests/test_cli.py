@@ -183,3 +183,9 @@ def test_approve_on_non_approve_run_is_an_error(regie_home, fixture_repo):
     _seed_run(regie_home, fixture_repo)  # stage="tasks"
     result = runner.invoke(app, ["approve", "r1"])
     assert result.exit_code == 2
+
+
+def test_approve_on_nonexistent_run_is_a_friendly_error(regie_home):
+    result = runner.invoke(app, ["approve", "no-such-run"])
+    assert result.exit_code == 2
+    assert "not found" in result.output.lower()

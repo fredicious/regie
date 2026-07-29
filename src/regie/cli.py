@@ -207,7 +207,11 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
 
 @app.command()
 def approve(run_id: str):
-    rundir = RunDir.open(_home(), run_id)
+    try:
+        rundir = RunDir.open(_home(), run_id)
+    except FileNotFoundError:
+        typer.echo(f"run {run_id} not found", err=True)
+        raise typer.Exit(2)
     state = rundir.read_state()
     if state.stage != "approve":
         typer.echo(f"run {run_id} is not awaiting approval (stage={state.stage})", err=True)
