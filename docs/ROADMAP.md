@@ -11,6 +11,21 @@ session (see `docs/superpowers/specs/2026-07-29-agent-harness-v1-design.md`).
   agent transcript, full run history. Planned as the harness's own first
   assignment: write the brief, let the harness build it.
 
+## Moved out of v1 by the 2026-07-29 adversarial review
+
+- **Parallel task execution** — per-task worktrees, integration branch, file-scope
+  overlap serialization, merge handling. v1 is serial in one worktree; the task
+  DAG already exists, so parallelism is additive.
+- **Complexity-based routing** (`profile × complexity → binding`) — replaced in v1
+  by the escalation ladder (evidence beats prediction).
+- **Automated `blocked`-question routing** — v1 halts and notifies instead of
+  machine-mediated Q&A dispatch.
+- **`harness watch` TUI** — v1 ships `regie status` + `tail -f events.jsonl | jq`.
+- **Six-profile roster** — v1 merges spec-er+decomposer into planner and makes
+  debugger a builder variant; split again if telemetry says so.
+- **Autonomous-by-default** — v1 defaults to a human spec checkpoint
+  (`regie approve`), with `--autonomous` to earn back once specs prove reliable.
+
 ## v2
 
 - **Provider failover on quota exhaustion** — profiles already model `fallback`
@@ -39,6 +54,15 @@ session (see `docs/superpowers/specs/2026-07-29-agent-harness-v1-design.md`).
   findings, CI failures per profile×binding) into periodic evidence-based
   reassignment of profile bindings. The "each task to the best tool" promise,
   grounded in own data.
+- **Per-task skill injection** — the planner tags tasks with needed capabilities;
+  the harness attaches matching agent skills to the dispatch (Claude Code skills
+  dir / marketplace like skills.sh). Security first: curated allowlist with
+  pinned versions only — never auto-install from open search into agents holding
+  write access (supply-chain surface).
+- **Conflict-resolver agent ("git surgeon")** — v1 halts on rebase conflicts;
+  a cheap-model agent could own conflict resolution (judgment work), while all
+  mechanical git stays orchestrator-scripted (agents for judgment, scripts for
+  mechanics).
 - **Quota-aware scheduling** — beyond failover: route proactively based on
   remaining quota per provider (e.g. drain Codex before touching Claude limits
   late in the day).
