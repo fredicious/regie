@@ -1,2 +1,2 @@
 binding: { cli: claude, model: opus, auth: subscription }
-budgets: { turns: 60, wall_minutes: 30, stall_minutes: 5 }
+budgets: { turns: 60, wall_minutes: 30, stall_minutes: 8 }
