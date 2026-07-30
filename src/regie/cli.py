@@ -289,6 +289,84 @@ def status(run_id: str):
 
 
 @app.command()
+def spec(run_id: str):
+    """Print the run's spec (the planner's output you approve)."""
+    rundir = _open_rundir(_home(), run_id)
+    path = rundir.path / "spec" / "spec.md"
+    if not path.exists():
+        typer.echo(f"run {run_id} has no spec yet (stage may be pre-plan)", err=True)
+        raise typer.Exit(2)
+    typer.echo(path.read_text())
+
+
+@app.command(name="open")
+def open_(run_id: str):
+    """Print the run's artifact paths (spec, state, transcripts, notes)."""
+    rundir = _open_rundir(_home(), run_id)
+    typer.echo(f"run dir:   {rundir.path}")
+    for label, rel in (("spec", "spec/spec.md"), ("state", "state.json"),
+                       ("events", "events.jsonl"), ("decisions", "decisions.md"),
+                       ("pr body", "pr-body.md")):
+        p = rundir.path / rel
+        if p.exists():
+            typer.echo(f"{label + ':':10s} {p}")
+    tasks_dir = rundir.path / "tasks"
+    if tasks_dir.is_dir():
+        for td in sorted(tasks_dir.iterdir()):
+            arts = sorted(x.name for x in td.iterdir())
+            typer.echo(f"{td.name + ':':10s} {td}  ({', '.join(arts)})")
+
+
+@app.command()
+def doctor(run_id: str):
+    """Diagnose a run: halt reason, failing gates, evidence, suggested action."""
+    rundir = _open_rundir(_home(), run_id)
+    state = rundir.read_state()
+    typer.echo(f"run {state.id}  stage={state.stage}")
+    if state.stage == "done":
+        typer.echo(f"healthy — PR: {state.pr_url or '(none recorded)'}")
+        return
+    if state.halt_reason:
+        typer.echo(f"halt reason: {state.halt_reason}")
+    for tid in state.ordered_task_ids():
+        t = state.tasks[tid]
+        if t.status not in ("failed", "blocked"):
+            continue
+        typer.echo(f"\n{tid} ({t.spec.title}) — {t.status} at stage {t.stage}")
+        attempts = t.attempts.get(t.stage, [])
+        if attempts:
+            last = attempts[-1]
+            typer.echo(f"  last attempt: outcome={last.outcome} "
+                       f"binding={last.binding.cli}:{last.binding.model} turns={last.turns}")
+            for g in last.gate_results:
+                if not g.passed:
+                    typer.echo(f"  failing gate: {g.name} — {g.detail[:200]}")
+            if last.blocked_question:
+                typer.echo(f"  blocked question: {last.blocked_question[:300]}")
+        tdir = rundir.path / "tasks" / tid
+        if tdir.is_dir():
+            for note in sorted(tdir.glob("note-*.md")):
+                typer.echo(f"  evidence: {note}")
+            outs = sorted(tdir.glob("attempt-*.out"))
+            if outs:
+                typer.echo(f"  last transcript: {outs[-1]}")
+    typer.echo("\nsuggested action:")
+    reason = state.halt_reason or ""
+    if "quota" in reason:
+        typer.echo(f"  wait for the provider window to reset, then: "
+                   f"regie resume {run_id} --repo <path>")
+    elif "rebase conflict" in reason:
+        typer.echo("  resolve the conflict in the worktree above, then: "
+                   f"regie resume {run_id} --repo <path>")
+    elif "blocked" in reason:
+        typer.echo("  answer the question (edit the spec or decisions.md), then: "
+                   f"regie resume {run_id} --repo <path>")
+    else:
+        typer.echo("  read the evidence above, fix what it names (spec, tests, or "
+                   f"budgets), then: regie resume {run_id} --repo <path> (fresh ladders)")
+
+
+@app.command()
 def clean(run_id: str, repo: Annotated[Path, typer.Option()]):
     rundir = _open_rundir(_home(), run_id)
     state = rundir.read_state()

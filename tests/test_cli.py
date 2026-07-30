@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from regie.cli import app
 from regie.gitops import commit_all, create_run_worktree, head_sha
-from regie.models import Attempt, Binding, RunState, TaskSpec, TaskState
+from regie.models import Attempt, Binding, GateResult, RunState, TaskSpec, TaskState
 from regie.pipeline import reconcile
 from regie.rundir import RunDir
 
@@ -267,3 +267,61 @@ def test_reconcile_respects_reset_marker(regie_home, fixture_repo):
     # intents are dead history
     assert count == 1
     assert len(run.tasks["T1"].attempts["build"]) == 1
+
+
+def _seed_artifact_run(regie_home, rid="art1"):
+    rd = RunDir.create(regie_home, rid)
+    (rd.path / "spec").mkdir()
+    (rd.path / "spec" / "spec.md").write_text("# The Spec\nbody")
+    run = RunState(id=rid, target_repo="/x", branch=f"regie/{rid}", stage="halted",
+                   halt_reason="build ladder exhausted on T1")
+    run.tasks["T1"] = TaskState(
+        spec=TaskSpec(id="T1", title="t", profile="builder", criteria=["c"]),
+        status="failed", stage="build")
+    run.tasks["T1"].attempts["build"].append(Attempt(
+        binding=Binding(cli="fake", model="m1"), outcome="failed",
+        gate_results=[GateResult(name="diff-guard", passed=False,
+                                 detail="test files modified: tests/x.py")]))
+    rd.write_state(run)
+    (rd.task_dir("T1") / "note-build.md").write_text("Previous attempt failed gates:\n- diff-guard: ...")
+    (rd.task_dir("T1") / "attempt-1.out").write_text("transcript")
+    return rd
+
+
+def test_spec_command_prints_spec(regie_home):
+    _seed_artifact_run(regie_home)
+    result = runner.invoke(app, ["spec", "art1"])
+    assert result.exit_code == 0 and "# The Spec" in result.output
+
+
+def test_spec_command_missing_spec_friendly(regie_home):
+    rd = RunDir.create(regie_home, "nospec")
+    rd.write_state(RunState(id="nospec", target_repo="/x", branch="b"))
+    result = runner.invoke(app, ["spec", "nospec"])
+    assert result.exit_code == 2 and "no spec" in result.output.lower()
+
+
+def test_open_command_prints_paths(regie_home):
+    _seed_artifact_run(regie_home)
+    result = runner.invoke(app, ["open", "art1"])
+    assert result.exit_code == 0
+    assert "spec.md" in result.output and "state.json" in result.output
+
+
+def test_doctor_summarizes_halt_and_suggests(regie_home):
+    _seed_artifact_run(regie_home)
+    result = runner.invoke(app, ["doctor", "art1"])
+    assert result.exit_code == 0
+    out = result.output
+    assert "build ladder exhausted" in out
+    assert "diff-guard" in out                  # failing gate named
+    assert "note-build.md" in out               # evidence pointer
+    assert "regie resume" in out                # suggested action
+
+
+def test_doctor_on_healthy_run(regie_home):
+    rd = RunDir.create(regie_home, "ok1")
+    rd.write_state(RunState(id="ok1", target_repo="/x", branch="b", stage="done",
+                            pr_url="https://x/pr/1"))
+    result = runner.invoke(app, ["doctor", "ok1"])
+    assert result.exit_code == 0 and "done" in result.output
