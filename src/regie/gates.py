@@ -109,12 +109,14 @@ def red_test_gate(cwd: Path, test_cmd: str) -> GateResult:
     code, output = _run(test_cmd, cwd)
     if code == 0:
         return GateResult(name="tdd-red", passed=False, detail="unexpectedly-green")
-    if "ImportError" in output or "ModuleNotFoundError" in output or "SyntaxError" in output:
-        return GateResult(name="tdd-red", passed=False,
-                          detail=f"import-error: {output[-1000:]}")
-    if "NotImplementedError" in output:
-        return GateResult(name="tdd-red", passed=True, detail="notimplemented")
-    if "AssertionError" in output or "assert" in output:
-        return GateResult(name="tdd-red", passed=True, detail="assertion")
+    # Honest red = the run FAILED at the test level. Collection problems
+    # (import/syntax errors in test files) were already rejected above; a
+    # runtime error inside not-yet-written code (KeyError, ConfigError,
+    # pytest.raises mismatch, ...) is a legitimate red — the first dogfood
+    # run proved the old AssertionError/NotImplementedError whitelist far
+    # too narrow for real features. Collection-stage ERRORs (broken
+    # fixtures) still fail the gate: they are "errors", not "failed".
+    if re.search(r"\b\d+ failed", output) and not re.search(r"\b\d+ errors?\b", output):
+        return GateResult(name="tdd-red", passed=True, detail="failing-tests")
     return GateResult(name="tdd-red", passed=False,
                       detail=f"failed for unrecognized reason: {output[-1000:]}")

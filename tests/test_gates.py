@@ -33,7 +33,7 @@ def test_red_gate_accepts_assertion_failure(fixture_repo):
         "def test_new():\n    assert 1 == 2\n")
     commit_all(fixture_repo, "add red test")
     result = red_test_gate(fixture_repo, "python -m pytest tests/test_new.py -q")
-    assert result.passed and "assertion" in result.detail
+    assert result.passed and "failing-tests" in result.detail
 
 
 def test_red_gate_rejects_import_error(fixture_repo):
@@ -92,3 +92,14 @@ def test_glob_translator_table():
     assert _glob_match("tests/test_calc.py", "tests/**")
     assert _glob_match("tests", "tests/**")
     assert not _glob_match("src/calc.py", "tests/**")
+
+
+def test_red_gate_accepts_domain_exception_red(fixture_repo):
+    """Dogfood finding: honest reds against unwritten code fail with domain
+    exceptions (KeyError, ConfigError, pytest.raises mismatches) — not only
+    AssertionError/NotImplementedError."""
+    (fixture_repo / "tests" / "test_new.py").write_text(
+        "def test_new():\n    raise KeyError('bindings')\n")
+    commit_all(fixture_repo, "add domain-exception red test")
+    result = red_test_gate(fixture_repo, "python -m pytest tests/test_new.py -q")
+    assert result.passed and "failing-tests" in result.detail
