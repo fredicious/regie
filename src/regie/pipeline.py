@@ -526,9 +526,9 @@ def _scribe(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path,
         # Smoke-test finding: without an explicit count the model writes one
         # message per raw commit (test+feat), not one per task group, and the
         # size check rejects it. State the contract in the prompt.
-        f"## Your job\nWrite a PR title, a PR body, and EXACTLY "
-        f"{len(groups)} conventional commit message(s) — one per task group "
-        f"listed below, in order. Do NOT write one message per git-log line.",
+        (f"## Your job\nWrite a PR title, a PR body, and EXACTLY "
+         f"{len(groups)} conventional commit message(s) — one per task group "
+         f"listed below, in order. Do NOT write one message per git-log line."),
         "## Task groups (one commit message each, replacing these defaults)\n" +
         "\n".join(f"{i + 1}. {g[0]}" for i, g in enumerate(groups)),
         f"## git log subjects (context only)\n{log_subjects}",
