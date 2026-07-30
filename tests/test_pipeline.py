@@ -209,6 +209,8 @@ def test_dispatch_death_writes_retry_note(regie_home, fixture_repo, cfg):
     run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
     note = (rd.path / "tasks" / tid / "note-test.md").read_text()
     assert "died before gates" in note and "turn budget" in note
+FAIL_ATTEMPT = {"result": {"outcome": "error"}}
+QUOTA_ATTEMPT = {"result": {"outcome": "quota"}}
 
 
 def test_blocked_attempt_discards_partial_edits(regie_home, fixture_repo, cfg):
@@ -328,3 +330,72 @@ def test_ac15_no_flip_walks_reviewers_own_bindings_list(regie_home, fixture_repo
     review_bindings = [a.binding for a in task.attempts["review"]]
     assert review_bindings == [reviewer.primary, reviewer.primary,
                               Binding(cli="fake2", model="rev2")]
+
+
+def test_ac12_quota_advances_to_next_binding_without_burning_retry(
+        regie_home, fixture_repo, cfg):
+    """Builder profile is bindings: [fake:m1, fake:m2] (fake_profiles fixture).
+    A quota outcome on the first build attempt (fake:m1) must dispatch attempt
+    2 directly on fake:m2 -- not retry fake:m1 -- while the quota attempt
+    itself stays recorded with outcome "quota". fake:m2 must then still get
+    its own two attempts (retry, then escalate-halt) before the run halts."""
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+    _script(fixture_repo, [RED_TEST])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)  # test -> build
+
+    _script(fixture_repo, [QUOTA_ATTEMPT])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    assert run.stage != "halted"
+
+    _script(fixture_repo, [FAIL_ATTEMPT])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    assert run.stage != "halted"
+
+    _script(fixture_repo, [FAIL_ATTEMPT])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    assert run.stage != "halted"
+
+    build_attempts = run.tasks[tid].attempts["build"]
+    assert [(a.binding, a.outcome) for a in build_attempts] == [
+        (Binding(cli="fake", model="m1"), "quota"),
+        (Binding(cli="fake", model="m2"), "failed"),
+        (Binding(cli="fake", model="m2"), "failed"),
+    ]
+
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    assert run.stage == "halted"
+    assert len(run.tasks[tid].attempts["build"]) == 3  # no dispatch beyond exhaustion
+    assert run.halt_reason == f"build ladder exhausted on {tid}"
+
+
+def test_ac13_quota_with_no_next_binding_halts_naming_provider(
+        regie_home, fixture_repo, tmp_path):
+    """A one-element builder bindings list means a quota outcome has nowhere
+    to advance to: the run must halt immediately, naming "quota", the
+    exhausted "cli:model", and the stage -- and never dispatch again on that
+    same binding."""
+    builder = _profile("builder", tmp_path, [Binding(cli="fake", model="m1")])
+
+    class _OneBindingCfg:
+        def __init__(self):
+            self.profiles = {"builder": builder}
+
+    cfg = _OneBindingCfg()
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    run.tasks[tid].stage = "build"
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+
+    _script(fixture_repo, [QUOTA_ATTEMPT])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+
+    assert run.stage == "halted"
+    assert "quota" in run.halt_reason
+    assert "fake:m1" in run.halt_reason
+    assert "build" in run.halt_reason
+    assert len(run.tasks[tid].attempts["build"]) == 1
+
