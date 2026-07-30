@@ -396,7 +396,6 @@ def test_pr_stage_commits_spec_into_repo(regie_home, fixture_repo, remote_repo,
     assert spec_file.exists() and spec_file.read_text().startswith("# Spec")
     subjects = git(wt, "log", "--format=%s", f"{run.base_sha}..HEAD").splitlines()
     assert any(s.startswith("docs(spec):") for s in subjects)
-    # the spec commit carries the trailer and lands BEFORE push (same history)
-    body = git(wt, "log", "-1", "--format=%B", "HEAD")
+    # the spec file is part of the pushed history
     files = git(wt, "log", "--name-only", f"{run.base_sha}..HEAD")
     assert f"specs/{run.id}.md" in files
