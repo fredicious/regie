@@ -37,6 +37,32 @@ session (see `docs/superpowers/specs/2026-07-29-agent-harness-v1-design.md`).
   (spec, status, transcripts) without knowing the hidden `~/.regie` layout.
   General principle: no workflow step should require navigating a dotfolder.
 
+## Surfaced by the overnight dogfood run (2026-07-30/31)
+
+Fixed inline (twelve harness bugs; see git log): inline `--json-schema`, strict
+`PLAN_SCHEMA`, scribe count contract, `.gitignore` prerequisite, planner
+process-step decomposition, empty-commit crash, TDD-red whitelist (→ minimal
+contract), spent-escape-never-reset, `stream-json` for the stall detector, WAL
+reset markers, blocked/review leftover discards, budget-death naming.
+
+Still open, worth briefs:
+- **Gate runner must check exit codes, not tail output.** A ruff F841 shipped
+  to main and reddened CI because the overnight process eyeballed `tail -1`
+  ("No fixes available") instead of the non-zero exit. Régie's own gates DO
+  check exit codes; the lesson is for any human/agent operating around it —
+  but a `regie preflight` command (run the repo's gate commands, report
+  pass/fail by exit code) would make this impossible to get wrong.
+- **Re-plan on stale base.** A long run whose `main` moved underneath halts on
+  a rebase conflict at the PR stage; today that needed hand-resolution. Option:
+  detect base drift at finalize and offer a re-plan-against-current-main path
+  rather than only halting.
+- **Worktree-per-writer + real process supervision for the *builder* of Régie**
+  (the meta-orchestration around dogfooding): tonight's subagents collided in
+  one worktree and "stand-down" was a polite message, not a kill. Régie itself
+  already solves this for its agents; the harness *building* Régie should too.
+- **`max_turns`/budget as a first-class outcome** (partially done — named now;
+  make it its own `Attempt.outcome` with budget-aware escalation).
+
 ## v2
 
 - **Provider failover on quota exhaustion** — profiles already model `fallback`
