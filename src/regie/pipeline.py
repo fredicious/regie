@@ -94,10 +94,6 @@ def _decisions(ctx: PipelineContext) -> str:
     return ctx.decisions_path.read_text() if ctx.decisions_path.exists() else ""
 
 
-def _strength(profile: Profile) -> list[str]:
-    return [f"{b.cli}:{b.model}" for b in profile.bindings]
-
-
 def _review_profile(run: RunState, task_id: str, cfg: RegieConfig) -> Profile:
     """Cross-model rule: reviewer must not share the builder's model family.
     Returns the whole profile (not just a binding) so the review stage's
@@ -118,8 +114,7 @@ def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
     ladder_profile = _review_profile(run, task_id, cfg) if stage == "review" else profile
     binding = ladder_profile.primary
     if attempts:
-        _action, binding = next_action(attempts, attempts[-1].binding,
-                                       _strength(ladder_profile))
+        _action, binding = next_action(attempts, ladder_profile.bindings)
         # caller already checked for halt; retry keeps binding, escalate upgrades
     packet = render_packet(task.spec, ctx.spec_excerpt, _decisions(ctx),
                            ctx.conventions, extra=extra)
@@ -152,7 +147,7 @@ def _should_halt(rundir: RunDir, run: RunState, task_id: str, stage: str,
     ladder_profile = (_review_profile(run, task_id, cfg) if stage == "review" else
                      cfg.profiles[{"test": "test-writer", "build": "builder",
                                   "review": "reviewer"}[stage]])
-    action, _ = next_action(attempts, attempts[-1].binding, _strength(ladder_profile))
+    action, _ = next_action(attempts, ladder_profile.bindings)
     if action == "halt":
         _halt(rundir, run, task_id, f"{stage} ladder exhausted on {task_id}")
         return True
@@ -377,7 +372,7 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
     while True:
         attempts = run.planner_attempts
         if attempts:
-            action, _ = next_action(attempts, attempts[-1].binding, _strength(profile))
+            action, _ = next_action(attempts, profile.bindings)
             if action == "halt":
                 _halt_run(rundir, run, "planner ladder exhausted")
                 return
@@ -388,8 +383,7 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
 
         binding = profile.primary
         if attempts:
-            _action, binding = next_action(attempts, attempts[-1].binding,
-                                           _strength(profile))
+            _action, binding = next_action(attempts, profile.bindings)
         req = AgentRequest(prompt=profile.prompt_text() + "\n\n" + packet, cwd=worktree,
                            binding=binding, budgets=profile.budgets,
                            output_schema=PLAN_SCHEMA)
