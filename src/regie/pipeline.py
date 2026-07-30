@@ -94,12 +94,19 @@ def _decisions(ctx: PipelineContext) -> str:
     return ctx.decisions_path.read_text() if ctx.decisions_path.exists() else ""
 
 
-def _review_binding(run: RunState, task_id: str, cfg: RegieConfig) -> Binding:
-    """Cross-model rule: reviewer must not share the builder's model family."""
-    reviewer = cfg.profiles["reviewer"].binding
+def _strength(profile: Profile) -> list[str]:
+    return [f"{b.cli}:{b.model}" for b in profile.bindings]
+
+
+def _review_profile(run: RunState, task_id: str, cfg: RegieConfig) -> Profile:
+    """Cross-model rule: reviewer must not share the builder's model family.
+    Returns the whole profile (not just a binding) so the review stage's
+    ladder walks the borrowed profile's full bindings list, not a single
+    escalation-less binding."""
+    reviewer = cfg.profiles["reviewer"]
     builds = run.tasks[task_id].attempts["build"]
-    if builds and builds[-1].binding.cli == reviewer.cli:
-        return cfg.profiles["builder"].binding
+    if builds and builds[-1].binding.cli == reviewer.primary.cli:
+        return cfg.profiles["builder"]
     return reviewer
 
 
@@ -108,11 +115,11 @@ def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
               ctx: PipelineContext, extra: str) -> tuple[Attempt, AgentResult]:
     task = run.tasks[task_id]
     attempts = task.attempts[stage]
-    binding = (_review_binding(run, task_id, cfg) if stage == "review"
-               else profile.binding)
+    ladder_profile = _review_profile(run, task_id, cfg) if stage == "review" else profile
+    binding = ladder_profile.primary
     if attempts:
         _action, binding = next_action(attempts, attempts[-1].binding,
-                                       cfg.binding_strength)
+                                       _strength(ladder_profile))
         # caller already checked for halt; retry keeps binding, escalate upgrades
     packet = render_packet(task.spec, ctx.spec_excerpt, _decisions(ctx),
                            ctx.conventions, extra=extra)
@@ -142,7 +149,10 @@ def _should_halt(rundir: RunDir, run: RunState, task_id: str, stage: str,
     attempts = run.tasks[task_id].attempts[stage]
     if not attempts:
         return False
-    action, _ = next_action(attempts, attempts[-1].binding, cfg.binding_strength)
+    ladder_profile = (_review_profile(run, task_id, cfg) if stage == "review" else
+                     cfg.profiles[{"test": "test-writer", "build": "builder",
+                                  "review": "reviewer"}[stage]])
+    action, _ = next_action(attempts, attempts[-1].binding, _strength(ladder_profile))
     if action == "halt":
         _halt(rundir, run, task_id, f"{stage} ladder exhausted on {task_id}")
         return True
@@ -367,7 +377,7 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
     while True:
         attempts = run.planner_attempts
         if attempts:
-            action, _ = next_action(attempts, attempts[-1].binding, cfg.binding_strength)
+            action, _ = next_action(attempts, attempts[-1].binding, _strength(profile))
             if action == "halt":
                 _halt_run(rundir, run, "planner ladder exhausted")
                 return
@@ -376,10 +386,10 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
         packet = _render_plan_packet(brief_text, conventions, decisions, extra)
         write_packet(rundir.task_dir(_PLAN_TASK_ID), packet)
 
-        binding = profile.binding
+        binding = profile.primary
         if attempts:
             _action, binding = next_action(attempts, attempts[-1].binding,
-                                           cfg.binding_strength)
+                                           _strength(profile))
         req = AgentRequest(prompt=profile.prompt_text() + "\n\n" + packet, cwd=worktree,
                            binding=binding, budgets=profile.budgets,
                            output_schema=PLAN_SCHEMA)
@@ -588,7 +598,7 @@ def _scribe(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path,
     ]) + "\n"
     write_packet(rundir.task_dir(_SCRIBE_TASK_ID), prompt)
     req = AgentRequest(prompt=profile.prompt_text() + "\n\n" + prompt, cwd=worktree,
-                       binding=profile.binding, budgets=profile.budgets,
+                       binding=profile.primary, budgets=profile.budgets,
                        output_schema=SCRIBE_SCHEMA)
     result = run_agent(rundir, _SCRIBE_TASK_ID, "scribe", 1, req)
     if result.outcome != "done" or not result.structured:
@@ -622,20 +632,20 @@ def _debugger_profile(cfg: RegieConfig) -> Profile:
     """The debugger is a builder variant, dispatched only from the PR stage's
     CI-red path. If the target repo's own profiles dir doesn't define one
     (e.g. fixtures that predate this feature), fall back to the builder's
-    binding/budgets paired with the packaged debugger prompt."""
+    full bindings list/budgets paired with the packaged debugger prompt."""
     if "debugger" in cfg.profiles:
         return cfg.profiles["debugger"]
     builder = cfg.profiles["builder"]
-    return Profile(name="debugger", binding=builder.binding,
+    return Profile(name="debugger", bindings=builder.bindings,
                    prompt_path=_DEBUGGER_PROMPT_FALLBACK, budgets=builder.budgets)
 
 
 def _debug_review_binding(debugger_binding: Binding, cfg: RegieConfig) -> Binding:
     """Same cross-model rule as _review_binding, applied against the
     debugger's binding rather than a task's build attempts."""
-    reviewer = cfg.profiles["reviewer"].binding
+    reviewer = cfg.profiles["reviewer"].primary
     if debugger_binding.cli == reviewer.cli:
-        return cfg.profiles["builder"].binding
+        return cfg.profiles["builder"].primary
     return reviewer
 
 
@@ -658,7 +668,7 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
              f"## Notes\n{failure_detail}\n")
     write_packet(rundir.task_dir(task_id), packet)
     req = AgentRequest(prompt=profile.prompt_text() + "\n\n" + packet, cwd=worktree,
-                       binding=profile.binding, budgets=profile.budgets)
+                       binding=profile.primary, budgets=profile.budgets)
     pre_dispatch = set(changed_files(worktree))
     result = run_agent(rundir, task_id, "debug", 1, req)
     if result.outcome == "quota":
@@ -681,7 +691,7 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
 
     reviewer = cfg.profiles["reviewer"]
     review_req = AgentRequest(prompt=reviewer.prompt_text() + "\n\n" + packet, cwd=worktree,
-                              binding=_debug_review_binding(profile.binding, cfg),
+                              binding=_debug_review_binding(profile.primary, cfg),
                               budgets=reviewer.budgets, output_schema=FINDINGS_SCHEMA)
     review_result = run_agent(rundir, task_id, "review", 1, review_req)
     if review_result.outcome == "quota":

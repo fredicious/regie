@@ -15,7 +15,7 @@ runner = CliRunner()
 
 def _toml(repo: Path) -> None:
     (repo / "regie.toml").write_text(
-        'test_globs = ["tests/**"]\nbinding_strength = ["fake:m1"]\n'
+        'test_globs = ["tests/**"]\n'
         '[commands]\ntest = "true"\nlint = "true"\n')
 
 

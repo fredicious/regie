@@ -128,7 +128,7 @@ def _predict_run_id(brief: Path) -> str:
 
 def _setup(fixture_repo, tmp_path):
     (fixture_repo / "regie.toml").write_text(
-        'test_globs = ["tests/**"]\nbinding_strength = ["fake:m1"]\n'
+        'test_globs = ["tests/**"]\n'
         '[commands]\ntest = "python -m pytest tests -q"\nlint = "true"\n')
     brief = tmp_path / "feature.md"
     brief.write_text("# two functions\n\ndivide and power.\n")
