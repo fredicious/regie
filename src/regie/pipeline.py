@@ -444,8 +444,6 @@ def reconcile(rundir: RunDir, run: RunState, repo: Path) -> int:
     crashed mid-dispatch — mark it failed and discard uncommitted worktree edits."""
     from collections import Counter
 
-    from regie.models import Binding
-
     intents = Counter()
     bindings: dict[tuple[str, str], dict] = {}
     for rec in rundir.read_intents():
@@ -586,6 +584,10 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
     req = AgentRequest(prompt=profile.prompt_text() + "\n\n" + packet, cwd=worktree,
                        binding=profile.binding, budgets=profile.budgets)
     result = run_agent(rundir, task_id, "debug", 1, req)
+    if result.outcome == "quota":
+        _discard_worktree_scratch(worktree)
+        _halt_run(rundir, run, f"quota exhausted during debugger round {round_no}")
+        return False
     if result.outcome != "done":
         _discard_worktree_scratch(worktree)
         return False
@@ -603,6 +605,13 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
                               binding=_debug_review_binding(profile.binding, cfg),
                               budgets=reviewer.budgets, output_schema=FINDINGS_SCHEMA)
     review_result = run_agent(rundir, task_id, "review", 1, review_req)
+    if review_result.outcome == "quota":
+        # The fix(ci) commit above is already part of history at this
+        # point -- a quota-halted reviewer must not leave it there forever.
+        git(worktree, "reset", "--hard", pre_round_sha)
+        git(worktree, "clean", "-fd")
+        _halt_run(rundir, run, f"quota exhausted during debugger round {round_no}")
+        return False
     findings = [Finding(**f) for f in (review_result.structured or {}).get("findings", [])]
     rejected = (review_result.outcome != "done"
                or any(f.severity in ("blocker", "major") for f in findings))
@@ -633,6 +642,8 @@ def _ci_loop(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) ->
                          f"CI red after {CI_MAX_DEBUG_ROUNDS} debugger rounds")
                 return
             _debugger_round(rundir, run, cfg, worktree, debug_round, ci_failures(worktree))
+            if run.stage == "halted":
+                return
             continue
         if time.monotonic() - started >= CI_WALL_MINUTES * 60:
             _halt_run(rundir, run, "CI timeout")
@@ -644,28 +655,35 @@ def pr_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) ->
     """Advance the run from stage "pr" to "done": squash each task's commits
     into one per group (scribe-polished, deterministic fallback on scribe
     failure), open the PR, then watch CI -- gating up to CI_MAX_DEBUG_ROUNDS
-    debugger rounds on red before halting."""
-    groups = run_commit_groups(worktree, run.base_sha)
-    if not groups:
-        _halt_run(rundir, run, "nothing to submit")
-        return
+    debugger rounds on red before halting.
 
-    messages, title, body = _scribe(rundir, run, cfg, worktree, groups)
-    body = _append_minors(rundir, body)
-    body_file = rundir.path / "pr-body.md"
-    body_file.write_text(body)
+    Re-entrant once run.pushed is set: a resume after a halt that occurred
+    at or after the first push (e.g. mid CI-watch) must not re-squash
+    already-pushed history or attempt a second `gh pr create` -- it goes
+    straight to the CI loop against the existing pr_url."""
+    if not run.pushed:
+        groups = run_commit_groups(worktree, run.base_sha)
+        if not groups:
+            _halt_run(rundir, run, "nothing to submit")
+            return
 
-    # Scribe only reads and returns structured copy -- it must never leave
-    # anything in the tree. Discard any incidental scratch (matching
-    # finalize_stage's discard idiom) so rebuild_history's dirty-worktree
-    # guard only ever trips on a genuine defect.
-    _discard_worktree_scratch(worktree)
+        messages, title, body = _scribe(rundir, run, cfg, worktree, groups)
+        body = _append_minors(rundir, body)
+        body_file = rundir.path / "pr-body.md"
+        body_file.write_text(body)
 
-    rebuild_history(worktree, run.base_sha,
-                    list(zip(messages, [shas for _, shas in groups], strict=True)), run.id)
+        # Scribe only reads and returns structured copy -- it must never leave
+        # anything in the tree. Discard any incidental scratch (matching
+        # finalize_stage's discard idiom) so rebuild_history's dirty-worktree
+        # guard only ever trips on a genuine defect.
+        _discard_worktree_scratch(worktree)
 
-    push_branch(worktree, run.branch)
-    run.pr_url = create_pr(worktree, run.base_branch, title, body_file)
-    rundir.write_state(run)
+        rebuild_history(worktree, run.base_sha,
+                        list(zip(messages, [shas for _, shas in groups], strict=True)), run.id)
+
+        push_branch(worktree, run.branch)
+        run.pr_url = create_pr(worktree, run.base_branch, title, body_file)
+        run.pushed = True
+        rundir.write_state(run)
 
     _ci_loop(rundir, run, cfg, worktree)

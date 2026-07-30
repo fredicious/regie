@@ -126,3 +126,19 @@ have drifted. On a **sandbox repo** (not ai-search-platform):
 `--tasks-file <json>` bypasses the planner (testing escape hatch). Codex
 exposes no usage telemetry in exec mode. Provider quota *failover* (vs clean
 halt) and local models are roadmap items — see `docs/ROADMAP.md`.
+
+Two more real-`gh` races to validate during the smoke test (both known v1
+gaps, unexercised by the fake-adapter suite):
+
+7. Immediately after `gh pr create`, `gh pr checks` may report no checks yet
+   at all — Régie's `ci_status` currently reads an empty check list as
+   green. Run the smoke test against a repo **with CI configured** and watch
+   the first `_ci_loop` poll right after PR creation; if it reports "done"
+   before any check has actually started, a grace period (e.g. requiring at
+   least one non-empty poll, or a short delay before the first poll) needs to
+   be added before this is safe unattended.
+8. After a debugger-round push, `gh pr checks` may still report the
+   pre-fix commit's stale `FAILURE` states for a beat before CI re-triggers
+   on the new sha — watch for a round being "burned" twice (halting sooner
+   than `CI_MAX_DEBUG_ROUNDS` should allow) because a stale red was read as
+   the fix's own result.

@@ -59,20 +59,30 @@ def _live_run_blocking(home: Path, other_run_id: str) -> bool:
     return False
 
 
-def _guard_and_mark(home: Path, repo: Path, run_id: str) -> None:
-    """Guard against two live runs against the same target repo. Must be called
-    only after this process holds its OWN run's lock."""
+def _check_live_guard(home: Path, repo: Path, run_id: str) -> None:
+    """Guard against two live runs against the same target repo. When called
+    for a run_id that already owns the marker, this process must be holding
+    that run's OWN lock at this point -- that isn't "another" live run."""
     marker = _repo_marker_path(home, repo)
     if marker.exists():
         other_run_id = marker.read_text().strip()
-        # Resuming the run that already owns the marker holds this process's
-        # OWN lock at this point -- that isn't "another" live run.
         if other_run_id != run_id and _live_run_blocking(home, other_run_id):
             typer.echo("another run is live against this repo", err=True)
             raise typer.Exit(2)
+
+
+def _mark_live(home: Path, repo: Path, run_id: str) -> None:
+    marker = _repo_marker_path(home, repo)
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(run_id)
     atexit.register(lambda: marker.unlink(missing_ok=True))
+
+
+def _guard_and_mark(home: Path, repo: Path, run_id: str) -> None:
+    """Guard against two live runs against the same target repo. Must be called
+    only after this process holds its OWN run's lock."""
+    _check_live_guard(home, repo, run_id)
+    _mark_live(home, repo, run_id)
 
 
 def _resolve_base_sha(repo: Path, base_branch: str) -> str:
@@ -94,6 +104,14 @@ def _ensure_worktree(repo: Path, branch: str, base_sha: str, path: Path) -> Path
     except GitError:
         git(repo, "worktree", "add", str(path), branch)
         return path
+
+
+def _open_rundir(home: Path, run_id: str) -> RunDir:
+    try:
+        return RunDir.open(home, run_id)
+    except FileNotFoundError:
+        typer.echo(f"run {run_id} not found", err=True)
+        raise typer.Exit(2) from None
 
 
 def _print_approve_hint(rundir: RunDir, state: RunState) -> None:
@@ -149,14 +167,14 @@ def run(brief: Path, repo: Annotated[Path, typer.Option()],
     cfg = load_config(repo, profiles)
     home = _home()
     run_id = f"{datetime.now(tz=UTC).date().isoformat()}-{brief.stem}"
+    _check_live_guard(home, repo, run_id)
     try:
         rundir = RunDir.create(home, run_id)
     except FileExistsError:
-        typer.echo(f"run {run_id} already exists — pick a different brief name "
-                   f"or `regie clean {run_id}`", err=True)
+        typer.echo(f"run {run_id} already exists — pick a different brief name", err=True)
         raise typer.Exit(2)
     rundir.acquire_lock()
-    _guard_and_mark(home, repo, run_id)
+    _mark_live(home, repo, run_id)
 
     (rundir.path / "brief.md").write_text(brief.read_text())
 
@@ -186,7 +204,7 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
            profiles: Annotated[Path, typer.Option()] = _DEFAULT_PROFILES):
     cfg = load_config(repo, profiles)
     home = _home()
-    rundir = RunDir.open(home, run_id)
+    rundir = _open_rundir(home, run_id)
     try:
         rundir.acquire_lock()
     except RunLocked:
@@ -206,7 +224,14 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
         typer.echo(f"reconciled {fixed} orphaned attempt(s)")
     if state.stage == "halted":
         state.halt_reason = None
-        if state.tasks:
+        if state.pushed:
+            # The halt happened at or after the first push (e.g. mid CI-watch,
+            # or during a debugger round) -- tasks are done and history is
+            # already squashed and pushed. Re-entering "tasks" would re-run
+            # finalize's squash/push, which correctly refuses a second plain
+            # push. pr_stage's re-entrancy picks this back up at the CI loop.
+            state.stage = "pr"
+        elif state.tasks:
             state.stage = "tasks"
             for t in state.tasks.values():
                 if t.status in ("failed", "blocked", "running"):
@@ -236,11 +261,7 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
 
 @app.command()
 def approve(run_id: str):
-    try:
-        rundir = RunDir.open(_home(), run_id)
-    except FileNotFoundError:
-        typer.echo(f"run {run_id} not found", err=True)
-        raise typer.Exit(2)
+    rundir = _open_rundir(_home(), run_id)
     state = rundir.read_state()
     if state.stage != "approve":
         typer.echo(f"run {run_id} is not awaiting approval (stage={state.stage})", err=True)
@@ -252,7 +273,7 @@ def approve(run_id: str):
 
 @app.command()
 def status(run_id: str):
-    state = RunDir.open(_home(), run_id).read_state()
+    state = _open_rundir(_home(), run_id).read_state()
     typer.echo(f"run {state.id}  stage={state.stage}"
                + (f"  halt={state.halt_reason}" if state.halt_reason else ""))
     for tid in state.ordered_task_ids():
@@ -263,7 +284,7 @@ def status(run_id: str):
 
 @app.command()
 def clean(run_id: str, repo: Annotated[Path, typer.Option()]):
-    rundir = RunDir.open(_home(), run_id)
+    rundir = _open_rundir(_home(), run_id)
     state = rundir.read_state()
     removed = []
     if state.worktree_path:

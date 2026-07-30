@@ -84,6 +84,7 @@ class RunState(BaseModel):
     worktree_path: str = ""
     base_branch: str = "main"
     pr_url: str = ""
+    pushed: bool = False
     autonomous: bool = False
     stage: RunStage = "intake"
     tasks: dict[str, TaskState] = Field(default_factory=dict)

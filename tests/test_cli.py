@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from regie.cli import app
@@ -189,3 +190,43 @@ def test_approve_on_nonexistent_run_is_a_friendly_error(regie_home):
     result = runner.invoke(app, ["approve", "no-such-run"])
     assert result.exit_code == 2
     assert "not found" in result.output.lower()
+
+
+@pytest.mark.parametrize("command", ["resume", "status", "clean"])
+def test_open_rundir_friendly_error_across_commands(regie_home, fixture_repo,
+                                                     fake_profiles, command):
+    _toml(fixture_repo)
+    args = [command, "no-such-run"]
+    if command in ("resume", "clean"):
+        args += ["--repo", str(fixture_repo)]
+    if command == "resume":
+        args += ["--profiles", str(fake_profiles)]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 2
+    assert "not found" in result.output.lower()
+
+
+def test_run_guard_refused_leaves_no_run_dir(regie_home, fixture_repo, fake_profiles, tmp_path):
+    from datetime import UTC, datetime
+
+    from regie.cli import _repo_marker_path
+
+    # Simulate another live run against the same target repo: create its run
+    # dir, hold its lock (standing in for a live process), and mark it live
+    # in the repo-marker file the guard consults.
+    other = RunDir.create(regie_home, "other-run")
+    other.acquire_lock()
+    marker = _repo_marker_path(regie_home, fixture_repo)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("other-run")
+
+    _toml(fixture_repo)
+    brief = tmp_path / "guarded.md"
+    brief.write_text("x")
+    result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
+                                 "--profiles", str(fake_profiles)])
+
+    assert result.exit_code == 2
+    assert "another run is live" in result.output
+    run_id = f"{datetime.now(tz=UTC).date().isoformat()}-guarded"
+    assert not (regie_home / "runs" / run_id).exists()

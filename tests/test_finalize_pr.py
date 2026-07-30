@@ -155,6 +155,7 @@ SCRIBE_OK = {"result": {"outcome": "done", "structured": {
 SCRIBE_BAD = {"result": {"outcome": "error"}}
 DEBUG_FIX_OK = {"result": {"outcome": "done"}, "writes": {"src/a.py": "A = 2\n"}}
 DEBUG_BLOCKED = {"result": {"outcome": "blocked", "blocked_question": "cannot repro"}}
+DEBUG_QUOTA = {"result": {"outcome": "quota"}}
 REVIEW_CLEAN = {"result": {"outcome": "done", "structured": {"findings": []}}}
 
 
@@ -272,6 +273,26 @@ def test_debugger_round_review_rejection_rolls_back_fix_commit(regie_home, fixtu
     assert git(wt, "status", "--porcelain").strip() == ""
 
 
+def test_quota_during_debugger_round_halts_immediately(regie_home, fixture_repo, remote_repo,
+                                                         tmp_path, fake_profiles, monkeypatch):
+    """Quota on the debugger's own dispatch must halt the run immediately
+    rather than counting a round failure and looping to another red-CI
+    check. The canned queue holds exactly one debug-stage entry (no
+    reviewer entry) -- if pr_stage tried to dispatch past the quota (a
+    second debug round, or a reviewer call), the queue would underflow and
+    raise IndexError, so reaching the assertions below already proves
+    exactly one debug dispatch happened."""
+    rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
+    _agent_queue(monkeypatch, wt, [SCRIBE_OK, DEBUG_QUOTA])
+    _stub_gh(tmp_path, monkeypatch, ["FAILURE"])
+
+    cfg = load_config(fixture_repo, fake_profiles)
+    pr_stage(rd, run, cfg, wt)
+
+    assert run.stage == "halted"
+    assert run.halt_reason == "quota exhausted during debugger round 1"
+
+
 def test_pr_stage_no_groups_halts(regie_home, fixture_repo, remote_repo, tmp_path,
                                   fake_profiles):
     rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
@@ -280,3 +301,66 @@ def test_pr_stage_no_groups_halts(regie_home, fixture_repo, remote_repo, tmp_pat
     cfg = load_config(fixture_repo, fake_profiles)
     pr_stage(rd, run, cfg, wt)
     assert run.stage == "halted" and "nothing to submit" in run.halt_reason
+
+
+# ---------------------------------------------------------------------------
+# pr_stage re-entrancy after a halt at/after the first push (resume stranding)
+# ---------------------------------------------------------------------------
+
+
+def test_pr_stage_reentry_when_pushed_skips_rebuild(regie_home, fixture_repo, remote_repo,
+                                                     tmp_path, fake_profiles, monkeypatch):
+    rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
+    _agent_queue(monkeypatch, wt, [SCRIBE_OK])
+    _stub_gh(tmp_path, monkeypatch, ["SUCCESS"])
+    cfg = load_config(fixture_repo, fake_profiles)
+
+    # First pass: a normal push all the way to "done" -- this is what leaves
+    # run.pushed=True and run.pr_url set, matching the state a halt at/after
+    # the first push (CI-red debugger round, CI timeout, ...) would leave
+    # behind for a later `regie resume` to pick up.
+    pr_stage(rd, run, cfg, wt)
+    assert run.stage == "done"
+    assert run.pushed is True
+    commits_before = git(wt, "log", "--format=%H", f"{run.base_sha}..HEAD").splitlines()
+
+    # Re-entry, as cli.resume performs it after resetting stage back to "pr"
+    # for a halted-while-pushed run: must not re-squash the already-pushed
+    # history a second time.
+    run.stage = "pr"
+    rebuild_calls = []
+    monkeypatch.setattr(pipeline, "rebuild_history",
+                        lambda *a, **kw: rebuild_calls.append(a))
+    pr_stage(rd, run, cfg, wt)
+
+    assert run.stage == "done"
+    assert rebuild_calls == []
+    commits_after = git(wt, "log", "--format=%H", f"{run.base_sha}..HEAD").splitlines()
+    assert commits_after == commits_before
+
+
+def test_resume_after_halt_while_pushed_reenters_pr_stage_not_tasks(
+        regie_home, fixture_repo, remote_repo, tmp_path, fake_profiles, monkeypatch):
+    from typer.testing import CliRunner
+
+    from regie.cli import app
+
+    rd, run, _wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
+    run.pushed = True
+    run.pr_url = "https://github.com/x/y/pull/1"
+    run.stage = "halted"
+    run.halt_reason = "CI timeout"
+    rd.write_state(run)
+
+    rebuild_calls = []
+    monkeypatch.setattr(pipeline, "rebuild_history",
+                        lambda *a, **kw: rebuild_calls.append(a))
+    _stub_gh(tmp_path, monkeypatch, ["SUCCESS"])
+
+    result = CliRunner().invoke(app, ["resume", "rp", "--repo", str(fixture_repo),
+                                      "--profiles", str(fake_profiles)])
+
+    assert result.exit_code == 0, result.output
+    final = RunDir.open(regie_home, "rp").read_state()
+    assert final.stage == "done"
+    assert rebuild_calls == []
