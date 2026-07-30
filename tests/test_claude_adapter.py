@@ -27,14 +27,12 @@ def test_build_command_flags(tmp_path):
     assert "--json-schema" not in cmd and "--bare" not in cmd
 
 
-def test_build_command_writes_schema_file(tmp_path):
+def test_build_command_passes_schema_inline(tmp_path):
+    # The real CLI (verified on 2.1.220) takes the schema as inline JSON, not
+    # a file path — inline also means no scratch file can leak into a commit.
     cmd = get_adapter("claude").build_command(_req(tmp_path, schema={"type": "object"}))
-    path = cmd[cmd.index("--json-schema") + 1]
-    with open(path) as f:
-        assert json.loads(f.read()) == {"type": "object"}
-    # Must live outside the agent's cwd: a schema file inside the worktree is
-    # untracked scratch a later `git add -A` could sweep into history.
-    assert not path.startswith(str(tmp_path))
+    arg = cmd[cmd.index("--json-schema") + 1]
+    assert json.loads(arg) == {"type": "object"}
 
 
 def test_parse_done_with_usage_and_noise(tmp_path):

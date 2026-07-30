@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import tempfile
 
 from regie.agents.base import AgentRequest, AgentResult, register
 
@@ -29,14 +28,10 @@ class ClaudeAdapter:
                "--max-turns", str(req.budgets.turns),
                "--model", req.binding.model, "--permission-mode", "acceptEdits"]
         if req.output_schema is not None:
-            # Outside req.cwd deliberately: a schema file living in the
-            # worktree is untracked scratch that a later `git add -A` /
-            # commit_all can sweep into history (e.g. a debugger round's
-            # reviewer dispatch leaving it for the next round's commit).
-            fd, path = tempfile.mkstemp(suffix=".regie_schema.json")
-            with open(fd, "w") as f:
-                f.write(json.dumps(req.output_schema))
-            cmd += ["--json-schema", path]
+            # The real CLI takes the schema INLINE, not as a file path
+            # (verified against claude 2.1.220 during the first smoke test).
+            # Inline also means no scratch file can ever leak into a commit.
+            cmd += ["--json-schema", json.dumps(req.output_schema)]
         return cmd
 
     def parse(self, stdout: str, exit_code: int) -> AgentResult:
