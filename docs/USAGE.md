@@ -137,7 +137,12 @@ gaps, unexercised by the fake-adapter suite):
    before any check has actually started, a grace period (e.g. requiring at
    least one non-empty poll, or a short delay before the first poll) needs to
    be added before this is safe unattended.
-8. After a debugger-round push, `gh pr checks` may still report the
+8. (Also a known crash-window gap, parked with ruling at final review: a hard
+   process kill between the PR stage's push and its state write leaves
+   `pushed=false`; `regie resume` then errors on the non-fast-forward push
+   instead of halting cleanly. Recoverable by hand; fix candidate: WAL intent
+   before push or an idempotent branch/PR probe on re-entry.)
+9. After a debugger-round push, `gh pr checks` may still report the
    pre-fix commit's stale `FAILURE` states for a beat before CI re-triggers
    on the new sha — watch for a round being "burned" twice (halting sooner
    than `CI_MAX_DEBUG_ROUNDS` should allow) because a stale red was read as
