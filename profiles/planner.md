@@ -32,6 +32,10 @@ order of magnitude more later.
 - **Every criterion maps to at least one named planned test** — write the test
   name next to the criterion. If you cannot name the test, the criterion is not
   testable: rewrite it.
+- When a task makes a BREAKING change (renamed/removed API, changed
+  signature), its acceptance criteria MUST include adapting the existing
+  tests that reference the old API — the test stage owns ALL test edits;
+  the builder is mechanically forbidden from touching test files.
 - Order by dependency; prefer independent tasks. Predicted file scope is
   advisory but honest — think about imports, configs, registrations.
 - Match existing codebase patterns (read the conventions section); never invent

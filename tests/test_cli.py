@@ -230,3 +230,21 @@ def test_run_guard_refused_leaves_no_run_dir(regie_home, fixture_repo, fake_prof
     assert "another run is live" in result.output
     run_id = f"{datetime.now(tz=UTC).date().isoformat()}-guarded"
     assert not (regie_home / "runs" / run_id).exists()
+
+
+def test_resume_after_halt_resets_escape_hatch(regie_home, fixture_repo, fake_profiles):
+    _toml(fixture_repo)
+    rd = RunDir.create(regie_home, "resc")
+    run = RunState(id="resc", target_repo=str(fixture_repo), branch="regie/resc",
+                   stage="halted", halt_reason="build ladder exhausted on T1",
+                   worktree_path=str(fixture_repo))
+    run.tasks["T1"] = TaskState(
+        spec=TaskSpec(id="T1", title="t", profile="builder", criteria=["c"]),
+        status="failed", escaped=True)
+    rd.write_state(run)
+    (fixture_repo / ".fake_agent.json").write_text(json.dumps(
+        {"result": {"outcome": "blocked", "blocked_question": "?"}}))
+    runner.invoke(app, ["resume", "resc", "--repo", str(fixture_repo),
+                        "--profiles", str(fake_profiles)])
+    state = rd.read_state()
+    assert state.tasks["T1"].escaped is False

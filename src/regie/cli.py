@@ -241,6 +241,11 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
                     # The audit trail survives in events.jsonl and task_dir
                     # transcripts, so nothing is lost by clearing them here.
                     t.attempts = {"test": [], "build": [], "review": []}
+                    # ...and a fresh bad-test escape: a spent escape from a
+                    # previous cycle otherwise dooms refactor tasks whose
+                    # builder must route existing-test adaptations to the
+                    # test-writer (first dogfood run finding).
+                    t.escaped = False
         else:
             # Halted before any tasks existed: the halt happened during
             # planning. A fresh ladder means clearing planner_attempts too.
