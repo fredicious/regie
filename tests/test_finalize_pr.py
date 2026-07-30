@@ -184,6 +184,12 @@ def test_pr_stage_green_path(regie_home, fixture_repo, remote_repo, tmp_path,
     assert git(wt, "rev-parse", f"refs/regie/backup/{run.id}")
     body = (rd.path / "pr-body.md").read_text()
     assert "Review notes" in body
+    # Every squashed commit carries the Régie co-author trailer, while the
+    # author identity stays the developer's (or the fallback in this
+    # config-less fixture) — never "regie" as author.
+    for sha in log:
+        full = git(wt, "log", "-1", "--format=%B", sha)
+        assert "Co-authored-by: Régie" in full
     changed = set()
     for sha in log:
         changed |= set(git(wt, "diff-tree", "--no-commit-id", "--name-only",
@@ -364,3 +370,11 @@ def test_resume_after_halt_while_pushed_reenters_pr_stage_not_tasks(
     final = RunDir.open(regie_home, "rp").read_state()
     assert final.stage == "done"
     assert rebuild_calls == []
+
+
+def test_fallback_title_prefers_content_over_heading():
+    from regie.pipeline import _fallback_title
+    spec = "## Goal\nAdd a slugify function to text_utils.\n\n## Criteria\n..."
+    assert _fallback_title(spec, "rid") == "Add a slugify function to text_utils."
+    assert _fallback_title("## Only Heading\n", "rid") == "Only Heading"
+    assert _fallback_title("", "rid") == "rid"

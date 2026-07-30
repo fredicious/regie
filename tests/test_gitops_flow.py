@@ -162,3 +162,24 @@ def test_create_pr_and_ci_status(fixture_repo, tmp_path, monkeypatch):
     assert ci_status(fixture_repo) == "green"
     _stub_gh(tmp_path, monkeypatch, "FAILURE,SUCCESS")
     assert ci_status(fixture_repo) == "red"
+
+
+def test_commit_all_uses_configured_identity(fixture_repo):
+    from regie.gitops import commit_all, git
+    git(fixture_repo, "config", "user.name", "Dev Person")
+    git(fixture_repo, "config", "user.email", "dev@example.com")
+    (fixture_repo / "id.txt").write_text("x")
+    commit_all(fixture_repo, "chore: identity check")
+    author = git(fixture_repo, "log", "-1", "--format=%an <%ae>").strip()
+    assert author == "Dev Person <dev@example.com>"
+
+
+def test_commit_all_falls_back_to_regie_identity(fixture_repo, monkeypatch):
+    from regie.gitops import commit_all, git
+    # Hide global/system config so the repo genuinely has no identity.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+    (fixture_repo / "id2.txt").write_text("x")
+    commit_all(fixture_repo, "chore: fallback identity check")
+    author = git(fixture_repo, "log", "-1", "--format=%an <%ae>").strip()
+    assert author == "Régie <regie@noreply.local>"

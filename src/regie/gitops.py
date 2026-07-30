@@ -5,8 +5,11 @@ import re
 import subprocess
 from pathlib import Path
 
-_AUTHOR_ENV = {"GIT_AUTHOR_NAME": "regie", "GIT_AUTHOR_EMAIL": "regie@local",
-               "GIT_COMMITTER_NAME": "regie", "GIT_COMMITTER_EMAIL": "regie@local"}
+# Commits should carry the DEVELOPER's identity (repo/global git config); the
+# Régie identity is only a fallback for environments with no identity at all
+# (bare CI containers, test fixtures). Régie's involvement is recorded via the
+# Co-authored-by trailer the PR stage appends, not by authoring as itself.
+_FALLBACK_IDENTITY = ["-c", "user.name=Régie", "-c", "user.email=regie@noreply.local"]
 
 
 class GitError(Exception):
@@ -16,10 +19,19 @@ class GitError(Exception):
 def git(repo: Path, *args: str) -> str:
     proc = subprocess.run(["git", "-C", str(repo), *args],
                           capture_output=True, text=True,
-                          env={**os.environ, **_AUTHOR_ENV}, check=False)
+                          env=os.environ.copy(), check=False)
     if proc.returncode != 0:
         raise GitError(f"git {' '.join(args)}: {proc.stderr.strip()}")
     return proc.stdout
+
+
+def _identity_args(repo: Path) -> list[str]:
+    try:
+        if git(repo, "config", "user.email").strip():
+            return []
+    except GitError:
+        pass
+    return list(_FALLBACK_IDENTITY)
 
 
 def changed_files(repo: Path) -> list[str]:
@@ -51,7 +63,7 @@ def changed_files(repo: Path) -> list[str]:
 
 def commit_all(repo: Path, message: str) -> str:
     git(repo, "add", "-A")
-    git(repo, "commit", "-m", message)
+    git(repo, *_identity_args(repo), "commit", "-m", message)
     return git(repo, "rev-parse", "--short", "HEAD").strip()
 
 
@@ -126,7 +138,7 @@ def rebuild_history(worktree: Path, base_sha: str,
     try:
         for message, shas in groups:
             git(worktree, "cherry-pick", "-n", *shas)
-            git(worktree, "commit", "-m", message)
+            git(worktree, *_identity_args(worktree), "commit", "-m", message)
     except GitError:
         git(worktree, "reset", "--hard", backup_ref)
         raise

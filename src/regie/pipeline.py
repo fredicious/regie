@@ -216,7 +216,7 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             gates = [red_test_gate(repo, cfg.commands["test"]),
                      run_command_gate("lint", cfg.commands["lint"], repo)]
             def _pass_test():
-                commit_all(repo, f"test({task_id}): red tests")
+                commit_all(repo, f"test({task_id}): red tests for {task.spec.title}")
                 task.stage = "build"
             _gate_and_advance(rundir, run, task_id, stage, gates, attempt,
                               _pass_test, repo)
@@ -226,7 +226,7 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
                      run_command_gate("lint", cfg.commands["lint"], repo),
                      diff_gate(repo, cfg.test_globs)]
             def _pass_build():
-                commit_all(repo, f"feat({task_id}): implement")
+                commit_all(repo, f"feat({task_id}): {task.spec.title}")
                 task.stage = "review"
             _gate_and_advance(rundir, run, task_id, stage, gates, attempt,
                               _pass_build, repo)
@@ -500,12 +500,22 @@ def _spec_text(rundir: RunDir) -> str:
     return path.read_text() if path.exists() else ""
 
 
+REGIE_TRAILER = "Co-authored-by: Régie <regie@noreply.local>"
+
+
 def _fallback_title(spec_text: str, run_id: str) -> str:
+    # Prefer the first CONTENT line: bare headings like "## Goal" made awful
+    # PR titles (smoke-test finding). Headings are kept only as a last resort.
+    first_heading = ""
     for line in spec_text.splitlines():
         stripped = line.strip()
-        if stripped:
-            return stripped.lstrip("#").strip()
-    return run_id
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            first_heading = first_heading or stripped.lstrip("#").strip()
+            continue
+        return stripped[:72]
+    return first_heading or run_id
 
 
 def _scribe(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path,
@@ -529,6 +539,16 @@ def _scribe(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path,
         (f"## Your job\nWrite a PR title, a PR body, and EXACTLY "
          f"{len(groups)} conventional commit message(s) — one per task group "
          f"listed below, in order. Do NOT write one message per git-log line."),
+        ("## Commit message rules (Conventional Commits)\n"
+         "- Format: `type(scope): subject` — type from feat/fix/test/refactor/"
+         "chore/docs; scope is the MODULE or package the change touches (e.g. "
+         "`calc`, `api`, `search`), NEVER a task id like T1.\n"
+         "- Subject: imperative mood, lowercase, no trailing period, ≤50 chars "
+         "(72 hard max).\n"
+         "- After a blank line, an optional short body explaining WHY the "
+         "change was made — the diff already shows the what.\n"
+         "- PR title follows the same conventional format and summarizes the "
+         "whole change."),
         "## Task groups (one commit message each, replacing these defaults)\n" +
         "\n".join(f"{i + 1}. {g[0]}" for i, g in enumerate(groups)),
         f"## git log subjects (context only)\n{log_subjects}",
@@ -621,7 +641,8 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
     if not all(g.passed for g in gates):
         _discard_worktree_scratch(worktree)
         return False
-    commit_all(worktree, f"fix(ci): debugger round {round_no}")
+    commit_all(worktree,
+               f"fix(ci): debugger round {round_no}\n\n{REGIE_TRAILER}")
 
     reviewer = cfg.profiles["reviewer"]
     review_req = AgentRequest(prompt=reviewer.prompt_text() + "\n\n" + packet, cwd=worktree,
@@ -691,6 +712,7 @@ def pr_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) ->
             return
 
         messages, title, body = _scribe(rundir, run, cfg, worktree, groups)
+        messages = [m.rstrip() + "\n\n" + REGIE_TRAILER for m in messages]
         body = _append_minors(rundir, body)
         body_file = rundir.path / "pr-body.md"
         body_file.write_text(body)
