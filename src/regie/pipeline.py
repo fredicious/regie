@@ -106,6 +106,13 @@ def _review_profile(run: RunState, task_id: str, cfg: RegieConfig) -> Profile:
     return reviewer
 
 
+def _review_binding(run: RunState, task_id: str, cfg: RegieConfig) -> Binding:
+    """Primary binding of the cross-model reviewer profile — a thin
+    accessor over _review_profile kept for callers/tests that only need
+    the binding, not the whole profile."""
+    return _review_profile(run, task_id, cfg).primary
+
+
 def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
               profile: Profile, cfg: RegieConfig, repo: Path,
               ctx: PipelineContext, extra: str) -> tuple[Attempt, AgentResult]:
