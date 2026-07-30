@@ -17,8 +17,9 @@ inspectable, resumable, auditable.
 
 ## Status
 
-Plan A (core engine) merged: state machine, gates, ladder, CLI — 52 tests. Real
-Claude/Codex adapters land in Plan B. See:
+Plan B complete: full pipeline brief→PR (planner, approve checkpoint, TDD task
+loop, finalize, squashed PR with CI watch) — fake-verified, 109 tests. Real-adapter
+supervised smoke test pending (see USAGE). See:
 
 - `docs/superpowers/specs/2026-07-29-agent-harness-v1-design.md` — v1 design
 - `docs/USAGE.md` — install (via `uv tool install`) and usage
