@@ -2,6 +2,7 @@ import json
 import os
 import stat
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -11,8 +12,6 @@ from regie.config import load_config
 from regie.gitops import commit_all, create_run_worktree, fetch_base_sha, git
 from regie.models import RunState
 from regie.pipeline import finalize_stage, pr_stage
-from pathlib import Path
-
 from regie.rundir import RunDir
 
 
