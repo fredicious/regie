@@ -26,6 +26,17 @@ session (see `docs/superpowers/specs/2026-07-29-agent-harness-v1-design.md`).
 - **Autonomous-by-default** — v1 defaults to a human spec checkpoint
   (`regie approve`), with `--autonomous` to earn back once specs prove reliable.
 
+## v1.x — DX (user-confirmed 2026-07-30)
+
+- **Spec lands in the PR (must-have)** — the PR stage writes the run's spec
+  into the target repo as `specs/<run-id>.md` (committed before the squash, or
+  as its own commit), so every Régie PR carries its own spec and the reviewer
+  sees intent + implementation in one diff. Mirrors the ARTE `specs/`
+  convention.
+- **`regie spec <run>` / `regie open <run>`** — print or open run artifacts
+  (spec, status, transcripts) without knowing the hidden `~/.regie` layout.
+  General principle: no workflow step should require navigating a dotfolder.
+
 ## v2
 
 - **Provider failover on quota exhaustion** — profiles already model `fallback`
