@@ -21,7 +21,8 @@ def git(repo: Path, *args: str) -> str:
                           capture_output=True, text=True,
                           env=os.environ.copy(), check=False)
     if proc.returncode != 0:
-        raise GitError(f"git {' '.join(args)}: {proc.stderr.strip()}")
+        detail = proc.stderr.strip() or proc.stdout.strip()
+        raise GitError(f"git {' '.join(args)}: {detail}")
     return proc.stdout
 
 

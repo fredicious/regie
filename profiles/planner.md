@@ -19,6 +19,11 @@ order of magnitude more later.
 
 ## Decomposition rules
 
+- Tasks are FEATURES or behavior changes, never process steps: every task
+  automatically runs its own test-writing, implementation, and review
+  stages, so NEVER create tasks like "write tests for X" or "review Y" —
+  fold them into the feature task they belong to.
+
 - Tasks small enough that one agent can hold the whole task in context; split
   where a reviewer could reject one task while approving its neighbor.
 - Every task: id, title, profile, acceptance criteria (subset of the spec's,

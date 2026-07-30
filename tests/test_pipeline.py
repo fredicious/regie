@@ -179,3 +179,21 @@ def test_run_tasks_stage_skips_done_tasks(regie_home, fixture_repo, cfg):
     rd.write_state(run)
     run_tasks_stage(rd, run, cfg, Path(fixture_repo))  # no .fake_agent.json → would error if dispatched
     assert run.tasks[tid].status == "done" and run.stage != "halted"
+
+
+def test_build_attempt_with_no_changes_fails_changes_gate(
+        regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+    _script(fixture_repo, [RED_TEST])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    # builder "succeeds" but writes nothing at all
+    _script(fixture_repo, [{"result": {"outcome": "done"}}])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    attempt = run.tasks[tid].attempts["build"][-1]
+    assert attempt.outcome == "failed"
+    assert any(g.name == "changes" and not g.passed for g in attempt.gate_results)
+    note = (rd.path / "tasks" / tid / "note-build.md").read_text()
+    assert "no file changes" in note
