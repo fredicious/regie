@@ -103,18 +103,6 @@ def _review_binding(run: RunState, task_id: str, cfg: RegieConfig) -> Binding:
     return reviewer
 
 
-def _changes_gate(repo: Path, before: set[str]) -> GateResult:
-    """An attempt that produced no file changes can never advance: committing
-    nothing is a git error, and "did nothing" is a failure the retry packet
-    should name explicitly (smoke-test finding — a planner-made "write tests"
-    task left its builder with nothing to do and crashed the commit).
-    Compared against a pre-dispatch snapshot so pre-existing scratch (test
-    scaffolding, stray untracked files) doesn't mask an idle agent."""
-    produced = set(changed_files(repo)) - before
-    return GateResult(name="changes", passed=bool(produced),
-                      detail="attempt produced no file changes")
-
-
 def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
               profile: Profile, cfg: RegieConfig, repo: Path,
               ctx: PipelineContext, extra: str) -> tuple[Attempt, AgentResult]:
@@ -227,22 +215,26 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             continue
 
         if stage == "test":
-            gates = [_changes_gate(repo, pre_dispatch),
-                     red_test_gate(repo, cfg.commands["test"]),
+            gates = [red_test_gate(repo, cfg.commands["test"]),
                      run_command_gate("lint", cfg.commands["lint"], repo)]
-            def _pass_test():
-                commit_all(repo, f"test({task_id}): red tests for {task.spec.title}")
+            def _pass_test(pre=pre_dispatch):
+                # No new changes with a satisfied red contract means the work
+                # was already committed (stage re-entry) — advance without an
+                # empty commit (dogfood finding: the old hard changes-gate
+                # burned ladders on legitimate re-entries).
+                if set(changed_files(repo)) - pre:
+                    commit_all(repo, f"test({task_id}): red tests for {task.spec.title}")
                 task.stage = "build"
             _gate_and_advance(rundir, run, task_id, stage, gates, attempt,
                               _pass_test, repo)
         elif stage == "build":
-            gates = [_changes_gate(repo, pre_dispatch),
-                     run_command_gate("test", cfg.commands["test"], repo,
+            gates = [run_command_gate("test", cfg.commands["test"], repo,
                                       rerun_on_fail=True),
                      run_command_gate("lint", cfg.commands["lint"], repo),
                      diff_gate(repo, cfg.test_globs)]
-            def _pass_build():
-                commit_all(repo, f"feat({task_id}): {task.spec.title}")
+            def _pass_build(pre=pre_dispatch):
+                if set(changed_files(repo)) - pre:
+                    commit_all(repo, f"feat({task_id}): {task.spec.title}")
                 task.stage = "review"
             _gate_and_advance(rundir, run, task_id, stage, gates, attempt,
                               _pass_build, repo)
@@ -652,15 +644,15 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
         _discard_worktree_scratch(worktree)
         return False
 
-    gates = [_changes_gate(worktree, pre_dispatch),
-             run_command_gate("test", cfg.commands["test"], worktree, rerun_on_fail=True),
+    gates = [run_command_gate("test", cfg.commands["test"], worktree, rerun_on_fail=True),
              run_command_gate("lint", cfg.commands["lint"], worktree),
              diff_gate(worktree, cfg.test_globs)]
     if not all(g.passed for g in gates):
         _discard_worktree_scratch(worktree)
         return False
-    commit_all(worktree,
-               f"fix(ci): debugger round {round_no}\n\n{REGIE_TRAILER}")
+    if set(changed_files(worktree)) - pre_dispatch:
+        commit_all(worktree,
+                   f"fix(ci): debugger round {round_no}\n\n{REGIE_TRAILER}")
 
     reviewer = cfg.profiles["reviewer"]
     review_req = AgentRequest(prompt=reviewer.prompt_text() + "\n\n" + packet, cwd=worktree,

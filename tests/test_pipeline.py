@@ -193,7 +193,8 @@ def test_build_attempt_with_no_changes_fails_changes_gate(
     _script(fixture_repo, [{"result": {"outcome": "done"}}])
     run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
     attempt = run.tasks[tid].attempts["build"][-1]
+    # No changes + red suite = a failed TEST gate (the suite is still red);
+    # no empty-commit crash, and no dedicated changes-gate burning ladders
+    # on legitimate stage re-entries where work is already committed.
     assert attempt.outcome == "failed"
-    assert any(g.name == "changes" and not g.passed for g in attempt.gate_results)
-    note = (rd.path / "tasks" / tid / "note-build.md").read_text()
-    assert "no file changes" in note
+    assert any(g.name == "test" and not g.passed for g in attempt.gate_results)
