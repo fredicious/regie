@@ -28,7 +28,9 @@ supervised smoke test pending (see USAGE). See:
 ## CLI
 
 ```
-regie run brief.md      # start a run: brief → spec → tasks → build → PR
-regie watch <run>       # live terminal dashboard of the state machine
-regie resume <run>      # resume after crash, halt, or quota limit
+regie run brief.md --repo <path>   # start a run: brief → spec → tasks → build → PR
+regie approve <run>                 # release a run parked at the spec checkpoint
+regie resume <run> --repo <path>    # resume after crash, halt, quota limit, or approval
+regie status <run>                  # pretty-print state.json
+regie clean <run> --repo <path>     # remove a finished run's worktree and branch
 ```
