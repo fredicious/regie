@@ -38,6 +38,11 @@ typecheck = "make typecheck"   # optional
 eval = "make eval"             # optional, runs when eval_trigger_globs match
 ```
 
+**The target repo needs a proper `.gitignore`** (at minimum `__pycache__/`,
+caches, build artifacts): Régie stages with `git add -A`, so anything a gate
+command generates and the repo doesn't ignore will be committed — the first
+smoke test shipped `.pyc` files into its PR this way.
+
 Agent profiles (role prompts + model bindings + budgets) live in this repo's
 `profiles/`: planner, test-writer, builder, reviewer, debugger. The `.md` files
 are the practice documents — edit them to bake in your coding values; every
