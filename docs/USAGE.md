@@ -65,8 +65,12 @@ regie resume 2026-07-30-feature --repo ~/Code/ai-search-platform
 #    (or skip the checkpoint entirely — earn this once specs prove good:)
 regie run feature.md --repo ... --autonomous
 
-# 4. Watch / inspect
+# 4. Watch / inspect (no dotfolder spelunking needed)
 regie status 2026-07-30-feature
+regie spec 2026-07-30-feature       # print the spec
+regie open 2026-07-30-feature       # list all artifact paths
+regie doctor 2026-07-30-feature     # diagnose a halt + suggested action
+regie stats                          # cross-run binding telemetry + suggestions
 tail -f ~/.regie/runs/2026-07-30-feature/events.jsonl | jq
 
 # 5. On halt (budgets exhausted, blocked question, quota, rebase conflict):
@@ -84,6 +88,7 @@ other model family; blocker/major findings loop back, minors go to the PR as
 review notes). 3 attempts per stage (2 on the binding, 1 escalated), then halt.
 Finalize runs the full gates once and rebases onto fresh origin/main. The PR
 stage squashes to one commit per task (backup ref + tree-identity check first),
+commits the run's spec into the repo as `specs/<run-id>.md`,
 pushes, opens the PR via `gh`, watches CI, and dispatches up to 2 gated
 debugger rounds if red. Halts and completion fire a desktop notification.
 
