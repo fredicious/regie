@@ -18,6 +18,7 @@ from regie.gitops import (
     commit_all,
     create_pr,
     git,
+    head_sha,
     push_branch,
     rebuild_history,
     run_commit_groups,
@@ -564,11 +565,20 @@ def _debug_review_binding(debugger_binding: Binding, cfg: RegieConfig) -> Bindin
     return reviewer
 
 
+def _discard_worktree_scratch(worktree: Path) -> None:
+    git(worktree, "checkout", "--", ".")
+    git(worktree, "clean", "-fd")
+
+
 def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path,
                     round_no: int, failure_detail: str) -> bool:
     """One gated debugger round: dispatch → test/lint/diff_gate → commit →
-    reviewer dispatch. Returns whether the round produced a pushed fix."""
+    reviewer dispatch. Returns whether the round produced a pushed fix; any
+    failure path rolls the worktree all the way back to how it stood at
+    round start -- no dirty scratch, and (once a fix has been committed) no
+    orphaned fix(ci) commit left behind by a rejecting reviewer."""
     task_id = f"DEBUG-{round_no}"
+    pre_round_sha = head_sha(worktree)
     profile = _debugger_profile(cfg)
     packet = (f"# CI failure — debugger round {round_no}\n\n"
              f"## Notes\n{failure_detail}\n")
@@ -577,14 +587,14 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
                        binding=profile.binding, budgets=profile.budgets)
     result = run_agent(rundir, task_id, "debug", 1, req)
     if result.outcome != "done":
+        _discard_worktree_scratch(worktree)
         return False
 
     gates = [run_command_gate("test", cfg.commands["test"], worktree, rerun_on_fail=True),
              run_command_gate("lint", cfg.commands["lint"], worktree),
              diff_gate(worktree, cfg.test_globs)]
     if not all(g.passed for g in gates):
-        git(worktree, "checkout", "--", ".")
-        git(worktree, "clean", "-fd")
+        _discard_worktree_scratch(worktree)
         return False
     commit_all(worktree, f"fix(ci): debugger round {round_no}")
 
@@ -593,10 +603,14 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
                               binding=_debug_review_binding(profile.binding, cfg),
                               budgets=reviewer.budgets, output_schema=FINDINGS_SCHEMA)
     review_result = run_agent(rundir, task_id, "review", 1, review_req)
-    if review_result.outcome != "done":
-        return False
     findings = [Finding(**f) for f in (review_result.structured or {}).get("findings", [])]
-    if any(f.severity in ("blocker", "major") for f in findings):
+    rejected = (review_result.outcome != "done"
+               or any(f.severity in ("blocker", "major") for f in findings))
+    if rejected:
+        # The fix(ci) commit above is already part of history at this
+        # point -- a rejecting reviewer must not leave it there forever.
+        git(worktree, "reset", "--hard", pre_round_sha)
+        git(worktree, "clean", "-fd")
         return False
 
     push_branch(worktree, run.branch)
@@ -645,8 +659,7 @@ def pr_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) ->
     # anything in the tree. Discard any incidental scratch (matching
     # finalize_stage's discard idiom) so rebuild_history's dirty-worktree
     # guard only ever trips on a genuine defect.
-    git(worktree, "checkout", "--", ".")
-    git(worktree, "clean", "-fd")
+    _discard_worktree_scratch(worktree)
 
     rebuild_history(worktree, run.base_sha,
                     list(zip(messages, [shas for _, shas in groups], strict=True)), run.id)

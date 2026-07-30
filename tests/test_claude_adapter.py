@@ -32,7 +32,9 @@ def test_build_command_writes_schema_file(tmp_path):
     path = cmd[cmd.index("--json-schema") + 1]
     with open(path) as f:
         assert json.loads(f.read()) == {"type": "object"}
-    assert path.startswith(str(tmp_path))
+    # Must live outside the agent's cwd: a schema file inside the worktree is
+    # untracked scratch a later `git add -A` could sweep into history.
+    assert not path.startswith(str(tmp_path))
 
 
 def test_parse_done_with_usage_and_noise(tmp_path):

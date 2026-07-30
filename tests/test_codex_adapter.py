@@ -4,10 +4,10 @@ from regie.agents.base import AgentRequest, get_adapter
 from regie.models import Binding, Budgets
 
 
-def _req(tmp_path):
+def _req(tmp_path, schema=None):
     return AgentRequest(prompt="build it", cwd=tmp_path,
                         binding=Binding(cli="codex", model="gpt-5.x"),
-                        budgets=Budgets())
+                        budgets=Budgets(), output_schema=schema)
 
 
 def _lines(*events) -> str:
@@ -20,6 +20,16 @@ def test_build_command_flags(tmp_path):
     assert cmd[cmd.index("-m") + 1] == "gpt-5.x"
     assert cmd[cmd.index("--sandbox") + 1] == "workspace-write"
     assert cmd[-1] == "build it"
+
+
+def test_build_command_writes_schema_file(tmp_path):
+    cmd = get_adapter("codex").build_command(_req(tmp_path, schema={"type": "object"}))
+    path = cmd[cmd.index("--output-schema") + 1]
+    with open(path) as f:
+        assert json.loads(f.read()) == {"type": "object"}
+    # Must live outside the agent's cwd: a schema file inside the worktree is
+    # untracked scratch a later `git add -A` could sweep into history.
+    assert not path.startswith(str(tmp_path))
 
 
 def test_parse_takes_last_agent_message():

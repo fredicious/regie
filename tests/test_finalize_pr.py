@@ -238,6 +238,40 @@ def test_pr_stage_red_persists_halts_after_max_rounds(regie_home, fixture_repo, 
     assert "CI red after 2 debugger rounds" in run.halt_reason
 
 
+def test_debugger_round_dispatch_failure_discards_scratch(regie_home, fixture_repo,
+                                                           remote_repo, tmp_path,
+                                                           fake_profiles, monkeypatch):
+    rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
+    cfg = load_config(fixture_repo, fake_profiles)
+    _agent_queue(monkeypatch, wt, [
+        {"result": {"outcome": "error"}, "writes": {"src/scratch.py": "x = 1\n"}}])
+
+    ok = pipeline._debugger_round(rd, run, cfg, wt, 1, "failure detail")
+
+    assert ok is False
+    assert git(wt, "status", "--porcelain").strip() == ""
+
+
+def test_debugger_round_review_rejection_rolls_back_fix_commit(regie_home, fixture_repo,
+                                                                remote_repo, tmp_path,
+                                                                fake_profiles, monkeypatch):
+    rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
+    cfg = load_config(fixture_repo, fake_profiles)
+    pre_round_sha = git(wt, "rev-parse", "HEAD").strip()
+    _agent_queue(monkeypatch, wt, [
+        {"result": {"outcome": "done"}, "writes": {"src/a.py": "A = 2\n"}},
+        {"result": {"outcome": "done", "structured": {"findings": [
+            {"severity": "blocker", "title": "bad fix", "detail": "still broken"}]}}}])
+
+    ok = pipeline._debugger_round(rd, run, cfg, wt, 1, "failure detail")
+
+    assert ok is False
+    assert git(wt, "rev-parse", "HEAD").strip() == pre_round_sha
+    subjects = git(wt, "log", "--format=%s", f"{run.base_sha}..HEAD")
+    assert "fix(ci): debugger round 1" not in subjects
+    assert git(wt, "status", "--porcelain").strip() == ""
+
+
 def test_pr_stage_no_groups_halts(regie_home, fixture_repo, remote_repo, tmp_path,
                                   fake_profiles):
     rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)

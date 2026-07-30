@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 
 from regie.agents.base import AgentRequest, AgentResult, register
 
@@ -16,9 +17,12 @@ class CodexAdapter:
         cmd = ["codex", "exec", "--json", "-m", req.binding.model,
                "--sandbox", "workspace-write", "--skip-git-repo-check"]
         if req.output_schema is not None:
-            schema_path = req.cwd / ".regie_schema.json"
-            schema_path.write_text(json.dumps(req.output_schema))
-            cmd += ["--output-schema", str(schema_path)]
+            # Outside req.cwd deliberately -- see claude.py's build_command
+            # for why a worktree-local schema file is a scratch-leak hazard.
+            fd, path = tempfile.mkstemp(suffix=".regie_schema.json")
+            with open(fd, "w") as f:
+                f.write(json.dumps(req.output_schema))
+            cmd += ["--output-schema", path]
         return cmd + [req.prompt]
 
     def parse(self, stdout: str, exit_code: int) -> AgentResult:

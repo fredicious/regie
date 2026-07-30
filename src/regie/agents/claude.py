@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 
 from regie.agents.base import AgentRequest, AgentResult, register
 
@@ -28,9 +29,14 @@ class ClaudeAdapter:
                "--max-turns", str(req.budgets.turns),
                "--model", req.binding.model, "--permission-mode", "acceptEdits"]
         if req.output_schema is not None:
-            schema_path = req.cwd / ".regie_schema.json"
-            schema_path.write_text(json.dumps(req.output_schema))
-            cmd += ["--json-schema", str(schema_path)]
+            # Outside req.cwd deliberately: a schema file living in the
+            # worktree is untracked scratch that a later `git add -A` /
+            # commit_all can sweep into history (e.g. a debugger round's
+            # reviewer dispatch leaving it for the next round's commit).
+            fd, path = tempfile.mkstemp(suffix=".regie_schema.json")
+            with open(fd, "w") as f:
+                f.write(json.dumps(req.output_schema))
+            cmd += ["--json-schema", path]
         return cmd
 
     def parse(self, stdout: str, exit_code: int) -> AgentResult:
