@@ -1,2 +1,2 @@
-binding: { cli: codex, model: gpt-5.x, auth: subscription }
-budgets: { turns: 40, wall_minutes: 30, stall_minutes: 5 }
+binding: { cli: claude, model: sonnet, auth: subscription }
+budgets: { turns: 40, wall_minutes: 25, stall_minutes: 5 }
