@@ -745,6 +745,18 @@ def pr_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) ->
         rebuild_history(worktree, run.base_sha,
                         list(zip(messages, [shas for _, shas in groups], strict=True)), run.id)
 
+        # The spec travels WITH the PR (user-confirmed must-have): reviewers
+        # see intent and implementation in one diff, and the target repo keeps
+        # the decision record after merge. Committed after the squash so the
+        # rewrite's tree-identity check stays a pure task-content invariant.
+        spec_text = _spec_text(rundir)
+        if spec_text:
+            spec_dir = worktree / "specs"
+            spec_dir.mkdir(exist_ok=True)
+            (spec_dir / f"{run.id}.md").write_text(spec_text)
+            commit_all(worktree,
+                       f"docs(spec): {run.id}\n\n{REGIE_TRAILER}")
+
         push_branch(worktree, run.branch)
         run.pr_url = create_pr(worktree, run.base_branch, title, body_file)
         run.pushed = True

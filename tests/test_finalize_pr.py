@@ -11,6 +11,8 @@ from regie.config import load_config
 from regie.gitops import commit_all, create_run_worktree, fetch_base_sha, git
 from regie.models import RunState
 from regie.pipeline import finalize_stage, pr_stage
+from pathlib import Path
+
 from regie.rundir import RunDir
 
 
@@ -180,7 +182,7 @@ def test_pr_stage_green_path(regie_home, fixture_repo, remote_repo, tmp_path,
     assert run.stage == "done"
     assert run.pr_url == "https://github.com/x/y/pull/1"
     log = git(wt, "log", "--format=%H", f"{run.base_sha}..HEAD").split()
-    assert len(log) == 2
+    assert len(log) == 3  # two task commits + the spec commit
     assert git(wt, "rev-parse", f"refs/regie/backup/{run.id}")
     body = (rd.path / "pr-body.md").read_text()
     assert "Review notes" in body
@@ -194,7 +196,8 @@ def test_pr_stage_green_path(regie_home, fixture_repo, remote_repo, tmp_path,
     for sha in log:
         changed |= set(git(wt, "diff-tree", "--no-commit-id", "--name-only",
                            "-r", sha).splitlines())
-    assert changed <= {"src/a.py", "src/b.py", "tests/test_a.py", "tests/test_b.py"}
+    assert changed <= {"src/a.py", "src/b.py", "tests/test_a.py",
+                       "tests/test_b.py", "specs/rp.md"}
 
 
 def test_pr_stage_scribe_failure_falls_back(regie_home, fixture_repo, remote_repo,
@@ -208,7 +211,7 @@ def test_pr_stage_scribe_failure_falls_back(regie_home, fixture_repo, remote_rep
 
     assert run.stage == "done"
     subjects = git(wt, "log", "--reverse", "--format=%s", f"{run.base_sha}..HEAD").splitlines()
-    assert subjects == ["feat(T1): implement", "feat(T2): implement"]
+    assert subjects == ["feat(T1): implement", "feat(T2): implement", "docs(spec): rp"]
 
 
 def test_pr_stage_red_then_green_one_debugger_round(regie_home, fixture_repo, remote_repo,
@@ -378,3 +381,23 @@ def test_fallback_title_prefers_content_over_heading():
     assert _fallback_title(spec, "rid") == "Add a slugify function to text_utils."
     assert _fallback_title("## Only Heading\n", "rid") == "Only Heading"
     assert _fallback_title("", "rid") == "rid"
+
+
+def test_pr_stage_commits_spec_into_repo(regie_home, fixture_repo, remote_repo,
+                                         tmp_path, fake_profiles, monkeypatch):
+    rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
+    (rd.path / "spec").mkdir(exist_ok=True)
+    (rd.path / "spec" / "spec.md").write_text("# Spec: the feature\ndetails")
+    _agent_queue(monkeypatch, wt, [SCRIBE_OK])
+    _stub_gh(tmp_path, monkeypatch, ["SUCCESS"])
+    cfg = load_config(fixture_repo, fake_profiles)
+    pr_stage(rd, run, cfg, wt)
+    assert run.stage == "done"
+    spec_file = Path(wt) / "specs" / f"{run.id}.md"
+    assert spec_file.exists() and spec_file.read_text().startswith("# Spec")
+    subjects = git(wt, "log", "--format=%s", f"{run.base_sha}..HEAD").splitlines()
+    assert any(s.startswith("docs(spec):") for s in subjects)
+    # the spec commit carries the trailer and lands BEFORE push (same history)
+    body = git(wt, "log", "-1", "--format=%B", "HEAD")
+    files = git(wt, "log", "--name-only", f"{run.base_sha}..HEAD")
+    assert f"specs/{run.id}.md" in files

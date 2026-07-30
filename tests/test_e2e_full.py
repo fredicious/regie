@@ -144,7 +144,11 @@ def _assert_full_pipeline(regie_home, run_id):
 
     wt = Path(state.worktree_path)
     log_shas = git(wt, "log", "--format=%H", f"{state.base_sha}..HEAD").split()
-    assert len(log_shas) == 2  # squashed one commit per task
+    assert len(log_shas) == 3  # one commit per task + the spec commit
+
+    subjects = git(wt, "log", "--format=%s", f"{state.base_sha}..HEAD").splitlines()
+    assert subjects[0] == f"docs(spec): {run_id}"
+    assert (wt / "specs" / f"{run_id}.md").exists()
 
     assert git(wt, "rev-parse", f"refs/regie/backup/{run_id}")
 
