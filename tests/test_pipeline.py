@@ -240,3 +240,91 @@ def test_reviewer_leftovers_discarded(regie_home, fixture_repo, cfg):
     run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
     assert run.tasks[tid].status == "done"
     assert not (fixture_repo / "src" / "review_scratch.py").exists()
+
+def test_ac11_third_build_attempt_escalates_to_profiles_second_binding(
+        regie_home, fixture_repo, cfg):
+    """Builder profile is bindings: [fake:m1, fake:m2] (fake_profiles fixture).
+    Two failed build attempts must retry on fake:m1; the third must escalate
+    to fake:m2, per AC11."""
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+    _script(fixture_repo, [RED_TEST])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)  # test -> build
+
+    for _ in range(2):
+        _script(fixture_repo, [FAIL_ATTEMPT])
+        run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    assert run.stage != "halted"
+    build_attempts = run.tasks[tid].attempts["build"]
+    assert [a.binding for a in build_attempts] == [Binding(cli="fake", model="m1")] * 2
+
+    _script(fixture_repo, [FAIL_ATTEMPT])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    assert run.tasks[tid].attempts["build"][-1].binding == Binding(cli="fake", model="m2")
+
+def _profile(name: str, tmp_path: Path, bindings: list[Binding]) -> Profile:
+    prompt = tmp_path / f"{name}.md"
+    prompt.write_text(f"You are {name}.")
+    return Profile(name=name, bindings=bindings, prompt_path=prompt, budgets=Budgets())
+
+
+class _Cfg:
+    def __init__(self, builder: Profile, reviewer: Profile):
+        self.profiles = {"builder": builder, "reviewer": reviewer}
+
+def test_ac15_flip_walks_builder_bindings_list(regie_home, fixture_repo, tmp_path):
+    """The build stage's last attempt ran on fake2:strong; the reviewer's
+    primary family is also fake2, so the review flips to the builder's
+    profile — including its two-rung ladder, not the reviewer's one-rung
+    list."""
+    builder = _profile("builder", tmp_path,
+                       [Binding(cli="fake", model="m1"), Binding(cli="fake2", model="strong")])
+    reviewer = _profile("reviewer", tmp_path, [Binding(cli="fake2", model="rev1")])
+    cfg = _Cfg(builder, reviewer)
+
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    task = run.tasks[tid]
+    task.stage = "review"
+    task.attempts["build"].append(
+        Attempt(binding=Binding(cli="fake2", model="strong"), outcome="done"))
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+
+    for _ in range(3):
+        _script(fixture_repo, [FAIL_ATTEMPT])
+        run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+
+    assert run.stage != "halted"
+    review_bindings = [a.binding for a in task.attempts["review"]]
+    assert review_bindings == [builder.primary, builder.primary,
+                              Binding(cli="fake2", model="strong")]
+
+def test_ac15_no_flip_walks_reviewers_own_bindings_list(regie_home, fixture_repo, tmp_path):
+    """The build stage's last attempt ran on fake:m1, a different family from
+    the reviewer's fake2 primary, so no flip occurs: the review stage walks
+    the reviewer's own two-rung list."""
+    builder = _profile("builder", tmp_path, [Binding(cli="fake", model="m1")])
+    reviewer = _profile("reviewer", tmp_path,
+                        [Binding(cli="fake2", model="rev1"), Binding(cli="fake2", model="rev2")])
+    cfg = _Cfg(builder, reviewer)
+
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    task = run.tasks[tid]
+    task.stage = "review"
+    task.attempts["build"].append(
+        Attempt(binding=Binding(cli="fake", model="m1"), outcome="done"))
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+
+    for _ in range(3):
+        _script(fixture_repo, [FAIL_ATTEMPT])
+        run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+
+    assert run.stage != "halted"
+    review_bindings = [a.binding for a in task.attempts["review"]]
+    assert review_bindings == [reviewer.primary, reviewer.primary,
+                              Binding(cli="fake2", model="rev2")]

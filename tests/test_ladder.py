@@ -1,33 +1,41 @@
 from regie.ladder import next_action
 from regie.models import Attempt, Binding
 
-ORDER = ["fake:m1", "fake:m2", "claude:strongest"]
-B1 = Binding(cli="fake", model="m1")
+B0 = Binding(cli="fake", model="m1")
+B1 = Binding(cli="fake", model="m2")
+B2 = Binding(cli="fake", model="m3")
+TWO_RUNGS = [B0, B1]
+THREE_RUNGS = [B0, B1, B2]
 
 
-def _fails(n: int) -> list[Attempt]:
-    return [Attempt(binding=B1, outcome="failed") for _ in range(n)]
+def _failed(n: int, binding: Binding = B0) -> list[Attempt]:
+    return [Attempt(binding=binding, outcome="failed") for _ in range(n)]
 
 
-def test_first_two_failures_retry_same_binding():
-    assert next_action(_fails(1), B1, ORDER) == ("retry", B1)
+def test_ac7_one_failed_attempt_retries_primary_binding():
+    assert next_action(_failed(1), TWO_RUNGS) == ("retry", B0)
 
 
-def test_third_attempt_escalates_to_next_stronger():
-    action, binding = next_action(_fails(2), B1, ORDER)
-    assert action == "escalate" and binding.model == "m2"
+def test_ac8_two_failed_attempts_escalate_to_second_binding():
+    assert next_action(_failed(2), TWO_RUNGS) == ("escalate", B1)
 
 
-def test_top_binding_skips_escalation_and_halts():
-    top = Binding(cli="claude", model="strongest")
-    attempts = [Attempt(binding=top, outcome="failed")] * 2
-    assert next_action(attempts, top, ORDER)[0] == "halt"
+def test_ac9_three_failed_attempts_escalate_to_third_binding():
+    assert next_action(_failed(3), THREE_RUNGS) == ("escalate", B2)
 
 
-def test_exhausted_halts():
-    assert next_action(_fails(3), B1, ORDER)[0] == "halt"
+def test_ac10_exhaustion_halts_on_two_element_list():
+    assert next_action(_failed(3), TWO_RUNGS)[0] == "halt"
 
 
-def test_quota_halts_immediately_without_burning_ladder():
-    attempts = [Attempt(binding=B1, outcome="quota")]
-    assert next_action(attempts, B1, ORDER)[0] == "halt"
+def test_ac10_exhaustion_halts_on_single_element_list():
+    assert next_action(_failed(2), [B0])[0] == "halt"
+
+
+def test_binding_recorded_on_attempt_absent_from_list_does_not_halt():
+    """D1: index comes from the attempt COUNT, never from looking the
+    recorded binding up in the list — a stale/foreign binding on a past
+    attempt (e.g. list reconfigured mid-run) must not raise or halt."""
+    stale = Binding(cli="fake", model="retired")
+    action, binding = next_action([Attempt(binding=stale, outcome="failed")], TWO_RUNGS)
+    assert (action, binding) == ("retry", B0)
