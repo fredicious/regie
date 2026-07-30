@@ -24,7 +24,14 @@ def _last_json_object(stdout: str) -> dict | None:
 
 class ClaudeAdapter:
     def build_command(self, req: AgentRequest) -> list[str]:
-        cmd = ["claude", "-p", req.prompt, "--output-format", "json",
+        # stream-json (with --verbose) emits an event line per step, giving
+        # the dispatch stall-detector a genuine liveness signal — plain json
+        # buffers ALL output until completion, so any attempt longer than the
+        # stall budget was killed mid-work (dogfood finding: deaths at exactly
+        # stall_minutes). The final stream line is the same result object the
+        # parser already reads via _last_json_object.
+        cmd = ["claude", "-p", req.prompt, "--output-format", "stream-json",
+               "--verbose",
                "--max-turns", str(req.budgets.turns),
                "--model", req.binding.model, "--permission-mode", "acceptEdits"]
         if req.output_schema is not None:

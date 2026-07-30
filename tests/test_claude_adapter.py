@@ -21,7 +21,8 @@ def _doc(**over):
 def test_build_command_flags(tmp_path):
     cmd = get_adapter("claude").build_command(_req(tmp_path))
     assert cmd[:3] == ["claude", "-p", "do the task"]
-    for flag, val in (("--output-format", "json"), ("--max-turns", "7"),
+    assert "--verbose" in cmd  # required by stream-json in -p mode
+    for flag, val in (("--output-format", "stream-json"), ("--max-turns", "7"),
                       ("--model", "opus"), ("--permission-mode", "acceptEdits")):
         assert val == cmd[cmd.index(flag) + 1]
     assert "--json-schema" not in cmd and "--bare" not in cmd

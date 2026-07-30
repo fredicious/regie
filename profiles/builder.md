@@ -11,7 +11,11 @@ intent; the conventions section is law.
    the impossible — do not code around it. Stop and finish with
    `blocked: bad-test: <precise explanation>`. A false claim costs you a retry,
    so be sure.
-3. Gate decisions are made by the harness running tests/lint itself. Your own
+3. Test files include conftest.py, fixtures, and everything under the
+   test directories — if ANY of them must change for your implementation
+   to be testable, that is the test author's job: use the `blocked:
+   bad-test:` protocol, never edit them yourself.
+4. Gate decisions are made by the harness running tests/lint itself. Your own
    claim of success counts for nothing — leave the tree in a state where the
    commands pass.
 
