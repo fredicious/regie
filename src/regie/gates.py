@@ -106,17 +106,16 @@ def red_test_gate(cwd: Path, test_cmd: str) -> GateResult:
     if collect_code != 0:
         return GateResult(name="tdd-red", passed=False,
                           detail=f"collection-error: {collect_out[-1000:]}")
-    code, output = _run(test_cmd, cwd)
+    code, _output = _run(test_cmd, cwd)
     if code == 0:
         return GateResult(name="tdd-red", passed=False, detail="unexpectedly-green")
-    # Honest red = the run FAILED at the test level. Collection problems
-    # (import/syntax errors in test files) were already rejected above; a
-    # runtime error inside not-yet-written code (KeyError, ConfigError,
-    # pytest.raises mismatch, ...) is a legitimate red — the first dogfood
-    # run proved the old AssertionError/NotImplementedError whitelist far
-    # too narrow for real features. Collection-stage ERRORs (broken
-    # fixtures) still fail the gate: they are "errors", not "failed".
-    if re.search(r"\b\d+ failed", output) and not re.search(r"\b\d+ errors?\b", output):
-        return GateResult(name="tdd-red", passed=True, detail="failing-tests")
-    return GateResult(name="tdd-red", passed=False,
-                      detail=f"failed for unrecognized reason: {output[-1000:]}")
+    # Honest red = test files collect and the suite does not pass. That is
+    # the gate's whole contract (third dogfood iteration): the earlier
+    # AssertionError whitelist rejected domain-exception reds, and the
+    # failed-vs-ERROR distinction rejected legitimate breaking-change reds
+    # where old fixtures raise at setup against the not-yet-written API.
+    # Genuinely broken test code is still caught: syntax/import junk fails
+    # the collection check above, and the build stage demands a fully green
+    # suite the builder can only reach via honest code (or the bad-test
+    # escape back to the test author).
+    return GateResult(name="tdd-red", passed=True, detail="red-suite")

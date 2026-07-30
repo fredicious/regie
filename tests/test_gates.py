@@ -33,7 +33,7 @@ def test_red_gate_accepts_assertion_failure(fixture_repo):
         "def test_new():\n    assert 1 == 2\n")
     commit_all(fixture_repo, "add red test")
     result = red_test_gate(fixture_repo, "python -m pytest tests/test_new.py -q")
-    assert result.passed and "failing-tests" in result.detail
+    assert result.passed and "red-suite" in result.detail
 
 
 def test_red_gate_rejects_import_error(fixture_repo):
@@ -102,4 +102,16 @@ def test_red_gate_accepts_domain_exception_red(fixture_repo):
         "def test_new():\n    raise KeyError('bindings')\n")
     commit_all(fixture_repo, "add domain-exception red test")
     result = red_test_gate(fixture_repo, "python -m pytest tests/test_new.py -q")
-    assert result.passed and "failing-tests" in result.detail
+    assert result.passed and "red-suite" in result.detail
+
+
+def test_red_gate_accepts_fixture_error_red(fixture_repo):
+    """Breaking-change red: a fixture raising at setup against a
+    not-yet-written API reports as pytest ERROR — still an honest red."""
+    (fixture_repo / "tests" / "test_new.py").write_text(
+        "import pytest\n\n@pytest.fixture\ndef fx():\n"
+        "    raise KeyError('bindings')\n\n"
+        "def test_new(fx):\n    assert fx\n")
+    commit_all(fixture_repo, "add fixture-error red test")
+    result = red_test_gate(fixture_repo, "python -m pytest tests/test_new.py -q")
+    assert result.passed and "red-suite" in result.detail
