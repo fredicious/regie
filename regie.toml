@@ -1,5 +1,4 @@
 test_globs = ["tests/**"]
-binding_strength = ["claude:sonnet", "claude:opus"]
 
 [commands]
 test = "uv run pytest -q"

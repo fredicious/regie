@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from regie.config import load_config
-from regie.models import RunState
+from regie.config import Profile, load_config
+from regie.models import Binding, Budgets, RunState
 from regie.pipeline import plan_stage, reconcile
 from regie.rundir import RunDir
 
@@ -91,6 +91,56 @@ def test_plan_stage_rejects_duplicate_task_ids(regie_home, fixture_repo, cfg):
     assert run.stage == "halted"
     note = (rd.path / "tasks" / "PLAN" / "note-plan.md").read_text()
     assert "duplicate" in note.lower()
+
+
+def _queue(fixture_repo, entries):
+    qdir = fixture_repo / ".fake_agent_queue"
+    qdir.mkdir(exist_ok=True)
+    for i, entry in enumerate(entries):
+        (qdir / f"{i}.json").write_text(json.dumps(entry))
+
+
+def test_ac14_planner_quota_advances_to_second_binding(regie_home, fixture_repo, cfg):
+    """Planner profile is bindings: [fake:m1, fake:m2] (fake_profiles fixture).
+    A quota outcome on the first plan attempt (fake:m1) must dispatch the next
+    plan attempt directly on fake:m2, and that attempt still succeeds."""
+    rd, run = _seed(regie_home, fixture_repo, PLAN)
+    (fixture_repo / ".fake_agent.json").unlink()
+    _queue(fixture_repo, [
+        {"result": {"outcome": "quota"}},
+        {"result": {"outcome": "done", "structured": PLAN}},
+    ])
+    plan_stage(rd, run, cfg, fixture_repo)
+
+    assert [(a.binding, a.outcome) for a in run.planner_attempts] == [
+        (Binding(cli="fake", model="m1"), "quota"),
+        (Binding(cli="fake", model="m2"), "done"),
+    ]
+    assert run.stage == "approve"
+
+
+def test_ac14_planner_quota_halts_naming_exhausted_binding(regie_home, fixture_repo, tmp_path):
+    """A one-element planner bindings list means a quota outcome has nowhere
+    to advance to: the run must halt naming the exhausted binding, and never
+    dispatch again."""
+    prompt = tmp_path / "planner.md"
+    prompt.write_text("You are planner.")
+    planner = Profile(name="planner", bindings=[Binding(cli="fake", model="m1")],
+                      prompt_path=prompt, budgets=Budgets())
+
+    class _OneBindingCfg:
+        def __init__(self):
+            self.profiles = {"planner": planner}
+
+    rd, run = _seed(regie_home, fixture_repo, PLAN)
+    (fixture_repo / ".fake_agent.json").write_text(json.dumps(
+        {"result": {"outcome": "quota"}}))
+    plan_stage(rd, run, _OneBindingCfg(), fixture_repo)
+
+    assert run.stage == "halted"
+    assert "quota" in run.halt_reason
+    assert "fake:m1" in run.halt_reason
+    assert len(run.planner_attempts) == 1
 
 
 def test_reconcile_marks_orphaned_plan_intent_failed(regie_home, fixture_repo):

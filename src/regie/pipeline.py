@@ -139,6 +139,12 @@ def _halt(rundir: RunDir, run: RunState, task_id: str, reason: str) -> None:
     rundir.write_state(run)
 
 
+def _ladder_halt_reason(stage: str, last: Attempt, task_id: str) -> str:
+    if last.outcome == "quota":
+        return f"quota exhausted on {last.binding.cli}:{last.binding.model} during {stage}"
+    return f"{stage} ladder exhausted on {task_id}"
+
+
 def _should_halt(rundir: RunDir, run: RunState, task_id: str, stage: str,
                  cfg: RegieConfig) -> bool:
     attempts = run.tasks[task_id].attempts[stage]
@@ -149,7 +155,7 @@ def _should_halt(rundir: RunDir, run: RunState, task_id: str, stage: str,
                                   "review": "reviewer"}[stage]])
     action, _ = next_action(attempts, ladder_profile.bindings)
     if action == "halt":
-        _halt(rundir, run, task_id, f"{stage} ladder exhausted on {task_id}")
+        _halt(rundir, run, task_id, _ladder_halt_reason(stage, attempts[-1], task_id))
         return True
     return False
 
@@ -196,8 +202,10 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
         dispatched += 1
 
         if attempt.outcome == "quota":
-            _halt(rundir, run, task_id, f"quota exhausted during {stage}")
-            return
+            rundir.write_state(run)
+            if _should_halt(rundir, run, task_id, stage, cfg):
+                return
+            continue
         if attempt.outcome == "blocked":
             # A blocked agent may have made partial edits before deciding to
             # stop; nothing ungated may survive into a later stage's commit
@@ -374,7 +382,7 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
         if attempts:
             action, _ = next_action(attempts, profile.bindings)
             if action == "halt":
-                _halt_run(rundir, run, "planner ladder exhausted")
+                _halt_run(rundir, run, _ladder_halt_reason("plan", attempts[-1], _PLAN_TASK_ID))
                 return
 
         extra = _notes_for(rundir, _PLAN_TASK_ID, "plan")
@@ -397,8 +405,7 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
         rundir.write_state(run)
 
         if attempt.outcome == "quota":
-            _halt_run(rundir, run, "quota exhausted during plan")
-            return
+            continue
         if attempt.outcome == "blocked":
             _halt_run(rundir, run, f"blocked: {attempt.blocked_question or ''}")
             return
