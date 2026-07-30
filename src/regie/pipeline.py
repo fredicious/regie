@@ -211,6 +211,12 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             _halt(rundir, run, task_id, f"blocked: {question}")
             return
         if attempt.outcome == "failed":
+            # Dispatch-level death (budget kill, CLI error, unparseable
+            # output): without a note the retry repeats the mistake blind.
+            if result.text:
+                _write_note(rundir, task_id, stage,
+                            "Previous attempt died before gates:\n"
+                            + result.text[:1500])
             rundir.write_state(run)
             continue
 

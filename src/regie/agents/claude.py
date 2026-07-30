@@ -54,13 +54,24 @@ class ClaudeAdapter:
             structured = None
         reason = str(doc.get("terminal_reason", ""))
         if (doc.get("api_error_status") in _QUOTA_STATUS
-                or re.search(r"quota|limit", reason, re.IGNORECASE)
+                or re.search(r"quota|usage.?limit|rate.?limit", reason, re.IGNORECASE)
                 or (doc.get("is_error") and _QUOTA_TEXT.search(text))):
             return AgentResult(outcome="quota", text=text[-2000:])
         for line in text.splitlines():
             if line.strip().lower().startswith("blocked:"):
                 return AgentResult(outcome="blocked", text=text,
                                    blocked_question=line.split(":", 1)[1].strip())
+        if (doc.get("subtype") == "error_max_turns"
+                or str(doc.get("terminal_reason")) == "max_turns"):
+            # Name the death precisely: a budget exhaustion retried blind is a
+            # ladder burned for nothing (dogfood finding). The text lands in
+            # the retry packet's Notes via the pipeline's dispatch-death note.
+            return AgentResult(
+                outcome="error",
+                text=("turn budget exhausted (--max-turns reached) — the next "
+                      "attempt must be more economical: plan edits before "
+                      "reading broadly, batch related file changes, avoid "
+                      "re-reading unchanged files. " + text[-1200:]))
         if doc.get("is_error") or exit_code != 0:
             return AgentResult(outcome="error", text=text[-2000:] or stdout[-2000:])
         if structured is None:

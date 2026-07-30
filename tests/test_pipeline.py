@@ -198,3 +198,15 @@ def test_build_attempt_with_no_changes_fails_changes_gate(
     # on legitimate stage re-entries where work is already committed.
     assert attempt.outcome == "failed"
     assert any(g.name == "test" and not g.passed for g in attempt.gate_results)
+
+
+def test_dispatch_death_writes_retry_note(regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+    _script(fixture_repo, [{"result": {"outcome": "error",
+                                       "text": "turn budget exhausted (--max-turns reached)"}}])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    note = (rd.path / "tasks" / tid / "note-test.md").read_text()
+    assert "died before gates" in note and "turn budget" in note

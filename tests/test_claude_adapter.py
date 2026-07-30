@@ -88,3 +88,15 @@ def test_parse_quota_from_error_text():
     r = get_adapter("claude").parse(
         _doc(is_error=True, result="You have hit your usage limit"), 0)
     assert r.outcome == "quota"
+
+
+def test_parse_max_turns_death_names_budget():
+    """A max-turns death must tell the retry exactly what happened, not look
+    like a generic error (dogfood finding: two silent budget deaths burned a
+    ladder with no explanation in the retry packet)."""
+    doc = _doc(is_error=True, subtype="error_max_turns",
+               terminal_reason="max_turns",
+               errors=["Reached maximum number of turns (40)"])
+    r = get_adapter("claude").parse(doc, 0)
+    assert r.outcome == "error"
+    assert "turn budget" in r.text.lower()
