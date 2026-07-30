@@ -42,3 +42,14 @@ def fixture_repo(tmp_path) -> Path:
     ):
         subprocess.run(cmd, cwd=repo, check=True)
     return repo
+
+
+@pytest.fixture
+def remote_repo(fixture_repo, tmp_path):
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "clone", "--bare", "-q", str(fixture_repo), str(bare)], check=True)
+    subprocess.run(["git", "-C", str(fixture_repo), "remote", "add", "origin", str(bare)], check=True)
+    # fixture_repo's default branch must be named main for fetch_base_sha tests
+    subprocess.run(["git", "-C", str(fixture_repo), "branch", "-M", "main"], check=True)
+    subprocess.run(["git", "-C", str(fixture_repo), "push", "-q", "-u", "origin", "main"], check=True)
+    return bare

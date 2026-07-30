@@ -37,3 +37,4 @@ class FakeAdapter:
 
 
 register("fake", FakeAdapter())
+register("fake2", FakeAdapter())

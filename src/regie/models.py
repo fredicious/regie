@@ -55,6 +55,7 @@ class TaskSpec(BaseModel):
     file_scope: list[str] = Field(default_factory=list)
     checklist: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
+    planned_tests: list[str] = Field(default_factory=list)
 
 
 TaskStage = Literal["test", "build", "review"]
@@ -80,9 +81,15 @@ class RunState(BaseModel):
     target_repo: str
     branch: str
     base_sha: str = ""
+    worktree_path: str = ""
+    base_branch: str = "main"
+    pr_url: str = ""
+    pushed: bool = False
+    autonomous: bool = False
     stage: RunStage = "intake"
     tasks: dict[str, TaskState] = Field(default_factory=dict)
     halt_reason: str | None = None
+    planner_attempts: list[Attempt] = Field(default_factory=list)
 
     def ordered_task_ids(self) -> list[str]:
         graph = {tid: sorted(t.spec.depends_on) for tid, t in sorted(self.tasks.items())}

@@ -17,8 +17,9 @@ inspectable, resumable, auditable.
 
 ## Status
 
-Plan A (core engine) merged: state machine, gates, ladder, CLI — 52 tests. Real
-Claude/Codex adapters land in Plan B. See:
+Plan B complete: full pipeline brief→PR (planner, approve checkpoint, TDD task
+loop, finalize, squashed PR with CI watch) — fake-verified, 109 tests. Real-adapter
+supervised smoke test pending (see USAGE). See:
 
 - `docs/superpowers/specs/2026-07-29-agent-harness-v1-design.md` — v1 design
 - `docs/USAGE.md` — install (via `uv tool install`) and usage
@@ -27,7 +28,9 @@ Claude/Codex adapters land in Plan B. See:
 ## CLI
 
 ```
-regie run brief.md      # start a run: brief → spec → tasks → build → PR
-regie watch <run>       # live terminal dashboard of the state machine
-regie resume <run>      # resume after crash, halt, or quota limit
+regie run brief.md --repo <path>   # start a run: brief → spec → tasks → build → PR
+regie approve <run>                 # release a run parked at the spec checkpoint
+regie resume <run> --repo <path>    # resume after crash, halt, quota limit, or approval
+regie status <run>                  # pretty-print state.json
+regie clean <run> --repo <path>     # remove a finished run's worktree and branch
 ```
