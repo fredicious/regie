@@ -472,6 +472,15 @@ def reconcile(rundir: RunDir, run: RunState, repo: Path) -> int:
     intents = Counter()
     bindings: dict[tuple[str, str], dict] = {}
     for rec in rundir.read_intents():
+        # A reset marker zeroes a task's WAL history: written whenever
+        # attempts are intentionally cleared (halted-reset, operator surgery).
+        # Without it, historic intents resurrect as phantom "orphans" on every
+        # later resume and instantly re-exhaust the fresh ladder (dogfood
+        # finding: 34 synthetic attempts fabricated after a state reset).
+        if rec.get("reset"):
+            for key in [k for k in intents if k[0] == rec["task"]]:
+                del intents[key]
+            continue
         key = (rec["task"], rec["stage"])
         intents[key] += 1
         bindings[key] = rec.get("binding", {"cli": "fake", "model": "?"})

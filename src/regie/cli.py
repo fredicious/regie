@@ -233,7 +233,7 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
             state.stage = "pr"
         elif state.tasks:
             state.stage = "tasks"
-            for t in state.tasks.values():
+            for _tid, t in state.tasks.items():
                 if t.status in ("failed", "blocked", "running"):
                     t.status = "pending"
                     # A human-mediated resume deserves a fresh ladder: recorded
@@ -241,6 +241,7 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
                     # The audit trail survives in events.jsonl and task_dir
                     # transcripts, so nothing is lost by clearing them here.
                     t.attempts = {"test": [], "build": [], "review": []}
+                    rundir.append_intent({"task": _tid, "reset": True})
                     # ...and a fresh bad-test escape: a spent escape from a
                     # previous cycle otherwise dooms refactor tasks whose
                     # builder must route existing-test adaptations to the

@@ -248,3 +248,22 @@ def test_resume_after_halt_resets_escape_hatch(regie_home, fixture_repo, fake_pr
                         "--profiles", str(fake_profiles)])
     state = rd.read_state()
     assert state.tasks["T1"].escaped is False
+
+
+def test_reconcile_respects_reset_marker(regie_home, fixture_repo):
+    rd = RunDir.create(regie_home, "rmark")
+    run = RunState(id="rmark", target_repo=str(fixture_repo), branch="regie/rmark")
+    run.tasks["T1"] = TaskState(
+        spec=TaskSpec(id="T1", title="t", profile="builder", criteria=["c"]))
+    rd.write_state(run)
+    for n in range(3):
+        rd.append_intent({"task": "T1", "stage": "build", "attempt": n + 1,
+                          "binding": {"cli": "fake", "model": "m1"}})
+    rd.append_intent({"task": "T1", "reset": True})
+    rd.append_intent({"task": "T1", "stage": "build", "attempt": 1,
+                      "binding": {"cli": "fake", "model": "m1"}})
+    count = reconcile(rd, run, fixture_repo)
+    # only the single post-marker intent is an orphan; the three pre-marker
+    # intents are dead history
+    assert count == 1
+    assert len(run.tasks["T1"].attempts["build"]) == 1
