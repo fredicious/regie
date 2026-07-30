@@ -1,11 +1,11 @@
 from regie.config import Profile
 from regie.models import Attempt, Binding, Budgets, RunState, TaskSpec, TaskState
-from regie.pipeline import _review_binding
+from regie.pipeline import _debugger_profile, _review_binding
 
 
 def _cfg_profiles(tmp_path, reviewer_cli, builder_cli):
     (tmp_path / "p.md").write_text("x")
-    mk = lambda name, cli: Profile(name=name, binding=Binding(cli=cli, model="m"),
+    mk = lambda name, cli: Profile(name=name, bindings=[Binding(cli=cli, model="m")],
                                    prompt_path=tmp_path / "p.md", budgets=Budgets())
 
     class Cfg:
@@ -41,3 +41,24 @@ def test_no_build_attempts_uses_reviewer_default(tmp_path):
     run = _run_with_build_attempt("codex")
     run.tasks["T1"].attempts["build"].clear()
     assert _review_binding(run, "T1", cfg).cli == "claude"
+
+
+def test_debugger_fallback_profile_inherits_builder_full_binding_list(tmp_path):
+    """A target repo with no debugger profile of its own borrows the builder's.
+    It must inherit the builder's WHOLE list, not just its primary: a fallback
+    that kept only `builder.primary` would silently give the debugger a
+    one-entry ladder while the repo's own debugger profile got two."""
+    (tmp_path / "p.md").write_text("x")
+    builder = Profile(name="builder",
+                      bindings=[Binding(cli="fake", model="m1"),
+                                Binding(cli="fake", model="m2")],
+                      prompt_path=tmp_path / "p.md", budgets=Budgets())
+
+    class Cfg:
+        def __init__(self):
+            self.profiles = {"builder": builder}   # deliberately no "debugger"
+
+    profile = _debugger_profile(Cfg())
+
+    assert profile.bindings == [Binding(cli="fake", model="m1"),
+                                Binding(cli="fake", model="m2")]

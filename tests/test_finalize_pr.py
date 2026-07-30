@@ -17,7 +17,7 @@ from regie.rundir import RunDir
 
 def _wt_run(regie_home, fixture_repo, remote_repo, tmp_path, commands_extra=""):
     (fixture_repo / "regie.toml").write_text(
-        'test_globs = ["tests/**"]\nbinding_strength = ["fake:m1"]\n'
+        'test_globs = ["tests/**"]\n'
         'eval_trigger_globs = ["src/**"]\n'
         f'[commands]\ntest = "true"\nlint = "true"\n{commands_extra}')
     base = fetch_base_sha(fixture_repo, "main")
@@ -78,7 +78,7 @@ def _mk_task_commits(wt):
 
 def _pr_wt_run(regie_home, fixture_repo, tmp_path):
     (fixture_repo / "regie.toml").write_text(
-        'test_globs = ["tests/**"]\nbinding_strength = ["fake:m1"]\n'
+        'test_globs = ["tests/**"]\n'
         '[commands]\ntest = "true"\nlint = "true"\n')
     base = fetch_base_sha(fixture_repo, "main")
     wt = create_run_worktree(fixture_repo, "regie/rp", base, tmp_path / "wtp")

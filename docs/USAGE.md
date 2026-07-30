@@ -28,7 +28,6 @@ Create `regie.toml` at the target repo's root:
 ```toml
 test_globs = ["tests/**", "apps/*/tests/**", "**/*.test.*"]
 eval_trigger_globs = ["apps/api/**"]                       # optional
-binding_strength = ["codex:gpt-5.x", "claude:strongest"]   # weakest → strongest
 base_branch = "main"                                       # optional, default main
 
 [commands]
@@ -44,9 +43,22 @@ command generates and the repo doesn't ignore will be committed — the first
 smoke test shipped `.pyc` files into its PR this way.
 
 Agent profiles (role prompts + model bindings + budgets) live in this repo's
-`profiles/`: planner, test-writer, builder, reviewer, debugger. The `.md` files
-are the practice documents — edit them to bake in your coding values; every
-attempt records the prompt hash so changes are measurable against outcomes.
+`profiles/`: planner, test-writer, builder, reviewer, debugger. Each profile's
+`.yaml` carries an ordered `bindings:` list (retry escalation and quota
+failover walk it in order, weakest/cheapest first) — a one-element list is
+fine for a profile that never escalates:
+
+```yaml
+bindings:
+  - { cli: claude, model: sonnet, auth: subscription }
+  - { cli: claude, model: opus, auth: subscription }
+budgets: { turns: 40, wall_minutes: 25, stall_minutes: 5 }
+```
+
+The legacy singular `binding:` key is still read when `bindings:` is absent,
+expanding to a one-entry list. The `.md` files are the practice documents —
+edit them to bake in your coding values; every attempt records the prompt hash
+so changes are measurable against outcomes.
 
 ## Running
 

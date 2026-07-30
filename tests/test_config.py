@@ -1,12 +1,21 @@
+import warnings
 from pathlib import Path
 
 import pytest
 
-from regie.config import ConfigError, load_config
+from regie.config import ConfigError, Profile, load_config
+from regie.models import Binding
 
 PROFILES = Path(__file__).parent.parent / "profiles"
 
 GOOD_TOML = """
+test_globs = ["tests/**"]
+[commands]
+test = "pytest -q"
+lint = "ruff check ."
+"""
+
+GOOD_TOML_WITH_BINDING_STRENGTH = """
 test_globs = ["tests/**"]
 binding_strength = ["fake:m1", "codex:gpt-5.x", "claude:strongest"]
 [commands]
@@ -20,13 +29,22 @@ def _repo_with(tmp_path, toml_text):
     return tmp_path
 
 
+def _profiles_dir_with(tmp_path, yaml_body, dirname="profiles"):
+    """A profiles/ directory holding a single profile 'solo' with the given yaml body."""
+    d = tmp_path / dirname
+    d.mkdir()
+    (d / "solo.yaml").write_text(yaml_body)
+    (d / "solo.md").write_text("You are solo.")
+    return d
+
+
 def test_loads_commands_globs_and_profiles(tmp_path):
     cfg = load_config(_repo_with(tmp_path, GOOD_TOML), PROFILES)
     assert cfg.commands["test"] == "pytest -q"
     assert set(cfg.profiles) == {"planner", "test-writer", "builder", "reviewer", "debugger"}
     # Builder binds claude while the codex CLI is not installed on this
     # machine; the assertion checks the yaml loads, not a fixed vendor.
-    assert cfg.profiles["builder"].binding.cli in ("claude", "codex")
+    assert cfg.profiles["builder"].primary.cli in ("claude", "codex")
     assert len(cfg.profiles["builder"].prompt_hash()) == 64
 
 
@@ -34,9 +52,121 @@ def test_missing_keys_reported_together(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_config(_repo_with(tmp_path, "[commands]\nlint='x'"), PROFILES)
     msg = str(exc.value)
-    assert "commands.test" in msg and "test_globs" in msg and "binding_strength" in msg
+    assert "commands.test" in msg and "test_globs" in msg
 
 
 def test_missing_regie_toml_raises(tmp_path):
     with pytest.raises(ConfigError):
         load_config(tmp_path, PROFILES)
+
+
+def test_bindings_list_loads_in_order(tmp_path):
+    profiles = _profiles_dir_with(
+        tmp_path,
+        "bindings:\n"
+        "  - { cli: claude, model: sonnet }\n"
+        "  - { cli: claude, model: opus }\n"
+        "budgets: { turns: 5 }\n",
+    )
+    cfg = load_config(_repo_with(tmp_path, GOOD_TOML), profiles)
+    bindings = cfg.profiles["solo"].bindings
+    assert bindings == [Binding(cli="claude", model="sonnet"), Binding(cli="claude", model="opus")]
+    assert cfg.profiles["solo"].primary == Binding(cli="claude", model="sonnet")
+
+
+def test_singular_binding_key_backward_compat(tmp_path):
+    profiles = _profiles_dir_with(
+        tmp_path,
+        "binding: { cli: claude, model: sonnet }\n"
+        "budgets: { turns: 5 }\n",
+    )
+    cfg = load_config(_repo_with(tmp_path, GOOD_TOML), profiles)
+    assert cfg.profiles["solo"].bindings == [Binding(cli="claude", model="sonnet")]
+
+
+def test_empty_bindings_list_is_config_error(tmp_path):
+    profiles = _profiles_dir_with(
+        tmp_path,
+        "bindings: []\n"
+        "budgets: { turns: 5 }\n",
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_config(_repo_with(tmp_path, GOOD_TOML), profiles)
+    msg = str(exc.value)
+    assert "solo" in msg
+    assert "bindings" in msg and "empty" in msg
+
+
+def test_missing_binding_keys_is_config_error(tmp_path):
+    profiles = _profiles_dir_with(
+        tmp_path,
+        "budgets: { turns: 5 }\n",
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_config(_repo_with(tmp_path, GOOD_TOML), profiles)
+    assert "solo" in str(exc.value)
+
+
+def test_no_binding_strength_key_succeeds_and_leaves_no_attribute(tmp_path):
+    profiles = _profiles_dir_with(
+        tmp_path,
+        "binding: { cli: claude, model: sonnet }\n"
+        "budgets: { turns: 5 }\n",
+    )
+    cfg = load_config(_repo_with(tmp_path, GOOD_TOML), profiles)
+    assert not hasattr(cfg, "binding_strength")
+
+
+def test_stale_binding_strength_key_is_ignored(tmp_path):
+    profiles = _profiles_dir_with(
+        tmp_path,
+        "binding: { cli: claude, model: sonnet }\n"
+        "budgets: { turns: 5 }\n",
+    )
+    repo = _repo_with(tmp_path, GOOD_TOML_WITH_BINDING_STRENGTH)
+    # AC5: the stale key must be genuinely silent — not an error, and not a
+    # warning either, since existing target repos still carry it and callers
+    # may run under -W error.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        cfg = load_config(repo, profiles)
+    assert not hasattr(cfg, "binding_strength")
+    # and the rest of the config still came through
+    assert cfg.test_globs == ["tests/**"]
+    assert cfg.profiles["solo"].bindings == [Binding(cli="claude", model="sonnet")]
+
+
+def test_shipped_profiles_are_migrated(tmp_path):
+    cfg = load_config(_repo_with(tmp_path, GOOD_TOML), PROFILES)
+    two_bindings = [Binding(cli="claude", model="sonnet"), Binding(cli="claude", model="opus")]
+    for name in ("builder", "test-writer", "debugger"):
+        assert cfg.profiles[name].bindings == two_bindings
+    one_binding = [Binding(cli="claude", model="opus")]
+    for name in ("planner", "reviewer"):
+        assert cfg.profiles[name].bindings == one_binding
+
+
+def test_profile_binding_field_is_removed_not_aliased(tmp_path):
+    profiles = _profiles_dir_with(
+        tmp_path,
+        "binding: { cli: claude, model: sonnet }\n"
+        "budgets: { turns: 5 }\n",
+    )
+    cfg = load_config(_repo_with(tmp_path, GOOD_TOML), profiles)
+    assert "binding" not in Profile.model_fields
+    with pytest.raises(AttributeError):
+        _ = cfg.profiles["solo"].binding
+
+
+def test_bindings_list_wins_over_singular_binding_key(tmp_path):
+    # A yaml carrying both keys is deliberately resolved by preferring the
+    # plural `bindings:` list; `binding:` is legacy-only fallback (AC2).
+    profiles = _profiles_dir_with(
+        tmp_path,
+        "binding: { cli: claude, model: opus }\n"
+        "bindings:\n"
+        "  - { cli: claude, model: sonnet }\n"
+        "budgets: { turns: 5 }\n",
+    )
+    cfg = load_config(_repo_with(tmp_path, GOOD_TOML), profiles)
+    assert cfg.profiles["solo"].bindings == [Binding(cli="claude", model="sonnet")]

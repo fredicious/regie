@@ -15,7 +15,6 @@ PROFILES_FAKE = None  # built by fixture below
 def cfg(fixture_repo, fake_profiles):
     (fixture_repo / "regie.toml").write_text("""
 test_globs = ["tests/**"]
-binding_strength = ["fake:m1", "fake:m2"]
 [commands]
 test = "python -m pytest tests -q"
 lint = "true"

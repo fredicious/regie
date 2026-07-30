@@ -1,2 +1,4 @@
-binding: { cli: claude, model: sonnet, auth: subscription }
-budgets: { turns: 120, wall_minutes: 45, stall_minutes: 8 }
+bindings:
+  - { cli: claude, model: sonnet, auth: subscription }
+  - { cli: claude, model: opus, auth: subscription }
+budgets: { turns: 40, wall_minutes: 25, stall_minutes: 5 }
