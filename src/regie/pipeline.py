@@ -43,9 +43,26 @@ if TYPE_CHECKING:
 FINDINGS_SCHEMA = {"type": "object", "properties": {"findings": {"type": "array"}},
                    "required": ["findings"]}
 
-PLAN_SCHEMA = {"type": "object", "required": ["spec_markdown", "tasks"],
-              "properties": {"spec_markdown": {"type": "string"},
-                             "tasks": {"type": "array"}}}
+# Task items are FULLY specified (exact TaskSpec field names, no extras):
+# smoke-test finding — with a bare {"type": "array"} the model invents its own
+# reasonable-but-wrong field names (predicted_file_scope, dependencies, ...)
+# and burns the ladder on pydantic rejections. The CLI's own schema validation
+# now forces the shape before we ever see it.
+_STR_ARRAY = {"type": "array", "items": {"type": "string"}}
+PLAN_SCHEMA = {
+    "type": "object", "required": ["spec_markdown", "tasks"],
+    "properties": {
+        "spec_markdown": {"type": "string"},
+        "tasks": {"type": "array", "items": {
+            "type": "object",
+            "required": ["id", "title", "profile", "criteria", "planned_tests"],
+            "additionalProperties": False,
+            "properties": {
+                "id": {"type": "string"}, "title": {"type": "string"},
+                "profile": {"type": "string"}, "criteria": _STR_ARRAY,
+                "planned_tests": _STR_ARRAY, "file_scope": _STR_ARRAY,
+                "checklist": _STR_ARRAY, "depends_on": _STR_ARRAY,
+            }}}}}
 
 SCRIBE_SCHEMA = {"type": "object",
                  "required": ["commit_messages", "pr_title", "pr_body"],
