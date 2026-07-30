@@ -5,7 +5,6 @@ import json
 import os
 import stat
 import subprocess
-from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -56,6 +55,9 @@ TEST_POW = ("from src.calc import power\n\n"
             "def test_pow():\n    assert power(2, 3) == 8\n")
 
 CLEAN_REVIEW = {"result": {"outcome": "done", "structured": {"findings": []}}}
+SCRIBE_ENTRY = {"result": {"outcome": "done", "structured": {
+    "commit_messages": ["feat(calc): divide", "feat(calc): power"],
+    "pr_title": "feat: two functions", "pr_body": "adds divide and power"}}}
 
 QUEUE = [
     # T1 test stage: red test + NotImplementedError stub.
@@ -86,6 +88,35 @@ def _queue(fixture_repo, entries, start=0):
         (qdir / f"{start + i}.json").write_text(json.dumps(entry))
 
 
+def _dispatch_queue(monkeypatch, entries):
+    """Drive dispatches via monkeypatched pipeline.run_agent (the file-based
+    FakeAdapter queue is tracked content whose consumption-renames get
+    restored by the pipeline's legitimate discard steps, replaying stale
+    entries). Writes target req.cwd — always the run worktree."""
+    from regie import pipeline as _pl
+    queue = list(entries)
+
+    def _fake(rundir, task_id, stage, attempt_no, req):
+        rundir.append_intent({"task": task_id, "stage": stage,
+                              "attempt": attempt_no,
+                              "binding": req.binding.model_dump()})
+        spec = queue.pop(0)
+        for rel, content in spec.get("writes", {}).items():
+            path = req.cwd / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        rundir.append_event({"kind": "attempt", "task": task_id, "stage": stage,
+                             "attempt": attempt_no,
+                             "outcome": spec["result"].get("outcome", "done"),
+                             "turns": spec["result"].get("turns", 0),
+                             "usage": {}})
+        from regie.agents.base import AgentResult
+        return AgentResult(**spec["result"])
+
+    monkeypatch.setattr(_pl, "run_agent", _fake)
+    return queue
+
+
 def _setup(regie_home, fixture_repo, fake_profiles, tmp_path, remote_repo=None):
     (fixture_repo / "regie.toml").write_text(
         'test_globs = ["tests/**"]\nbinding_strength = ["fake:m1"]\n'
@@ -93,10 +124,7 @@ def _setup(regie_home, fixture_repo, fake_profiles, tmp_path, remote_repo=None):
     brief = tmp_path / "feature.md"
     brief.write_text("# two functions")
     (tmp_path / "tasks.json").write_text(json.dumps(TASKS))
-    _queue(fixture_repo, QUEUE)
-    # The run worktree is checked out from base_sha, so the queue directory
-    # must be committed to be present in the worktree the fake adapter reads.
-    commit_all(fixture_repo, "chore: fake agent queue")
+    commit_all(fixture_repo, "chore: pin regie.toml")
     if remote_repo is not None:
         # finalize_stage fetches/rebases onto origin/main, so origin must have
         # this commit too -- otherwise the run's base_sha (resolved from
@@ -108,8 +136,11 @@ def _setup(regie_home, fixture_repo, fake_profiles, tmp_path, remote_repo=None):
 
 def test_full_run_reaches_pr(regie_home, fixture_repo, remote_repo, fake_profiles,
                              tmp_path, monkeypatch):
+    from regie import pipeline as _pl
+    monkeypatch.setattr(_pl, "CI_POLL_SECONDS", 0)
     _stub_gh_green(tmp_path, monkeypatch)
     brief = _setup(regie_home, fixture_repo, fake_profiles, tmp_path, remote_repo)
+    _dispatch_queue(monkeypatch, QUEUE + [SCRIBE_ENTRY])
     result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
                                  "--profiles", str(fake_profiles),
                                  "--tasks-file", str(tmp_path / "tasks.json")])
@@ -120,18 +151,14 @@ def test_full_run_reaches_pr(regie_home, fixture_repo, remote_repo, fake_profile
     assert state.pr_url == "https://github.com/x/y/pull/1"
     assert all(t.status == "done" for t in state.tasks.values())
 
-    # T2's review dispatch (queue entry 5) is the run's last dispatch, so its
-    # ".fake_agent_queue" consumption-rename (fake.py's side effect) is never
-    # swept into a later stage's gated commit the way entries 0-4 are -- it's
-    # ungated leftover at finalize time. Prove finalize_stage discarded it
-    # instead of sneaking it into the squashed history via an unreviewed
-    # commit.
     log = subprocess.run(
         ["git", "-C", state.worktree_path, "log", "--name-only",
          f"{state.base_sha}..HEAD"], capture_output=True, text=True, check=True
     ).stdout
-    assert "5.json.done" not in log
     assert ".regie_schema.json" not in log
+    # No spec commit here: the --tasks-file path skips the planner, so there
+    # is no spec to publish (spec-in-PR is covered by test_e2e_full).
+    assert "specs/" not in log
 
 
 def test_crash_then_resume_completes(regie_home, fixture_repo, remote_repo,
@@ -145,7 +172,9 @@ def test_crash_then_resume_completes(regie_home, fixture_repo, remote_repo,
     # exact scenario the WAL/reconcile machinery exists for: intent logged,
     # no corresponding attempt, worktree dirty.
     from regie import pipeline
-    real = pipeline.run_agent
+    _dispatch_queue(monkeypatch, QUEUE + [SCRIBE_ENTRY])
+    monkeypatch.setattr(pipeline, "CI_POLL_SECONDS", 0)
+    real = pipeline.run_agent  # the queue-driven fake installed above
     calls = {"n": 0, "dirty": None}
 
     def crashing(*args, **kwargs):
@@ -179,17 +208,10 @@ def test_crash_then_resume_completes(regie_home, fixture_repo, remote_repo,
     del result
     gc.collect()
 
-    # The crashed dispatch never reached the fake script, so queue entries
-    # 1..5 are untouched -- but re-create them from the reconciled position
-    # anyway so resume doesn't depend on that timing detail. No extra queue
-    # entry is needed: reconcile's synthetic failed attempt satisfies the
-    # ladder's retry slot without itself consuming a dispatch, so the next
-    # real dispatch still consumes the same (T1 build) entry as before.
-    # The worktree already exists from the crashed run (it persists across
-    # resume), so the requeue writes must target it, not the user's checkout.
+    # The crash fired before entry 1 was consumed, so the in-memory dispatch
+    # queue resumes exactly where it stopped; reconcile's synthetic failed
+    # attempt fills the ladder slot without consuming a dispatch.
     run_id = max((regie_home / "runs").iterdir()).name
-    worktree = Path(RunDir.open(regie_home, run_id).read_state().worktree_path)
-    _queue(worktree, QUEUE[1:], start=1)
 
     monkeypatch.setattr(pipeline, "run_agent", real)
     result = runner.invoke(app, ["resume", run_id, "--repo", str(fixture_repo),

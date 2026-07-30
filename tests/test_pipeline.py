@@ -210,3 +210,34 @@ def test_dispatch_death_writes_retry_note(regie_home, fixture_repo, cfg):
     run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
     note = (rd.path / "tasks" / tid / "note-test.md").read_text()
     assert "died before gates" in note and "turn budget" in note
+
+
+def test_blocked_attempt_discards_partial_edits(regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+    _script(fixture_repo, [{"result": {"outcome": "blocked",
+                                       "blocked_question": "which cache?"},
+                            "writes": {"src/partial.py": "junk\n"}}])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    assert run.stage == "halted"
+    assert not (fixture_repo / "src" / "partial.py").exists()
+
+
+def test_reviewer_leftovers_discarded(regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+    for step in (RED_TEST, GREEN_BUILD):
+        _script(fixture_repo, [step])
+        run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    # reviewer has no authority to write, but a real model might anyway —
+    # nothing it leaves may survive into later stage commits
+    _script(fixture_repo, [{"result": {"outcome": "done",
+                                       "structured": {"findings": []}},
+                            "writes": {"src/review_scratch.py": "oops\n"}}])
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+    assert run.tasks[tid].status == "done"
+    assert not (fixture_repo / "src" / "review_scratch.py").exists()

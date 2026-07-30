@@ -194,6 +194,12 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             _halt(rundir, run, task_id, f"quota exhausted during {stage}")
             return
         if attempt.outcome == "blocked":
+            # A blocked agent may have made partial edits before deciding to
+            # stop; nothing ungated may survive into a later stage's commit
+            # (dogfood finding: blocked-path leftovers were swept into
+            # test-stage commits by the next commit_all).
+            git(repo, "checkout", "--", ".")
+            git(repo, "clean", "-fd")
             question = attempt.blocked_question or ""
             if stage == "build" and question.startswith("bad-test:"):
                 if not task.escaped:
@@ -245,6 +251,10 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             _gate_and_advance(rundir, run, task_id, stage, gates, attempt,
                               _pass_build, repo)
         else:  # review
+            # The reviewer has no authority to edit; discard anything a
+            # misbehaving reviewer left so it can't ride into later commits.
+            git(repo, "checkout", "--", ".")
+            git(repo, "clean", "-fd")
             findings = [Finding(**f) for f in
                         (result.structured or {}).get("findings", [])]
             serious = [f for f in findings if f.severity in ("blocker", "major")]
