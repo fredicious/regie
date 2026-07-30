@@ -289,6 +289,28 @@ def status(run_id: str):
 
 
 @app.command()
+def stats():
+    """Cross-run binding telemetry: outcomes per stage×binding + suggestions."""
+    from regie.stats import collect, suggestions
+    data = collect(_home())
+    typer.echo(f"{data.runs} run(s) analyzed\n")
+    typer.echo(f"{'stage':8s} {'binding':22s} {'att':>4s} {'done':>5s} "
+               f"{'fail':>5s} {'quota':>5s} {'1st-ok':>7s} {'esc-ok':>7s} {'turns/att':>9s}")
+    for (stage, key), b in sorted(data.by_binding.items()):
+        first = f"{b.first_done}/{b.first_attempts}" if b.first_attempts else "-"
+        avg = f"{b.turns / b.attempts:.0f}" if b.attempts else "-"
+        typer.echo(f"{stage:8s} {key:22s} {b.attempts:4d} {b.done:5d} "
+                   f"{b.failed:5d} {b.quota:5d} {first:>7s} {b.escalation_done:7d} {avg:>9s}")
+    sugg = suggestions(data)
+    typer.echo("\nsuggestions:")
+    if sugg:
+        for s in sugg:
+            typer.echo(f"  - {s}")
+    else:
+        typer.echo("  (none — not enough evidence yet)")
+
+
+@app.command()
 def spec(run_id: str):
     """Print the run's spec (the planner's output you approve)."""
     rundir = _open_rundir(_home(), run_id)
