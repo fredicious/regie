@@ -63,6 +63,19 @@ Still open, worth briefs:
 - **`max_turns`/budget as a first-class outcome** (partially done — named now;
   make it its own `Attempt.outcome` with budget-aware escalation).
 
+## Done 2026-07-31 (features 2-4)
+
+- **`regie preflight`** — runs the repo's gate commands, verdict strictly by
+  exit code. Shipped.
+- **Idempotent finalize rebase** — a manually-resolved rebase resumes cleanly;
+  conflict halts name the files + base-drift count. Shipped.
+- **Codex adapter validated live** (codex-cli 0.146.0). Corrected three
+  doc-based bugs: usage telemetry IS on `turn.completed`; `turn.failed`
+  handled; `stdin=DEVNULL` in dispatch (codex blocks on stdin otherwise).
+  Cross-vendor run proven end-to-end: claude plans/tests/reviews, codex
+  builds → clean PR. Note: `gpt-5-codex` is rejected on ChatGPT auth; use the
+  account's real model (e.g. `gpt-5.5`). Shipped.
+
 ## v2
 
 - **Provider failover on quota exhaustion** — profiles already model `fallback`
