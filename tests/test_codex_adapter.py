@@ -66,3 +66,38 @@ def test_parse_no_message_is_error():
 def test_parse_blocked_precedence_over_exit_code():
     out = _lines({"type": "agent_message", "text": "blocked: why?"})
     assert get_adapter("codex").parse(out, 1).outcome == "blocked"
+
+
+# Real streams captured from codex-cli 0.146.0 on 2026-07-31 (ChatGPT auth).
+REAL_SUCCESS = "\n".join([
+    '{"type":"thread.started","thread_id":"t1"}',
+    '{"type":"turn.started"}',
+    '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"pong"}}',
+    '{"type":"turn.completed","usage":{"input_tokens":13970,"cached_input_tokens":10624,"output_tokens":5}}',
+])
+REAL_MODEL_ERROR = "\n".join([
+    '{"type":"thread.started","thread_id":"t2"}',
+    '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata not found"}}',
+    '{"type":"turn.started"}',
+    '{"type":"error","message":"{\\"status\\":400,\\"error\\":{\\"message\\":"'
+    '"\\"model not supported\\"}}"}',
+    '{"type":"turn.failed","error":{"message":"model not supported"}}',
+])
+
+
+def test_parse_real_success_stream_captures_usage():
+    r = get_adapter("codex").parse(REAL_SUCCESS, 0)
+    assert r.outcome == "done" and r.text == "pong" and r.turns == 1
+    # Plan B assumed no usage telemetry; real 0.146 provides it on turn.completed
+    assert r.usage.get("input_tokens") == 13970 and r.usage.get("output_tokens") == 5
+
+
+def test_parse_real_error_stream_is_error():
+    r = get_adapter("codex").parse(REAL_MODEL_ERROR, 1)
+    assert r.outcome == "error"
+
+
+def test_parse_turn_failed_without_error_event():
+    stream = ('{"type":"turn.started"}\n'
+              '{"type":"turn.failed","error":{"message":"you have hit your usage limit"}}')
+    assert get_adapter("codex").parse(stream, 1).outcome == "quota"

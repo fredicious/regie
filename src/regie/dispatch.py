@@ -39,6 +39,7 @@ def run_agent(rundir: RunDir, task_id: str, stage: str, attempt_no: int,
     killed = ""
     with out_path.open("wb") as out:
         proc = subprocess.Popen(adapter.build_command(req), cwd=req.cwd,
+                                stdin=subprocess.DEVNULL,
                                 stdout=out, stderr=subprocess.STDOUT,
                                 start_new_session=True)
         started = last_growth = time.monotonic()

@@ -26,7 +26,7 @@ class CodexAdapter:
         return cmd + [req.prompt]
 
     def parse(self, stdout: str, exit_code: int) -> AgentResult:
-        text, turns, error_msg = None, 0, None
+        text, turns, error_msg, usage = None, 0, None, {}
         for line in stdout.splitlines():
             try:
                 ev = json.loads(line)
@@ -40,8 +40,19 @@ class CodexAdapter:
                   and isinstance(ev.get("item"), dict)
                   and ev["item"].get("type") == "agent_message"):
                 text, turns = str(ev["item"].get("text", "")), turns + 1
-            elif ev.get("type") == "error":
-                error_msg = str(ev.get("message", ""))
+            elif ev.get("type") == "turn.completed" and isinstance(ev.get("usage"), dict):
+                # Real codex 0.146 DOES report usage on turn.completed, contrary
+                # to the Plan B doc assumption of "no exec-mode telemetry"
+                # (verified live 2026-07-31).
+                usage = ev["usage"]
+            elif ev.get("type") in ("error", "turn.failed"):
+                # A failed turn carries a nested JSON error string; an `error`
+                # event carries the message directly. Prefer the first error seen.
+                msg = ev.get("message")
+                if msg is None and isinstance(ev.get("error"), dict):
+                    msg = ev["error"].get("message")
+                if error_msg is None:
+                    error_msg = str(msg or "")
         if error_msg is not None:
             outcome = "quota" if _QUOTA.search(error_msg) else "error"
             return AgentResult(outcome=outcome, text=error_msg[-2000:])
@@ -60,7 +71,8 @@ class CodexAdapter:
                 structured = parsed
         except json.JSONDecodeError:
             pass
-        return AgentResult(outcome="done", text=text, structured=structured, turns=turns)
+        return AgentResult(outcome="done", text=text, structured=structured,
+                           turns=turns, usage=usage)
 
 
 register("codex", CodexAdapter())
