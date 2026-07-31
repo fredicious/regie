@@ -17,6 +17,7 @@ def fake_profiles(tmp_path) -> Path:
             "bindings:\n"
             "  - { cli: fake, model: m1 }\n"
             "  - { cli: fake, model: m2 }\n"
+            "hard: { cli: fake, model: m2 }\n"
             "budgets: { turns: 5, wall_minutes: 1, stall_minutes: 1 }\n")
         (d / f"{name}.md").write_text(f"You are {name}.")
     return d

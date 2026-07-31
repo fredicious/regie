@@ -115,15 +115,16 @@ def _review_binding(run: RunState, task_id: str, cfg: RegieConfig) -> Binding:
 
 
 def _effective_bindings(profile: Profile, complexity: str) -> list[Binding]:
-    """The ladder a stage actually walks. "hard" tasks start at the profile's
-    strongest rung (last entry, weakest-to-strongest convention); the remaining
-    rungs keep only OTHER-vendor entries — retrying a hard task on a weaker
-    same-vendor model is pointless, but a different vendor is both the quota
-    escape and genuine diversity."""
-    if complexity != "hard" or len(profile.bindings) == 1:
+    """The ladder a stage actually walks. "hard" tasks start on the profile's
+    explicit `hard:` binding (the big gun) when one is configured; remaining
+    rungs keep only OTHER-vendor entries. Without a `hard:` binding the normal
+    ladder applies (the primary may already BE the big gun, e.g. the builder).
+    The hard pick is a separate key because the bindings list orders
+    preference-then-failover, not strength (review catch, 2026-07-31)."""
+    hard = profile.hard_binding
+    if complexity != "hard" or hard is None:
         return profile.bindings
-    strongest = profile.bindings[-1]
-    return [strongest] + [b for b in profile.bindings[:-1] if b.cli != strongest.cli]
+    return [hard] + [b for b in profile.bindings if b.cli != hard.cli]
 
 
 def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,

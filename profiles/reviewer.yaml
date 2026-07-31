@@ -3,3 +3,4 @@ bindings:
   - { cli: claude, model: fable, auth: subscription }  # deadlocked reviews only
   - { cli: codex, model: gpt-5.6-sol, auth: subscription }
 budgets: { turns: 60, wall_minutes: 30, stall_minutes: 8 }
+hard: { cli: claude, model: fable, auth: subscription }

@@ -418,7 +418,7 @@ def test_hard_task_starts_on_strongest_rung(regie_home, fixture_repo, cfg):
                           conventions="C")
     _script(fixture_repo, [{"result": {"outcome": "blocked", "blocked_question": "?"}}])
     run_task(rd, run, "T1", cfg, fixture_repo, ctx, max_dispatches=1)
-    # fake_profiles: bindings [fake:m1, fake:m2] — hard starts on m2 (strongest)
+    # fake_profiles declare hard: fake:m2 — hard tasks start there
     assert run.tasks["T1"].attempts["test"][0].binding.model == "m2"
 
 
@@ -427,14 +427,18 @@ def test_effective_bindings_shapes():
 
     from regie.config import Profile
     from regie.pipeline import _effective_bindings
-    prompt = _pl.Path(__file__)  # any existing file works for prompt_path
+    prompt = _pl.Path(__file__)
     mk = lambda cli, model: Binding(cli=cli, model=model)
-    prof = Profile(name="builder", prompt_path=prompt, budgets=Budgets(),
-                   bindings=[mk("codex", "gpt-5.6-sol"), mk("claude", "sonnet"),
-                             mk("claude", "opus")])
+    base = {"name": "p", "prompt_path": prompt, "budgets": Budgets()}
+    prof = Profile(bindings=[mk("claude", "opus"), mk("claude", "fable"),
+                             mk("codex", "gpt-5.6-sol")],
+                   hard_binding=mk("claude", "fable"), **base)
     # standard: untouched
     assert _effective_bindings(prof, "standard") == prof.bindings
-    # hard: strongest first, then only OTHER-vendor rungs (weaker same-vendor dropped)
+    # hard: explicit big gun first, then only OTHER-vendor rungs
     hard = _effective_bindings(prof, "hard")
-    assert hard[0].model == "opus"
+    assert hard[0].model == "fable"
     assert [b.cli for b in hard[1:]] == ["codex"]
+    # no hard binding configured -> hard tasks use the normal ladder
+    plain = Profile(bindings=[mk("codex", "gpt-5.6-sol"), mk("claude", "sonnet")], **base)
+    assert _effective_bindings(plain, "hard") == plain.bindings

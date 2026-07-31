@@ -19,6 +19,11 @@ class Profile(BaseModel):
     bindings: list[Binding]
     prompt_path: Path
     budgets: Budgets
+    # Optional explicit "big gun" for complexity:hard tasks. Kept separate
+    # from the list because the list orders preference-then-failover, not
+    # strength — conflating them sent hard tasks to a WEAKER model (review
+    # catch, 2026-07-31). Absent → hard tasks use the normal ladder.
+    hard_binding: Binding | None = None
 
     @property
     def primary(self) -> Binding:
@@ -72,6 +77,7 @@ def _load_profiles(profiles_dir: Path, errors: list[str]) -> dict[str, Profile]:
             bindings=bindings,
             prompt_path=prompt,
             budgets=Budgets(**raw.get("budgets", {})),
+            hard_binding=Binding(**raw["hard"]) if "hard" in raw else None,
         )
     if not profiles:
         errors.append(f"no profiles found in {profiles_dir}")
