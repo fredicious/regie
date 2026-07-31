@@ -325,3 +325,21 @@ def test_doctor_on_healthy_run(regie_home):
                             pr_url="https://x/pr/1"))
     result = runner.invoke(app, ["doctor", "ok1"])
     assert result.exit_code == 0 and "done" in result.output
+
+
+def test_preflight_command_green(regie_home, fixture_repo, fake_profiles):
+    (fixture_repo / "regie.toml").write_text(
+        'test_globs = ["tests/**"]\nbinding_strength = ["fake:m1"]\n'
+        '[commands]\ntest = "true"\nlint = "true"\n')
+    result = runner.invoke(app, ["preflight", "--repo", str(fixture_repo),
+                                 "--profiles", str(fake_profiles)])
+    assert result.exit_code == 0 and "all green" in result.output
+
+
+def test_preflight_command_fails_on_exit_code(regie_home, fixture_repo, fake_profiles):
+    (fixture_repo / "regie.toml").write_text(
+        'test_globs = ["tests/**"]\nbinding_strength = ["fake:m1"]\n'
+        '[commands]\ntest = "true"\nlint = "echo ok; exit 1"\n')
+    result = runner.invoke(app, ["preflight", "--repo", str(fixture_repo),
+                                 "--profiles", str(fake_profiles)])
+    assert result.exit_code == 1 and "FAILED" in result.output

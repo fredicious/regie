@@ -289,6 +289,29 @@ def status(run_id: str):
 
 
 @app.command()
+def preflight(repo: Annotated[Path, typer.Option()],
+              profiles: Annotated[Path, typer.Option()] = _DEFAULT_PROFILES):
+    """Run the repo's own gate commands (lint/typecheck/test) and report
+    pass/fail by exit code. Exit 0 iff every command passed — so it composes
+    in CI or a pre-dispatch check."""
+    from regie.preflight import all_passed
+    from regie.preflight import preflight as run_preflight
+    cfg = load_config(repo, profiles)
+    results = run_preflight(cfg.commands, repo)
+    if not results:
+        typer.echo("no preflight commands configured (lint/typecheck/test)")
+        raise typer.Exit(0)
+    for r in results:
+        mark = "PASS" if r.passed else "FAIL"
+        typer.echo(f"  {mark}  {r.name:10s} (exit {r.exit_code})  {r.command}")
+        if not r.passed:
+            typer.echo("        " + r.tail.strip().replace("\n", "\n        ")[-500:])
+    ok = all_passed(results)
+    typer.echo("\npreflight: " + ("all green" if ok else "FAILED"))
+    raise typer.Exit(0 if ok else 1)
+
+
+@app.command()
 def stats():
     """Cross-run binding telemetry: outcomes per stage×binding + suggestions."""
     from regie.stats import collect, suggestions
