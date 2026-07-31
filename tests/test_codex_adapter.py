@@ -69,20 +69,16 @@ def test_parse_blocked_precedence_over_exit_code():
 
 
 # Real streams captured from codex-cli 0.146.0 on 2026-07-31 (ChatGPT auth).
-REAL_SUCCESS = "\n".join([
-    '{"type":"thread.started","thread_id":"t1"}',
-    '{"type":"turn.started"}',
-    '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"pong"}}',
-    '{"type":"turn.completed","usage":{"input_tokens":13970,"cached_input_tokens":10624,"output_tokens":5}}',
-])
-REAL_MODEL_ERROR = "\n".join([
-    '{"type":"thread.started","thread_id":"t2"}',
-    '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata not found"}}',
-    '{"type":"turn.started"}',
-    '{"type":"error","message":"{\\"status\\":400,\\"error\\":{\\"message\\":"'
-    '"\\"model not supported\\"}}"}',
-    '{"type":"turn.failed","error":{"message":"model not supported"}}',
-])
+REAL_SUCCESS = """{"type":"thread.started","thread_id":"t1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"pong"}}
+{"type":"turn.completed","usage":{"input_tokens":13970,"cached_input_tokens":10624,"output_tokens":5}}"""
+
+REAL_MODEL_ERROR = """{"type":"thread.started","thread_id":"t2"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata not found"}}
+{"type":"turn.started"}
+{"type":"error","message":"model not supported"}
+{"type":"turn.failed","error":{"message":"model not supported"}}"""
 
 
 def test_parse_real_success_stream_captures_usage():
