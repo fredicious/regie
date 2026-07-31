@@ -56,6 +56,11 @@ class TaskSpec(BaseModel):
     checklist: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
     planned_tests: list[str] = Field(default_factory=list)
+    # Upgrade-only routing hint from the planner: "hard" starts the stage
+    # ladders at the profile's strongest rung. There is deliberately no
+    # "trivial" downgrade — a wrong "hard" wastes a little quota, a wrong
+    # "trivial" wastes two failed attempts plus review churn.
+    complexity: Literal["standard", "hard"] = "standard"
 
 
 TaskStage = Literal["test", "build", "review"]

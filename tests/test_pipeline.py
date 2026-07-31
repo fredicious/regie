@@ -406,3 +406,35 @@ def test_ac13_quota_with_no_next_binding_halts_naming_provider(
     assert "build" in run.halt_reason
     assert len(run.tasks[tid].attempts["build"]) == 1
 
+
+
+def test_hard_task_starts_on_strongest_rung(regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "rh")
+    spec = TaskSpec(id="T1", title="hard one", profile="builder",
+                    criteria=["c"], complexity="hard")
+    run = RunState(id="rh", target_repo=str(fixture_repo), branch="regie/rh",
+                   stage="tasks", tasks={"T1": TaskState(spec=spec)})
+    ctx = PipelineContext(spec_excerpt="S", decisions_path=rd.path / "decisions.md",
+                          conventions="C")
+    _script(fixture_repo, [{"result": {"outcome": "blocked", "blocked_question": "?"}}])
+    run_task(rd, run, "T1", cfg, fixture_repo, ctx, max_dispatches=1)
+    # fake_profiles: bindings [fake:m1, fake:m2] — hard starts on m2 (strongest)
+    assert run.tasks["T1"].attempts["test"][0].binding.model == "m2"
+
+
+def test_effective_bindings_shapes():
+    import pathlib as _pl
+
+    from regie.config import Profile
+    from regie.pipeline import _effective_bindings
+    prompt = _pl.Path(__file__)  # any existing file works for prompt_path
+    mk = lambda cli, model: Binding(cli=cli, model=model)
+    prof = Profile(name="builder", prompt_path=prompt, budgets=Budgets(),
+                   bindings=[mk("codex", "gpt-5.6-sol"), mk("claude", "sonnet"),
+                             mk("claude", "opus")])
+    # standard: untouched
+    assert _effective_bindings(prof, "standard") == prof.bindings
+    # hard: strongest first, then only OTHER-vendor rungs (weaker same-vendor dropped)
+    hard = _effective_bindings(prof, "hard")
+    assert hard[0].model == "opus"
+    assert [b.cli for b in hard[1:]] == ["codex"]

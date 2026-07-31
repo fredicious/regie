@@ -60,6 +60,7 @@ PLAN_SCHEMA = {
             "additionalProperties": False,
             "properties": {
                 "id": {"type": "string"}, "title": {"type": "string"},
+                "complexity": {"type": "string", "enum": ["standard", "hard"]},
                 "profile": {"type": "string"}, "criteria": _STR_ARRAY,
                 "planned_tests": _STR_ARRAY, "file_scope": _STR_ARRAY,
                 "checklist": _STR_ARRAY, "depends_on": _STR_ARRAY,
@@ -113,15 +114,28 @@ def _review_binding(run: RunState, task_id: str, cfg: RegieConfig) -> Binding:
     return _review_profile(run, task_id, cfg).primary
 
 
+def _effective_bindings(profile: Profile, complexity: str) -> list[Binding]:
+    """The ladder a stage actually walks. "hard" tasks start at the profile's
+    strongest rung (last entry, weakest-to-strongest convention); the remaining
+    rungs keep only OTHER-vendor entries — retrying a hard task on a weaker
+    same-vendor model is pointless, but a different vendor is both the quota
+    escape and genuine diversity."""
+    if complexity != "hard" or len(profile.bindings) == 1:
+        return profile.bindings
+    strongest = profile.bindings[-1]
+    return [strongest] + [b for b in profile.bindings[:-1] if b.cli != strongest.cli]
+
+
 def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
               profile: Profile, cfg: RegieConfig, repo: Path,
               ctx: PipelineContext, extra: str) -> tuple[Attempt, AgentResult]:
     task = run.tasks[task_id]
     attempts = task.attempts[stage]
     ladder_profile = _review_profile(run, task_id, cfg) if stage == "review" else profile
-    binding = ladder_profile.primary
+    ladder = _effective_bindings(ladder_profile, task.spec.complexity)
+    binding = ladder[0]
     if attempts:
-        _action, binding = next_action(attempts, ladder_profile.bindings)
+        _action, binding = next_action(attempts, ladder)
         # caller already checked for halt; retry keeps binding, escalate upgrades
     packet = render_packet(task.spec, ctx.spec_excerpt, _decisions(ctx),
                            ctx.conventions, extra=extra)
@@ -160,7 +174,8 @@ def _should_halt(rundir: RunDir, run: RunState, task_id: str, stage: str,
     ladder_profile = (_review_profile(run, task_id, cfg) if stage == "review" else
                      cfg.profiles[{"test": "test-writer", "build": "builder",
                                   "review": "reviewer"}[stage]])
-    action, _ = next_action(attempts, ladder_profile.bindings)
+    ladder = _effective_bindings(ladder_profile, run.tasks[task_id].spec.complexity)
+    action, _ = next_action(attempts, ladder)
     if action == "halt":
         _halt(rundir, run, task_id, _ladder_halt_reason(stage, attempts[-1], task_id))
         return True

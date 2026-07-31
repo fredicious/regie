@@ -36,6 +36,11 @@ order of magnitude more later.
   signature), its acceptance criteria MUST include adapting the existing
   tests that reference the old API — the test stage owns ALL test edits;
   the builder is mechanically forbidden from touching test files.
+- Mark a task `complexity: "hard"` ONLY when it clearly needs the strongest
+  model from the first attempt (cross-module refactor, subtle concurrency,
+  gnarly algorithmic core). Hard tasks start on the top-rung binding. When
+  unsure, leave it standard — escalation handles discovered difficulty;
+  there is no "trivial" tier to optimize for.
 - Order by dependency; prefer independent tasks. Predicted file scope is
   advisory but honest — think about imports, configs, registrations.
 - Match existing codebase patterns (read the conventions section); never invent

@@ -1,3 +1,5 @@
 bindings:
-  - { cli: claude, model: opus, auth: subscription }
-budgets: { turns: 60, wall_minutes: 30, stall_minutes: 5 }
+  - { cli: claude, model: opus, auth: subscription }   # Opus 5 — reasoning/spec leader
+  - { cli: claude, model: fable, auth: subscription }  # Fable 5 — hardest 5%, escalation only
+  - { cli: codex, model: gpt-5.6-sol, auth: subscription }  # cross-vendor quota escape
+budgets: { turns: 60, wall_minutes: 30, stall_minutes: 8 }

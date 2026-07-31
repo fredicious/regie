@@ -137,14 +137,20 @@ def test_stale_binding_strength_key_is_ignored(tmp_path):
 
 
 def test_shipped_profiles_are_migrated(tmp_path):
+    """The shipped profiles all use the bindings-list form. The exact model
+    lineup is operator policy (researched + live-validated 2026-07-31), so
+    assert the durable invariants, not vendors: every profile loads, every
+    list has at least two rungs (an escalation/failover path exists), and any
+    profile whose primary is codex carries a cross-vendor (claude) rung so a
+    quota hit can actually escape the starved provider — and vice versa.
+    """
     cfg = load_config(_repo_with(tmp_path, GOOD_TOML), PROFILES)
-    two_bindings = [Binding(cli="claude", model="sonnet"), Binding(cli="claude", model="opus")]
-    for name in ("builder", "test-writer", "debugger"):
-        assert cfg.profiles[name].bindings == two_bindings
-    one_binding = [Binding(cli="claude", model="opus")]
-    for name in ("planner", "reviewer"):
-        assert cfg.profiles[name].bindings == one_binding
-
+    assert set(cfg.profiles) == {"planner", "test-writer", "builder",
+                                 "reviewer", "debugger"}
+    for name, prof in cfg.profiles.items():
+        assert len(prof.bindings) >= 2, f"{name} has no escalation rung"
+        vendors = {b.cli for b in prof.bindings}
+        assert len(vendors) >= 2, f"{name} has no cross-vendor quota escape"
 
 def test_profile_binding_field_is_removed_not_aliased(tmp_path):
     profiles = _profiles_dir_with(
