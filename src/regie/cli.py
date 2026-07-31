@@ -401,8 +401,11 @@ def doctor(run_id: str):
         typer.echo(f"  wait for the provider window to reset, then: "
                    f"regie resume {run_id} --repo <path>")
     elif "rebase conflict" in reason:
-        typer.echo("  resolve the conflict in the worktree above, then: "
-                   f"regie resume {run_id} --repo <path>")
+        typer.echo("  the halt reason names the conflicting files and how far "
+                   "the base moved. In the worktree: rebase onto the base, "
+                   "resolve, `git rebase --continue`, then: "
+                   f"regie resume {run_id} --repo <path> (finalize is now "
+                   "idempotent — it won't re-rebase an already-resolved tree)")
     elif "blocked" in reason:
         typer.echo("  answer the question (edit the spec or decisions.md), then: "
                    f"regie resume {run_id} --repo <path>")

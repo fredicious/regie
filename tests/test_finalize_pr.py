@@ -399,3 +399,39 @@ def test_pr_stage_commits_spec_into_repo(regie_home, fixture_repo, remote_repo,
     # the spec file is part of the pushed history
     files = git(wt, "log", "--name-only", f"{run.base_sha}..HEAD")
     assert f"specs/{run.id}.md" in files
+
+
+def test_finalize_idempotent_when_already_on_base(regie_home, fixture_repo,
+                                                  remote_repo, tmp_path, fake_profiles):
+    """A worktree already rebased onto current origin/main (e.g. a human
+    resolved a conflict) must proceed to pr, not re-rebase and re-conflict."""
+    rd, run, wt = _wt_run(regie_home, fixture_repo, remote_repo, tmp_path)
+    # simulate a manual rebase: fast-forward the worktree is already off main's
+    # tip, so HEAD already has origin/main as ancestor
+    finalize_stage(rd, run, load_config(fixture_repo, fake_profiles), wt)
+    assert run.stage == "pr"
+    # base_sha refreshed to current origin/main
+    assert run.base_sha == git(wt, "rev-parse", "origin/main").strip()
+
+
+def test_finalize_conflict_names_files_and_drift(regie_home, fixture_repo,
+                                                 remote_repo, tmp_path, fake_profiles):
+    rd, run, wt = _wt_run(regie_home, fixture_repo, remote_repo, tmp_path)
+    # advance origin/main with a conflicting change to the same file
+    (fixture_repo / "src" / "x.py").write_text("X = 99\n")
+    commit_all(fixture_repo, "conflict on main")
+    subprocess.run(["git", "-C", str(fixture_repo), "push", "-q", "origin", "main"],
+                   check=True)
+    finalize_stage(rd, run, load_config(fixture_repo, fake_profiles), wt)
+    assert run.stage == "halted"
+    assert "src/x.py" in run.halt_reason        # names the conflicting file
+    assert "1 new commit" in run.halt_reason     # reports drift
+    # the abort left a clean tree (no rebase in progress wedging resume)
+    assert not _rebase_in_progress(wt)
+
+
+def _rebase_in_progress(wt):
+    from pathlib import Path as _P
+    gitdir = git(wt, "rev-parse", "--git-dir").strip()
+    base = _P(wt) / gitdir if not gitdir.startswith("/") else _P(gitdir)
+    return (base / "rebase-merge").exists() or (base / "rebase-apply").exists()

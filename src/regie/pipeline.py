@@ -449,6 +449,32 @@ def run_tasks_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
     rundir.write_state(run)
 
 
+def _is_ancestor(worktree: Path, maybe_ancestor: str, ref: str) -> bool:
+    """True if `maybe_ancestor` is already reachable from `ref` (HEAD sits on
+    top of it), so no rebase is needed."""
+    try:
+        git(worktree, "merge-base", "--is-ancestor", maybe_ancestor, ref)
+        return True
+    except GitError:
+        return False
+
+
+def _rebase_conflicts(worktree: Path) -> list[str]:
+    try:
+        out = git(worktree, "diff", "--name-only", "--diff-filter=U")
+    except GitError:
+        return []
+    return [p for p in out.splitlines() if p]
+
+
+def _drift_count(worktree: Path, base_sha: str, base_ref: str) -> int:
+    try:
+        out = git(worktree, "rev-list", "--count", f"{base_sha}..{base_ref}")
+        return int(out.strip() or "0")
+    except (GitError, ValueError):
+        return 0
+
+
 def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
                    worktree: Path) -> None:
     """Advance the run from stage "finalize" to "pr": full command gates, the
@@ -482,18 +508,31 @@ def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
             _halt_run(rundir, run, f"eval gate failed: {eval_gate.detail[:500]}")
             return
 
-    try:
-        git(worktree, "fetch", "origin")
-        git(worktree, "rebase", f"origin/{run.base_branch}")
-    except GitError:
+    git(worktree, "fetch", "origin")
+    base_ref = f"origin/{run.base_branch}"
+    # Idempotent rebase: if the branch is already on top of the current base
+    # (e.g. a human resolved the conflict in the worktree and ran resume), do
+    # NOT rebase again -- just refresh the pinned base and proceed. This is the
+    # fix for the 2026-07-30 dogfood pain, where a manual resolve could not be
+    # cleanly resumed because finalize insisted on re-rebasing.
+    if not _is_ancestor(worktree, base_ref, "HEAD"):
         try:
-            git(worktree, "rebase", "--abort")
+            git(worktree, "rebase", base_ref)
         except GitError:
-            pass  # best-effort -- the halt below is what matters
-        _halt_run(rundir, run,
-                 f"rebase conflict — resolve manually in {worktree} then regie resume")
-        return
+            conflicted = _rebase_conflicts(worktree)
+            drift = _drift_count(worktree, run.base_sha, base_ref)
+            try:
+                git(worktree, "rebase", "--abort")
+            except GitError:
+                pass  # best-effort -- the halt below is what matters
+            _halt_run(rundir, run,
+                      f"rebase conflict ({drift} new commit(s) on "
+                      f"{run.base_branch}) in: {', '.join(conflicted) or '?'}. "
+                      f"Resolve in {worktree} (git rebase {base_ref}, fix, "
+                      f"--continue) then regie resume.")
+            return
 
+    run.base_sha = git(worktree, "rev-parse", base_ref).strip()
     run.stage = "pr"
     rundir.write_state(run)
 
