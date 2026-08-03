@@ -442,3 +442,23 @@ def test_effective_bindings_shapes():
     # no hard binding configured -> hard tasks use the normal ladder
     plain = Profile(bindings=[mk("codex", "gpt-5.6-sol"), mk("claude", "sonnet")], **base)
     assert _effective_bindings(plain, "hard") == plain.bindings
+
+
+def test_all_output_schemas_are_strict_for_codex():
+    """codex structured output rejects any object missing
+    additionalProperties:false — every schema object level must be strict."""
+    from regie.pipeline import FINDINGS_SCHEMA, PLAN_SCHEMA, SCRIBE_SCHEMA
+
+    def assert_strict(node, path="$"):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                assert node.get("additionalProperties") is False, path
+            for k, v in node.items():
+                assert_strict(v, f"{path}.{k}")
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                assert_strict(v, f"{path}[{i}]")
+
+    for name, schema in (("plan", PLAN_SCHEMA), ("findings", FINDINGS_SCHEMA),
+                         ("scribe", SCRIBE_SCHEMA)):
+        assert_strict(schema, name)

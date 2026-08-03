@@ -41,8 +41,21 @@ from regie.rundir import RunDir
 if TYPE_CHECKING:
     from regie.agents.base import AgentResult
 
-FINDINGS_SCHEMA = {"type": "object", "properties": {"findings": {"type": "array"}},
-                   "required": ["findings"]}
+# Strict-form schemas: codex's structured output rejects any object without
+# additionalProperties:false (invalid_json_schema, found live 2026-07-31 when
+# a quota skip-ahead handed a review to codex). Keep EVERY object level strict.
+FINDINGS_SCHEMA = {
+    "type": "object", "required": ["findings"], "additionalProperties": False,
+    "properties": {"findings": {"type": "array", "items": {
+        "type": "object",
+        "required": ["severity", "title", "detail"],
+        "additionalProperties": False,
+        "properties": {
+            "severity": {"type": "string", "enum": ["blocker", "major", "minor"]},
+            "title": {"type": "string"},
+            "detail": {"type": "string"},
+            "file": {"type": ["string", "null"]},
+        }}}}}
 
 # Task items are FULLY specified (exact TaskSpec field names, no extras):
 # smoke-test finding — with a bare {"type": "array"} the model invents its own
@@ -52,6 +65,7 @@ FINDINGS_SCHEMA = {"type": "object", "properties": {"findings": {"type": "array"
 _STR_ARRAY = {"type": "array", "items": {"type": "string"}}
 PLAN_SCHEMA = {
     "type": "object", "required": ["spec_markdown", "tasks"],
+    "additionalProperties": False,
     "properties": {
         "spec_markdown": {"type": "string"},
         "tasks": {"type": "array", "items": {
@@ -68,7 +82,9 @@ PLAN_SCHEMA = {
 
 SCRIBE_SCHEMA = {"type": "object",
                  "required": ["commit_messages", "pr_title", "pr_body"],
-                 "properties": {"commit_messages": {"type": "array"},
+                 "additionalProperties": False,
+                 "properties": {"commit_messages": {"type": "array",
+                                                    "items": {"type": "string"}},
                                 "pr_title": {"type": "string"},
                                 "pr_body": {"type": "string"}}}
 
