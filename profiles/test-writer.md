@@ -37,3 +37,6 @@ code is capped by the quality of your tests.
 New tests collect cleanly, fail with assertion/NotImplementedError, lint clean.
 If a criterion is untestable as written, don't fudge it — finish with
 `blocked: <which criterion and why>`.
+
+Run only the new or directly neighboring tests while authoring. The harness
+runs the authoritative red-test and lint gates after you finish.

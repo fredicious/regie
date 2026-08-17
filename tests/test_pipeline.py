@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from regie.config import Profile, load_config
+from regie.config import Profile, WorkflowConfig, load_config
 from regie.models import (
     Attempt,
     Binding,
@@ -282,6 +282,7 @@ def _profile(name: str, tmp_path: Path, bindings: list[Binding]) -> Profile:
 class _Cfg:
     def __init__(self, builder: Profile, reviewer: Profile):
         self.profiles = {"builder": builder, "reviewer": reviewer}
+        self.workflow = WorkflowConfig(knowledge=False)
 
 def test_ac15_flip_walks_builder_bindings_list(regie_home, fixture_repo, tmp_path):
     """The build stage's last attempt ran on fake2:strong; the reviewer's
@@ -389,6 +390,7 @@ def test_ac13_quota_with_no_next_binding_halts_naming_provider(
     class _OneBindingCfg:
         def __init__(self):
             self.profiles = {"builder": builder}
+            self.workflow = WorkflowConfig(knowledge=False)
 
     cfg = _OneBindingCfg()
     rd = RunDir.create(regie_home, "r1")

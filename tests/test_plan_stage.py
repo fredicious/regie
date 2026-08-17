@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from regie.config import Profile, load_config
+from regie.config import Profile, WorkflowConfig, load_config
 from regie.models import Binding, Budgets, RunState
 from regie.pipeline import plan_stage, reconcile
 from regie.rundir import RunDir
@@ -131,6 +131,8 @@ def test_ac14_planner_quota_halts_naming_exhausted_binding(regie_home, fixture_r
     class _OneBindingCfg:
         def __init__(self):
             self.profiles = {"planner": planner}
+            self.workflow = WorkflowConfig(
+                knowledge=False, plan_reviews=False, design_reviews=False)
 
     rd, run = _seed(regie_home, fixture_repo, PLAN)
     (fixture_repo / ".fake_agent.json").write_text(json.dumps(

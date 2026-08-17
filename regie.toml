@@ -1,5 +1,14 @@
 test_globs = ["tests/**"]
 
+[workflow]
+default_tier = "auto"
+max_parallel_tasks = 3
+plan_reviews = true
+design_reviews = true
+final_review = true
+knowledge = true
+reflection = true
+
 [commands]
 test = "uv run pytest -q"
 lint = "uvx ruff check src tests"

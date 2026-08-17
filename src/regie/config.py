@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import tomllib
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from regie.models import Binding, Budgets
+from regie.models import Binding, Budgets, TokenPolicy, WorkflowTier
 
 
 class ConfigError(Exception):
@@ -24,6 +25,7 @@ class Profile(BaseModel):
     # strength — conflating them sent hard tasks to a WEAKER model (review
     # catch, 2026-07-31). Absent → hard tasks use the normal ladder.
     hard_binding: Binding | None = None
+    token_policy: TokenPolicy = Field(default_factory=TokenPolicy)
 
     @property
     def primary(self) -> Binding:
@@ -36,12 +38,35 @@ class Profile(BaseModel):
         return hashlib.sha256(self.prompt_path.read_bytes()).hexdigest()
 
 
+class WorkflowConfig(BaseModel):
+    default_tier: WorkflowTier = "auto"
+    max_parallel_tasks: int = Field(default=1, ge=1, le=8)
+    plan_reviews: bool = True
+    design_reviews: bool = True
+    final_review: bool = True
+    knowledge: bool = True
+    reflection: bool = True
+    max_task_usd: float = Field(default=0.0, ge=0)
+    max_run_usd: float = Field(default=0.0, ge=0)
+
+
+class GatePlugin(BaseModel):
+    name: str
+    command: str
+    stages: list[str] = Field(default_factory=lambda: ["finalize"])
+    trigger_globs: list[str] = Field(default_factory=list)
+    tiers: list[Literal["fast", "standard", "critical"]] = Field(
+        default_factory=lambda: ["standard", "critical"])
+
+
 class RegieConfig(BaseModel):
     commands: dict[str, str]
     test_globs: list[str]
     eval_trigger_globs: list[str] = []
     profiles: dict[str, Profile]
     base_branch: str = "main"
+    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
+    gate_plugins: list[GatePlugin] = Field(default_factory=list)
 
 
 def _bindings_of(name: str, raw: dict, errors: list[str]) -> list[Binding]:
@@ -78,6 +103,7 @@ def _load_profiles(profiles_dir: Path, errors: list[str]) -> dict[str, Profile]:
             prompt_path=prompt,
             budgets=Budgets(**raw.get("budgets", {})),
             hard_binding=Binding(**raw["hard"]) if "hard" in raw else None,
+            token_policy=TokenPolicy(**raw.get("token_policy", {})),
         )
     if not profiles:
         errors.append(f"no profiles found in {profiles_dir}")
@@ -102,10 +128,19 @@ def load_config(repo: Path, profiles_dir: Path) -> RegieConfig:
     if errors:
         raise ConfigError("; ".join(errors))
 
+    plugins = []
+    for name, raw in data.get("gates", {}).items():
+        try:
+            plugins.append(GatePlugin(name=name, **raw))
+        except Exception as exc:
+            raise ConfigError(f"invalid gate '{name}': {exc}") from exc
+
     return RegieConfig(
         commands=commands,
         test_globs=data["test_globs"],
         eval_trigger_globs=data.get("eval_trigger_globs", []),
         profiles=profiles,
         base_branch=data.get("base_branch", "main"),
+        workflow=WorkflowConfig(**data.get("workflow", {})),
+        gate_plugins=plugins,
     )

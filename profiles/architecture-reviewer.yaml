@@ -1,0 +1,11 @@
+bindings:
+  - { cli: claude, model: opus, auth: subscription }
+  - { cli: codex, model: gpt-5.6-sol, auth: subscription }
+budgets: { turns: 50, wall_minutes: 30, stall_minutes: 8 }
+token_policy:
+  effort: high
+  tools: [list, read, search, shell]
+  sandbox: read-only
+  context_chars: 14000
+  max_findings: 6
+

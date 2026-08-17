@@ -19,6 +19,7 @@ def test_build_command_flags(tmp_path):
     assert cmd[:3] == ["codex", "exec", "--json"]
     assert cmd[cmd.index("-m") + 1] == "gpt-5.x"
     assert cmd[cmd.index("--sandbox") + 1] == "workspace-write"
+    assert 'model_reasoning_effort="medium"' in cmd
     assert cmd[-1] == "build it"
 
 
@@ -43,6 +44,23 @@ def test_parse_takes_last_agent_message():
 def test_parse_quota_from_error_event():
     out = _lines({"type": "error", "message": "You've hit your usage limit"})
     assert get_adapter("codex").parse(out, 1).outcome == "quota"
+
+
+def test_parse_quota_reads_structured_reset_time():
+    out = _lines({"type": "turn.failed", "error": {
+        "message": "weekly usage limit reached",
+        "reset_at": "2026-08-21T12:00:00Z"}})
+    result = get_adapter("codex").parse(out, 1)
+    assert result.outcome == "quota" and result.quota_kind == "weekly"
+    assert result.quota_reset_at == "2026-08-21T12:00:00+00:00"
+
+
+def test_parse_exact_five_hour_limit_message():
+    out = _lines({"type": "error",
+                  "message": "5-hour limit reached - resets at 3:00 PM"})
+    result = get_adapter("codex").parse(out, 1)
+    assert result.outcome == "quota" and result.quota_kind == "session"
+    assert result.quota_reset_at is not None
 
 
 def test_parse_plain_error_event():
@@ -86,6 +104,8 @@ def test_parse_real_success_stream_captures_usage():
     assert r.outcome == "done" and r.text == "pong" and r.turns == 1
     # Plan B assumed no usage telemetry; real 0.146 provides it on turn.completed
     assert r.usage.get("input_tokens") == 13970 and r.usage.get("output_tokens") == 5
+    assert r.metrics.new_input_tokens == 3346
+    assert r.metrics.cached_input_tokens == 10624
 
 
 def test_parse_real_error_stream_is_error():

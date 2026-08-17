@@ -39,3 +39,8 @@ def test_binding_recorded_on_attempt_absent_from_list_does_not_halt():
     stale = Binding(cli="fake", model="retired")
     action, binding = next_action([Attempt(binding=stale, outcome="failed")], TWO_RUNGS)
     assert (action, binding) == ("retry", B0)
+
+
+def test_budget_death_escalates_without_same_model_retry():
+    attempts = [Attempt(binding=B0, outcome="failed", failure_kind="budget")]
+    assert next_action(attempts, TWO_RUNGS) == ("escalate", B1)

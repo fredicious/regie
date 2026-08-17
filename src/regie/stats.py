@@ -24,8 +24,16 @@ class BindingStats:
     first_attempts: int = 0
     first_done: int = 0
     escalation_done: int = 0  # succeeded as a non-first binding in a ladder
+    new_input_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_output_tokens: int = 0
+    tool_output_bytes: int = 0
+    cost_usd: float = 0.0
 
-    def record(self, outcome: str | None, turns: int, position: int) -> None:
+    def record(self, outcome: str | None, turns: int, position: int,
+               metrics: dict | None = None) -> None:
         self.attempts += 1
         self.turns += turns or 0
         if outcome in ("done", "failed", "blocked", "quota"):
@@ -36,6 +44,21 @@ class BindingStats:
                 self.first_done += 1
         elif outcome == "done":
             self.escalation_done += 1
+        metrics = metrics or {}
+        for name in ("new_input_tokens", "cached_input_tokens",
+                     "cache_write_input_tokens", "output_tokens",
+                     "reasoning_output_tokens", "tool_output_bytes"):
+            setattr(self, name, getattr(self, name) + int(metrics.get(name) or 0))
+        self.cost_usd += float(metrics.get("cost_usd") or 0)
+
+    @property
+    def total_tokens(self) -> int:
+        return (self.new_input_tokens + self.cached_input_tokens
+                + self.cache_write_input_tokens + self.output_tokens)
+
+    @property
+    def done_per_million_tokens(self) -> float:
+        return self.done * 1_000_000 / self.total_tokens if self.total_tokens else 0.0
 
 
 @dataclass
@@ -69,12 +92,46 @@ def collect(home: Path) -> RunsStats:
                     b = a.get("binding") or {}
                     key = f"{b.get('cli', '?')}:{b.get('model', '?')}"
                     stats.bucket(stage, key).record(
-                        a.get("outcome"), a.get("turns") or 0, pos)
+                        a.get("outcome"), a.get("turns") or 0, pos,
+                        _metrics(a, b.get("cli", "")))
+            for specialist, specialist_attempts in (task.get("specialist_attempts") or {}).items():
+                for pos, a in enumerate(specialist_attempts):
+                    b = a.get("binding") or {}
+                    key = f"{b.get('cli', '?')}:{b.get('model', '?')}"
+                    stats.bucket(f"review:{specialist}", key).record(
+                        a.get("outcome"), a.get("turns") or 0, pos,
+                        _metrics(a, b.get("cli", "")))
         for pos, a in enumerate(state.get("planner_attempts") or []):
             b = a.get("binding") or {}
             key = f"{b.get('cli', '?')}:{b.get('model', '?')}"
-            stats.bucket("plan", key).record(a.get("outcome"), a.get("turns") or 0, pos)
+            stats.bucket("plan", key).record(
+                a.get("outcome"), a.get("turns") or 0, pos,
+                _metrics(a, b.get("cli", "")))
     return stats
+
+
+def _metrics(attempt: dict, cli: str) -> dict:
+    """Read new normalized telemetry and backfill historic run states."""
+    normalized = attempt.get("metrics") or {}
+    if any(normalized.get(name) for name in (
+            "new_input_tokens", "cached_input_tokens", "cache_write_input_tokens",
+            "output_tokens", "reasoning_output_tokens", "tool_output_bytes", "cost_usd")):
+        return normalized
+    usage = attempt.get("usage") or {}
+    cached = int(usage.get("cached_input_tokens")
+                 or usage.get("cache_read_input_tokens") or 0)
+    raw_input = int(usage.get("input_tokens") or 0)
+    new_input = max(0, raw_input - cached) if cli == "codex" else raw_input
+    return {
+        "new_input_tokens": new_input,
+        "cached_input_tokens": cached,
+        "cache_write_input_tokens": int(
+            usage.get("cache_write_input_tokens")
+            or usage.get("cache_creation_input_tokens") or 0),
+        "output_tokens": int(usage.get("output_tokens") or 0),
+        "reasoning_output_tokens": int(usage.get("reasoning_output_tokens") or 0),
+        "cost_usd": float(usage.get("total_cost_usd") or 0),
+    }
 
 
 def suggestions(stats: RunsStats, min_attempts: int = 5) -> list[str]:

@@ -29,6 +29,14 @@ order of magnitude more later.
 - Every task: id, title, profile, acceptance criteria (subset of the spec's,
   verbatim), predicted file scope, reviewer checklist (the specific claims a
   reviewer should attack), dependencies.
+- Every task also declares `risk_tags`, `review_lenses`,
+  `external_dependencies`, an optional human `checkpoint` reason, and
+  `parallel_safe`. Use risk tags such as security, migration, api, ui,
+  architecture, and external. Set a checkpoint before credential-dependent,
+  destructive, schema-changing, or security-sensitive boundaries.
+- Independent tasks should be parallel-safe only when their predicted file
+  scopes do not overlap. Integration/wiring tasks must be explicit; components
+  that are merely created but never connected do not satisfy the plan.
 - **Every criterion maps to at least one named planned test** — write the test
   name next to the criterion. If you cannot name the test, the criterion is not
   testable: rewrite it.

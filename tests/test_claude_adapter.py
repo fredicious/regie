@@ -1,7 +1,7 @@
 import json
 
 from regie.agents.base import AgentRequest, get_adapter
-from regie.models import Binding, Budgets
+from regie.models import Binding, Budgets, TokenPolicy
 
 
 def _req(tmp_path, schema=None):
@@ -23,9 +23,12 @@ def test_build_command_flags(tmp_path):
     assert cmd[:3] == ["claude", "-p", "do the task"]
     assert "--verbose" in cmd  # required by stream-json in -p mode
     for flag, val in (("--output-format", "stream-json"), ("--max-turns", "7"),
-                      ("--model", "opus"), ("--permission-mode", "acceptEdits")):
+                      ("--model", "opus"), ("--permission-mode", "acceptEdits"),
+                      ("--effort", "medium")):
         assert val == cmd[cmd.index(flag) + 1]
     assert "--json-schema" not in cmd and "--bare" not in cmd
+    assert "--exclude-dynamic-system-prompt-sections" in cmd
+    assert cmd[cmd.index("--tools") + 1] == "Glob,Read,Grep,Edit,Bash"
 
 
 def test_build_command_passes_schema_inline(tmp_path):
@@ -36,11 +39,31 @@ def test_build_command_passes_schema_inline(tmp_path):
     assert json.loads(arg) == {"type": "object"}
 
 
+def test_build_command_keeps_stable_instructions_out_of_dynamic_prompt(tmp_path):
+    req = _req(tmp_path)
+    req.instructions = "stable role"
+    cmd = get_adapter("claude").build_command(req)
+    assert cmd[2] == "do the task"
+    assert cmd[cmd.index("--append-system-prompt") + 1] == "stable role"
+
+
 def test_parse_done_with_usage_and_noise(tmp_path):
     out = "some log noise\n" + _doc()
     r = get_adapter("claude").parse(out, 0)
     assert r.outcome == "done" and r.turns == 3
     assert r.usage["total_cost_usd"] == 0.12 and r.text == "done the thing"
+    assert r.metrics.new_input_tokens == 10 and r.metrics.output_tokens == 5
+
+
+def test_read_only_policy_scopes_claude_tools(tmp_path):
+    req = _req(tmp_path)
+    req.token_policy = TokenPolicy(
+        sandbox="read-only", tools=["list", "read", "search"], effort="low")
+    cmd = get_adapter("claude").build_command(req)
+    assert cmd[cmd.index("--tools") + 1] == "Glob,Read,Grep"
+    assert cmd[cmd.index("--effort") + 1] == "low"
+    assert cmd[cmd.index("--permission-mode") + 1] == "plan"
+    assert cmd[cmd.index("--disallowedTools") + 1] == "Edit,Write,NotebookEdit"
 
 
 def test_parse_structured_result(tmp_path):
@@ -57,6 +80,22 @@ def test_parse_quota_from_api_error_status():
 def test_parse_quota_from_terminal_reason():
     r = get_adapter("claude").parse(_doc(terminal_reason="usage_limit_reached"), 0)
     assert r.outcome == "quota"
+
+
+def test_parse_quota_preserves_reset_from_terminal_reason():
+    r = get_adapter("claude").parse(
+        _doc(terminal_reason=(
+            "weekly usage limit reached; resets 2026-08-18T09:30:00+02:00")), 0)
+    assert r.outcome == "quota" and r.quota_kind == "weekly"
+    assert r.quota_reset_at == "2026-08-18T07:30:00+00:00"
+    assert "resets" in r.text
+
+
+def test_parse_exact_five_hour_limit_message():
+    r = get_adapter("claude").parse(
+        _doc(is_error=True, result="5-hour limit reached - resets at 3:00 PM"), 1)
+    assert r.outcome == "quota" and r.quota_kind == "session"
+    assert r.quota_reset_at is not None
 
 
 def test_parse_blocked_line():

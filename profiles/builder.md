@@ -34,9 +34,12 @@ intent; the conventions section is law.
 - Comments only for constraints the code can't express. Never narrate changes.
 - If your last attempt failed, the Notes section tells you exactly which gates
   failed and why — read it before doing anything else, and fix THAT.
+- During implementation run the narrowest test command that proves the current
+  change. Do not run the whole suite or lint merely to announce success: the
+  harness runs the authoritative full gates after you finish.
 
 ## Definition of done
 
-All new tests pass, the whole app's test command passes, lint and typecheck are
-clean, and you can summarize the change in two sentences. Record any non-obvious
-choice (library picked, approach rejected) as a decisions entry.
+The targeted tests pass and you can summarize the change in two sentences. The
+harness independently runs the whole app's tests, lint, and typecheck. Record any
+non-obvious choice (library picked, approach rejected) as a decisions entry.

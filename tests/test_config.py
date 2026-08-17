@@ -41,7 +41,9 @@ def _profiles_dir_with(tmp_path, yaml_body, dirname="profiles"):
 def test_loads_commands_globs_and_profiles(tmp_path):
     cfg = load_config(_repo_with(tmp_path, GOOD_TOML), PROFILES)
     assert cfg.commands["test"] == "pytest -q"
-    assert set(cfg.profiles) == {"planner", "test-writer", "builder", "reviewer", "debugger"}
+    assert {"planner", "test-writer", "builder", "reviewer", "debugger"} <= set(cfg.profiles)
+    assert {"security-reviewer", "migration-reviewer", "api-reviewer",
+            "ui-reviewer", "architecture-reviewer"} <= set(cfg.profiles)
     # Builder binds claude while the codex CLI is not installed on this
     # machine; the assertion checks the yaml loads, not a fixed vendor.
     assert cfg.profiles["builder"].primary.cli in ("claude", "codex")
@@ -145,8 +147,7 @@ def test_shipped_profiles_are_migrated(tmp_path):
     quota hit can actually escape the starved provider — and vice versa.
     """
     cfg = load_config(_repo_with(tmp_path, GOOD_TOML), PROFILES)
-    assert set(cfg.profiles) == {"planner", "test-writer", "builder",
-                                 "reviewer", "debugger"}
+    assert {"planner", "test-writer", "builder", "reviewer", "debugger"} <= set(cfg.profiles)
     for name, prof in cfg.profiles.items():
         assert len(prof.bindings) >= 2, f"{name} has no escalation rung"
         vendors = {b.cli for b in prof.bindings}

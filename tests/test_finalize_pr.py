@@ -79,6 +79,7 @@ def _mk_task_commits(wt):
 def _pr_wt_run(regie_home, fixture_repo, tmp_path):
     (fixture_repo / "regie.toml").write_text(
         'test_globs = ["tests/**"]\n'
+        '[workflow]\nreflection = false\n'
         '[commands]\ntest = "true"\nlint = "true"\n')
     base = fetch_base_sha(fixture_repo, "main")
     wt = create_run_worktree(fixture_repo, "regie/rp", base, tmp_path / "wtp")
@@ -150,10 +151,6 @@ exit 1
     monkeypatch.setenv("PATH", f"{gh.parent}:{os.environ['PATH']}")
 
 
-SCRIBE_OK = {"result": {"outcome": "done", "structured": {
-    "commit_messages": ["feat(t1): task one", "feat(t2): task two"],
-    "pr_title": "Scribe title", "pr_body": "Scribe body text"}}}
-SCRIBE_BAD = {"result": {"outcome": "error"}}
 DEBUG_FIX_OK = {"result": {"outcome": "done"}, "writes": {"src/a.py": "A = 2\n"}}
 DEBUG_BLOCKED = {"result": {"outcome": "blocked", "blocked_question": "cannot repro"}}
 DEBUG_QUOTA = {"result": {"outcome": "quota"}}
@@ -170,7 +167,6 @@ def _fast_ci(monkeypatch):
 def test_pr_stage_green_path(regie_home, fixture_repo, remote_repo, tmp_path,
                              fake_profiles, monkeypatch):
     rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
-    _agent_queue(monkeypatch, wt, [SCRIBE_OK])
     _stub_gh(tmp_path, monkeypatch, ["SUCCESS"])
     minor = json.dumps([{"severity": "minor", "title": "nit", "detail": "consider renaming"}])
     (rd.task_dir("T1") / "minor-findings.json").write_text(minor)
@@ -199,10 +195,9 @@ def test_pr_stage_green_path(regie_home, fixture_repo, remote_repo, tmp_path,
                        "tests/test_b.py", "specs/rp.md"}
 
 
-def test_pr_stage_scribe_failure_falls_back(regie_home, fixture_repo, remote_repo,
-                                            tmp_path, fake_profiles, monkeypatch):
+def test_pr_stage_uses_deterministic_pr_copy(regie_home, fixture_repo, remote_repo,
+                                             tmp_path, fake_profiles, monkeypatch):
     rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
-    _agent_queue(monkeypatch, wt, [SCRIBE_BAD])
     _stub_gh(tmp_path, monkeypatch, ["SUCCESS"])
 
     cfg = load_config(fixture_repo, fake_profiles)
@@ -216,7 +211,7 @@ def test_pr_stage_scribe_failure_falls_back(regie_home, fixture_repo, remote_rep
 def test_pr_stage_red_then_green_one_debugger_round(regie_home, fixture_repo, remote_repo,
                                                     tmp_path, fake_profiles, monkeypatch):
     rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
-    _agent_queue(monkeypatch, wt, [SCRIBE_OK, DEBUG_FIX_OK, REVIEW_CLEAN])
+    _agent_queue(monkeypatch, wt, [DEBUG_FIX_OK, REVIEW_CLEAN])
     _stub_gh(tmp_path, monkeypatch, ["FAILURE", "SUCCESS"])
 
     cfg = load_config(fixture_repo, fake_profiles)
@@ -237,7 +232,7 @@ def test_pr_stage_red_then_green_one_debugger_round(regie_home, fixture_repo, re
 def test_pr_stage_red_persists_halts_after_max_rounds(regie_home, fixture_repo, remote_repo,
                                                        tmp_path, fake_profiles, monkeypatch):
     rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
-    _agent_queue(monkeypatch, wt, [SCRIBE_OK, DEBUG_BLOCKED, DEBUG_BLOCKED])
+    _agent_queue(monkeypatch, wt, [DEBUG_BLOCKED, DEBUG_BLOCKED])
     _stub_gh(tmp_path, monkeypatch, ["FAILURE", "FAILURE", "FAILURE"])
 
     cfg = load_config(fixture_repo, fake_profiles)
@@ -281,24 +276,35 @@ def test_debugger_round_review_rejection_rolls_back_fix_commit(regie_home, fixtu
     assert git(wt, "status", "--porcelain").strip() == ""
 
 
-def test_quota_during_debugger_round_halts_immediately(regie_home, fixture_repo, remote_repo,
-                                                         tmp_path, fake_profiles, monkeypatch):
-    """Quota on the debugger's own dispatch must halt the run immediately
-    rather than counting a round failure and looping to another red-CI
-    check. The canned queue holds exactly one debug-stage entry (no
-    reviewer entry) -- if pr_stage tried to dispatch past the quota (a
-    second debug round, or a reviewer call), the queue would underflow and
-    raise IndexError, so reaching the assertions below already proves
-    exactly one debug dispatch happened."""
+def test_quota_across_debugger_providers_halts_immediately(
+        regie_home, fixture_repo, remote_repo, tmp_path, fake_profiles, monkeypatch):
+    """Quota failover may try each configured debugger provider once, but
+    exhausting the ladder must halt before another CI/debug round or review."""
     rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
-    _agent_queue(monkeypatch, wt, [SCRIBE_OK, DEBUG_QUOTA])
+    _agent_queue(monkeypatch, wt, [DEBUG_QUOTA, DEBUG_QUOTA])
     _stub_gh(tmp_path, monkeypatch, ["FAILURE"])
 
     cfg = load_config(fixture_repo, fake_profiles)
     pr_stage(rd, run, cfg, wt)
 
     assert run.stage == "halted"
-    assert run.halt_reason == "quota exhausted during debugger round 1"
+    assert run.halt_reason == "quota exhausted across debugger providers in round 1"
+
+
+def test_debugger_quota_fails_over_to_next_binding(
+        regie_home, fixture_repo, remote_repo, tmp_path, fake_profiles, monkeypatch):
+    rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
+    _agent_queue(monkeypatch, wt, [
+        DEBUG_QUOTA,
+        {"result": {"outcome": "done"}, "writes": {"src/a.py": "A = 2\n"}},
+        {"result": {"outcome": "done", "structured": {"findings": []}}},
+    ])
+    cfg = load_config(fixture_repo, fake_profiles)
+
+    ok = pipeline._debugger_round(rd, run, cfg, wt, 1, "failure detail")
+
+    assert ok is True
+    assert git(wt, "show", "HEAD:src/a.py").strip() == "A = 2"
 
 
 def test_pr_stage_no_groups_halts(regie_home, fixture_repo, remote_repo, tmp_path,
@@ -319,7 +325,6 @@ def test_pr_stage_no_groups_halts(regie_home, fixture_repo, remote_repo, tmp_pat
 def test_pr_stage_reentry_when_pushed_skips_rebuild(regie_home, fixture_repo, remote_repo,
                                                      tmp_path, fake_profiles, monkeypatch):
     rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
-    _agent_queue(monkeypatch, wt, [SCRIBE_OK])
     _stub_gh(tmp_path, monkeypatch, ["SUCCESS"])
     cfg = load_config(fixture_repo, fake_profiles)
 
@@ -387,7 +392,6 @@ def test_pr_stage_commits_spec_into_repo(regie_home, fixture_repo, remote_repo,
     rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
     (rd.path / "spec").mkdir(exist_ok=True)
     (rd.path / "spec" / "spec.md").write_text("# Spec: the feature\ndetails")
-    _agent_queue(monkeypatch, wt, [SCRIBE_OK])
     _stub_gh(tmp_path, monkeypatch, ["SUCCESS"])
     cfg = load_config(fixture_repo, fake_profiles)
     pr_stage(rd, run, cfg, wt)

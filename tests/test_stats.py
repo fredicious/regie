@@ -62,3 +62,24 @@ def test_stats_cli_renders_table_and_suggestions(regie_home):
     assert result.exit_code == 0
     assert "claude:sonnet" in result.output and "build" in result.output
     assert "suggestions" in result.output.lower()
+
+
+def test_stats_cli_renders_normalized_tokens(regie_home):
+    from typer.testing import CliRunner
+
+    from regie.cli import app
+    _run_with_attempts(regie_home, "r1", [("sonnet", "done", 2)])
+    rd = RunDir.open(regie_home, "r1")
+    run = rd.read_state()
+    attempt = run.tasks["T1"].attempts["build"][0]
+    attempt.metrics.new_input_tokens = 100
+    attempt.metrics.cached_input_tokens = 80
+    attempt.metrics.output_tokens = 20
+    attempt.metrics.tool_output_bytes = 1_000_000
+    rd.write_state(run)
+
+    result = CliRunner().invoke(app, ["stats", "--tokens"])
+    assert result.exit_code == 0
+    assert "token usage" in result.output and "tool MB" in result.output
+    assert "done/MTok" in result.output
+    assert "100" in result.output and "1.00" in result.output

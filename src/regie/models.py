@@ -17,6 +17,38 @@ class Binding(BaseModel, frozen=True):
     auth: str = "subscription"
 
 
+class TokenPolicy(BaseModel):
+    """Per-profile controls that bound model work without weakening gates."""
+
+    effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "medium"
+    tools: list[Literal["list", "read", "search", "patch", "shell"]] = Field(
+        default_factory=lambda: ["list", "read", "search", "patch", "shell"])
+    sandbox: Literal["read-only", "workspace-write"] = "workspace-write"
+    context_chars: int = Field(default=16_000, ge=2_000, le=100_000)
+    tool_result_chars: int = Field(default=12_000, ge=1_000, le=100_000)
+    max_findings: int = Field(default=8, ge=1, le=50)
+    max_finding_chars: int = Field(default=1_200, ge=100, le=10_000)
+    cache_dynamic_system_sections: bool = False
+
+
+class UsageMetrics(BaseModel):
+    """Provider-neutral token telemetry; raw provider usage is retained too."""
+
+    new_input_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_output_tokens: int = 0
+    tool_output_bytes: int = 0
+    cost_usd: float = 0.0
+
+    @property
+    def total_tokens(self) -> int:
+        # reasoning_output_tokens is normally a subset of output_tokens.
+        return (self.new_input_tokens + self.cached_input_tokens
+                + self.cache_write_input_tokens + self.output_tokens)
+
+
 class Budgets(BaseModel):
     turns: int = 40
     wall_minutes: int = 30
@@ -37,6 +69,50 @@ class Finding(BaseModel):
     file: str | None = None
 
 
+class CriterionEvidence(BaseModel):
+    """A reviewer's explicit verdict for one acceptance criterion."""
+
+    criterion: str
+    passed: bool
+    evidence: str
+    file: str | None = None
+    line: int | None = Field(default=None, ge=1)
+
+
+class PlanReview(BaseModel):
+    lens: str
+    verdict: Literal["pass", "fail"]
+    evidence: list[str] = Field(default_factory=list)
+    findings: list[Finding] = Field(default_factory=list)
+
+
+class CheckpointState(BaseModel):
+    task_id: str
+    reason: str
+    status: Literal["pending", "approved", "rejected"] = "pending"
+    decided_at: str | None = None
+
+
+class PRState(BaseModel):
+    status: Literal[
+        "not-created", "monitoring", "fixing", "waiting-review",
+        "waiting-human", "ready", "merged", "closed",
+    ] = "not-created"
+    ci: Literal["unknown", "pending", "green", "red"] = "unknown"
+    review_decision: str = ""
+    unresolved_threads: int = 0
+    last_comment_id: str = ""
+    debug_rounds: int = 0
+    updated_at: str | None = None
+
+
+class ChildRun(BaseModel):
+    run_id: str
+    repo: str
+    relation: str = "child"
+    status: Literal["pending", "running", "done", "halted"] = "pending"
+
+
 class Attempt(BaseModel):
     binding: Binding
     prompt_hash: str = ""
@@ -44,7 +120,11 @@ class Attempt(BaseModel):
     blocked_question: str | None = None
     gate_results: list[GateResult] = Field(default_factory=list)
     usage: dict = Field(default_factory=dict)
+    metrics: UsageMetrics = Field(default_factory=UsageMetrics)
     turns: int = 0
+    failure_kind: str | None = None
+    failure_signature: str | None = None
+    made_progress: bool = False
 
 
 class TaskSpec(BaseModel):
@@ -56,6 +136,11 @@ class TaskSpec(BaseModel):
     checklist: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
     planned_tests: list[str] = Field(default_factory=list)
+    risk_tags: list[str] = Field(default_factory=list)
+    review_lenses: list[str] = Field(default_factory=list)
+    external_dependencies: list[str] = Field(default_factory=list)
+    checkpoint: str | None = None
+    parallel_safe: bool = True
     # Upgrade-only routing hint from the planner: "hard" starts the stage
     # ladders at the profile's strongest rung. There is deliberately no
     # "trivial" downgrade — a wrong "hard" wastes a little quota, a wrong
@@ -75,10 +160,17 @@ class TaskState(BaseModel):
     stage: TaskStage = "test"
     status: Literal["pending", "running", "done", "blocked", "failed"] = "pending"
     attempts: dict[str, list[Attempt]] = Field(default_factory=_empty_attempts)
+    specialist_attempts: dict[str, list[Attempt]] = Field(default_factory=dict)
+    criterion_evidence: list[CriterionEvidence] = Field(default_factory=list)
     escaped: bool = False
+    start_sha: str = ""
 
 
-RunStage = Literal["intake", "plan", "approve", "tasks", "finalize", "pr", "done", "halted"]
+RunStage = Literal[
+    "intake", "research", "plan", "approve", "tasks", "checkpoint",
+    "finalize", "pr", "reflect", "done", "halted",
+]
+WorkflowTier = Literal["auto", "fast", "standard", "critical"]
 
 
 class RunState(BaseModel):
@@ -91,10 +183,19 @@ class RunState(BaseModel):
     pr_url: str = ""
     pushed: bool = False
     autonomous: bool = False
+    workflow: WorkflowTier = "auto"
     stage: RunStage = "intake"
     tasks: dict[str, TaskState] = Field(default_factory=dict)
     halt_reason: str | None = None
     planner_attempts: list[Attempt] = Field(default_factory=list)
+    plan_reviews: list[PlanReview] = Field(default_factory=list)
+    final_review_attempts: list[Attempt] = Field(default_factory=list)
+    checkpoints: list[CheckpointState] = Field(default_factory=list)
+    research_path: str = ""
+    knowledge_snapshot: list[str] = Field(default_factory=list)
+    pr_state: PRState = Field(default_factory=PRState)
+    parent_id: str | None = None
+    children: list[ChildRun] = Field(default_factory=list)
 
     def ordered_task_ids(self) -> list[str]:
         graph = {tid: sorted(t.spec.depends_on) for tid, t in sorted(self.tasks.items())}
@@ -109,3 +210,18 @@ class RunState(BaseModel):
             return order
         except _GraphCycleError as exc:
             raise CycleError(str(exc)) from exc
+
+    def task_layers(self) -> list[list[str]]:
+        """Stable topological layers, used as deterministic fan-out batches."""
+        graph = {tid: set(t.spec.depends_on) for tid, t in sorted(self.tasks.items())}
+        remaining = set(graph)
+        completed: set[str] = set()
+        layers: list[list[str]] = []
+        while remaining:
+            ready = sorted(tid for tid in remaining if graph[tid] <= completed)
+            if not ready:
+                raise CycleError("task DAG has a cycle")
+            layers.append(ready)
+            remaining.difference_update(ready)
+            completed.update(ready)
+        return layers

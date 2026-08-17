@@ -5,14 +5,17 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from regie.models import Binding, Budgets
+from regie.models import Binding, Budgets, TokenPolicy, UsageMetrics
 
 
 class AgentRequest(BaseModel):
     prompt: str
+    instructions: str = ""
     cwd: Path
     binding: Binding
     budgets: Budgets
+    token_policy: TokenPolicy = Field(default_factory=TokenPolicy)
+    allowed_commands: dict[str, str] = Field(default_factory=dict)
     output_schema: dict | None = None
 
 
@@ -21,8 +24,14 @@ class AgentResult(BaseModel):
     text: str = ""
     structured: dict | None = None
     usage: dict = Field(default_factory=dict)
+    metrics: UsageMetrics = Field(default_factory=UsageMetrics)
     turns: int = 0
     blocked_question: str | None = None
+    quota_kind: Literal["session", "weekly", "rate", "unknown"] | None = None
+    quota_scope: Literal["provider", "model"] | None = None
+    quota_reset_at: str | None = None
+    quota_reason: str | None = None
+    quota_synthetic: bool = False
 
 
 class AgentAdapter(Protocol):

@@ -20,20 +20,23 @@ from regie.gitops import (
     head_sha,
     remove_run_worktree,
 )
-from regie.models import RunState, TaskSpec, TaskState
+from regie.models import ChildRun, RunState, TaskSpec, TaskState
 from regie.notify import notify
 from regie.pipeline import (
     finalize_stage,
     plan_stage,
     pr_stage,
     reconcile,
+    reflect_stage,
     run_tasks_stage,
 )
+from regie.provider_health import ProviderHealthStore
 from regie.rundir import RunDir, RunLocked
 
 app = typer.Typer(add_completion=False)
 
 _DEFAULT_PROFILES = Path(__file__).parent.parent.parent / "profiles"
+_DEFAULT_REPO = Path.cwd()
 
 
 def _home() -> Path:
@@ -115,7 +118,9 @@ def _open_rundir(home: Path, run_id: str) -> RunDir:
 
 
 def _print_approve_hint(rundir: RunDir, state: RunState) -> None:
-    typer.echo(f"spec ready: {rundir.path / 'spec' / 'spec.md'}")
+    artifact = (rundir.path / "checkpoint.md" if state.stage == "checkpoint"
+                else rundir.path / "spec" / "spec.md")
+    typer.echo(f"{'checkpoint' if state.stage == 'checkpoint' else 'spec'} ready: {artifact}")
     typer.echo(f"run `regie approve {state.id}` to continue")
 
 
@@ -137,6 +142,8 @@ def _advance(rundir: RunDir, state: RunState, cfg: RegieConfig, worktree: Path) 
     if state.stage == "halted":
         _finish(state)
         return
+    if state.stage == "reflect":
+        reflect_stage(rundir, state, cfg)
     if state.stage == "done":
         typer.echo(f"PR ready: {state.pr_url}")
         notify("regie PR ready", f"{state.id}: {state.pr_url}")
@@ -160,7 +167,9 @@ def _after_plan_stage(rundir: RunDir, state: RunState) -> bool:
 def run(brief: Path, repo: Annotated[Path, typer.Option()],
         profiles: Annotated[Path, typer.Option()] = _DEFAULT_PROFILES,
         autonomous: Annotated[bool, typer.Option("--autonomous")] = False,
-        tasks_file: Annotated[Path | None, typer.Option("--tasks-file")] = None):
+        tasks_file: Annotated[Path | None, typer.Option("--tasks-file")] = None,
+        workflow: Annotated[str, typer.Option("--workflow")] = "auto",
+        parent: Annotated[str | None, typer.Option("--parent")] = None):
     if not brief.exists():
         typer.echo(f"brief not found: {brief}", err=True)
         raise typer.Exit(2)
@@ -183,7 +192,14 @@ def run(brief: Path, repo: Annotated[Path, typer.Option()],
 
     state = RunState(id=run_id, target_repo=str(repo), branch=f"regie/{run_id}",
                      base_sha=base, base_branch=cfg.base_branch, worktree_path=str(wt),
-                     autonomous=autonomous, stage="plan")
+                     autonomous=autonomous, stage="plan", workflow=workflow,
+                     parent_id=parent)
+    if parent:
+        parent_dir = _open_rundir(home, parent)
+        parent_state = parent_dir.read_state()
+        parent_state.children.append(ChildRun(
+            run_id=run_id, repo=str(repo), status="running"))
+        parent_dir.write_state(parent_state)
 
     if tasks_file is not None:
         specs = [TaskSpec(**t) for t in json.loads(tasks_file.read_text())]
@@ -258,7 +274,7 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
         if _after_plan_stage(rundir, state):
             return
 
-    if state.stage == "approve":
+    if state.stage in {"approve", "checkpoint"}:
         _print_approve_hint(rundir, state)
         return
 
@@ -269,9 +285,16 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
 def approve(run_id: str):
     rundir = _open_rundir(_home(), run_id)
     state = rundir.read_state()
-    if state.stage != "approve":
+    if state.stage not in {"approve", "checkpoint"}:
         typer.echo(f"run {run_id} is not awaiting approval (stage={state.stage})", err=True)
         raise typer.Exit(2)
+    if state.stage == "checkpoint":
+        checkpoint = next((item for item in state.checkpoints
+                           if item.status == "pending"
+                           and state.tasks[item.task_id].status == "done"), None)
+        if checkpoint:
+            checkpoint.status = "approved"
+            checkpoint.decided_at = datetime.now(UTC).isoformat()
     state.stage = "tasks"
     rundir.write_state(state)
     typer.echo(f"approved — run `regie resume {run_id} --repo <path>`")
@@ -286,6 +309,119 @@ def status(run_id: str):
         t = state.tasks[tid]
         counts = "/".join(str(len(t.attempts[s])) for s in ("test", "build", "review"))
         typer.echo(f"  {tid}  {t.status:8s} stage={t.stage:6s} attempts(t/b/r)={counts}")
+    for child in state.children:
+        typer.echo(f"  child {child.run_id}  {child.status:8s} repo={child.repo}")
+
+
+@app.command(name="init")
+def init_(repo: Annotated[Path, typer.Option()] = _DEFAULT_REPO,
+          force: Annotated[bool, typer.Option("--force")] = False):
+    """Detect project tooling and create a verified starter regie.toml."""
+    from regie.onboarding import detect, render_config
+    target = repo / "regie.toml"
+    if target.exists() and not force:
+        typer.echo(f"{target} already exists; use --force to replace it", err=True)
+        raise typer.Exit(2)
+    detection = detect(repo)
+    target.write_text(render_config(detection))
+    typer.echo(f"created {target}")
+    typer.echo(f"detected language={detection.language} test={detection.test}")
+
+
+@app.command()
+def providers(profiles: Annotated[Path, typer.Option()] = _DEFAULT_PROFILES):
+    """Report adapter readiness for every configured binding."""
+    from regie.config import _load_profiles
+    from regie.providers import health
+    errors: list[str] = []
+    loaded = _load_profiles(profiles, errors)
+    if errors:
+        typer.echo("; ".join(errors), err=True)
+        raise typer.Exit(2)
+    seen = set()
+    for profile in loaded.values():
+        for binding in profile.bindings:
+            key = (binding.cli, binding.model)
+            if key in seen:
+                continue
+            seen.add(key)
+            result = health(binding)
+            typer.echo(f"{result.status:11s} {binding.cli}:{binding.model} — {result.detail}")
+
+
+@app.command("knowledge-approve")
+def knowledge_approve(run_id: str):
+    """Promote a run's reviewed learning candidates into project knowledge."""
+    from regie.knowledge import approve_candidates
+    rundir = _open_rundir(_home(), run_id)
+    state = rundir.read_state()
+    count = approve_candidates(rundir, Path(state.target_repo))
+    typer.echo(f"approved {count} new knowledge entr{'y' if count == 1 else 'ies'}")
+
+
+@app.command()
+def handoff(run_id: str):
+    """Render a human-readable continuation packet from authoritative state."""
+    rundir = _open_rundir(_home(), run_id)
+    state = rundir.read_state()
+    lines = [f"# Handoff: {state.id}", "", "## Objective",
+             (rundir.path / "brief.md").read_text().strip(), "",
+             "## Current status", f"- Stage: {state.stage}",
+             f"- Halt: {state.halt_reason or 'none'}", f"- PR: {state.pr_url or 'none'}",
+             "", "## Tasks"]
+    for task_id in state.ordered_task_ids():
+        task = state.tasks[task_id]
+        lines.append(f"- {task_id}: {task.status} / {task.stage} — {task.spec.title}")
+    lines += ["", "## How to verify"]
+    try:
+        cfg = load_config(Path(state.target_repo), _DEFAULT_PROFILES)
+        lines.extend(f"- `{name}`: `{command}`" for name, command in cfg.commands.items())
+    except Exception:  # noqa: BLE001 - handoff remains useful with stale config
+        lines.append("- Read the target repository's regie.toml")
+    lines += ["", "## Next action",
+              (f"Resolve: {state.halt_reason}" if state.stage == "halted"
+               else f"Resume stage `{state.stage}` with `regie resume {run_id} --repo <path>`")]
+    path = rundir.path / "handoff.md"
+    path.write_text("\n".join(lines) + "\n")
+    typer.echo(path)
+
+
+@app.command("provider-status")
+def provider_status():
+    """Show provider accounts currently held open by the quota circuit breaker."""
+    entries = ProviderHealthStore(_home()).entries()
+    if not entries:
+        typer.echo("all providers available")
+        return
+    now = datetime.now(UTC)
+    for key, entry in sorted(entries.items()):
+        raw_reset = entry.get("unavailable_until")
+        try:
+            reset = datetime.fromisoformat(str(raw_reset))
+        except ValueError:
+            reset = now
+        if reset.tzinfo is None:
+            reset = reset.replace(tzinfo=UTC)
+        state = "unavailable" if reset > now else "probe-ready"
+        if entry.get("probe_until"):
+            try:
+                probe = datetime.fromisoformat(str(entry["probe_until"]))
+                if probe.tzinfo is None:
+                    probe = probe.replace(tzinfo=UTC)
+                if probe > now:
+                    state = "probing"
+            except ValueError:
+                pass
+        typer.echo(f"{key:32s} {state:11s} {entry.get('kind', 'unknown'):8s} "
+                   f"until {raw_reset or '?'}")
+
+
+@app.command("provider-reset")
+def provider_reset(cli: str,
+                   auth: Annotated[str | None, typer.Option()] = None):
+    """Manually clear a provider circuit after verifying that access recovered."""
+    count = ProviderHealthStore(_home()).clear(cli=cli, auth=auth)
+    typer.echo(f"cleared {count} provider circuit(s)")
 
 
 @app.command()
@@ -312,18 +448,30 @@ def preflight(repo: Annotated[Path, typer.Option()],
 
 
 @app.command()
-def stats():
+def stats(tokens: Annotated[bool, typer.Option("--tokens")]=False):
     """Cross-run binding telemetry: outcomes per stage×binding + suggestions."""
     from regie.stats import collect, suggestions
     data = collect(_home())
     typer.echo(f"{data.runs} run(s) analyzed\n")
-    typer.echo(f"{'stage':8s} {'binding':22s} {'att':>4s} {'done':>5s} "
+    typer.echo(f"{'stage':26s} {'binding':22s} {'att':>4s} {'done':>5s} "
                f"{'fail':>5s} {'quota':>5s} {'1st-ok':>7s} {'esc-ok':>7s} {'turns/att':>9s}")
     for (stage, key), b in sorted(data.by_binding.items()):
         first = f"{b.first_done}/{b.first_attempts}" if b.first_attempts else "-"
         avg = f"{b.turns / b.attempts:.0f}" if b.attempts else "-"
-        typer.echo(f"{stage:8s} {key:22s} {b.attempts:4d} {b.done:5d} "
+        typer.echo(f"{stage:26s} {key:22s} {b.attempts:4d} {b.done:5d} "
                    f"{b.failed:5d} {b.quota:5d} {first:>7s} {b.escalation_done:7d} {avg:>9s}")
+    if tokens:
+        typer.echo("\ntoken usage (provider-normalized):")
+        typer.echo(f"{'stage':26s} {'binding':22s} {'new-in':>10s} {'cached':>10s} "
+                   f"{'cache-w':>10s} {'output':>10s} {'reason':>10s} "
+                   f"{'tool MB':>9s} {'done/MTok':>10s} {'cost $':>9s}")
+        for (stage, key), b in sorted(data.by_binding.items()):
+            typer.echo(
+                f"{stage:26s} {key:22s} {b.new_input_tokens:10d} "
+                f"{b.cached_input_tokens:10d} {b.cache_write_input_tokens:10d} "
+                f"{b.output_tokens:10d} {b.reasoning_output_tokens:10d} "
+                f"{b.tool_output_bytes / 1_000_000:9.2f} "
+                f"{b.done_per_million_tokens:10.2f} {b.cost_usd:9.2f}")
     sugg = suggestions(data)
     typer.echo("\nsuggestions:")
     if sugg:

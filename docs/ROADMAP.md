@@ -11,11 +11,11 @@ session (see `docs/superpowers/specs/2026-07-29-agent-harness-v1-design.md`).
   agent transcript, full run history. Planned as the harness's own first
   assignment: write the brief, let the harness build it.
 
-## Moved out of v1 by the 2026-07-29 adversarial review
+## Reconsidered after the 2026-07-29 adversarial review
 
-- **Parallel task execution** — per-task worktrees, integration branch, file-scope
-  overlap serialization, merge handling. v1 is serial in one worktree; the task
-  DAG already exists, so parallelism is additive.
+- **Parallel task execution** — shipped 2026-08-17: dependency-layer fan-out,
+  task worktrees, predicted-scope overlap serialization, stable integration,
+  and conflict halts.
 - **Complexity-based routing** (`profile × complexity → binding`) — replaced in v1
   by the escalation ladder (evidence beats prediction).
 - **Automated `blocked`-question routing** — v1 halts and notifies instead of
@@ -76,25 +76,57 @@ Still open, worth briefs:
   builds → clean PR. Note: `gpt-5-codex` is rejected on ChatGPT auth; use the
   account's real model (e.g. `gpt-5.5`). Shipped.
 
+## Done 2026-08-14 — Token Governor
+
+- Provider-normalized token/cache/reasoning/tool-output/cost telemetry and
+  `regie stats --tokens`, including failed attempts.
+- Stage-specific progressive-disclosure context packets; full artifacts stay
+  on disk and are referenced instead of copied into every attempt.
+- Per-profile effort, tool, sandbox, context, tool-result, and review-output
+  policies for Claude, Codex, and direct API bindings.
+- Deterministic PR copy and narrow agent-side validation; authoritative gates
+  remain unchanged.
+- Risk-triggered security, migration, API, UI, and architecture reviewers.
+- Failure classification/signatures and immediate escalation after turn,
+  stall, or wall-budget deaths.
+- Optional dependency-free `openai-api` Responses adapter with bounded local
+  repository tools. Live account smoke test remains operator-owned.
+- Global, concurrency-safe quota circuits for Claude Code and Codex: reset-time
+  parsing, provider-wide cross-run failover, synthetic no-call skips, half-open
+  recovery probes, debugger/reviewer fallback, and operator status/reset CLI.
+
+## Done 2026-08-17 — adaptive orchestration expansion
+
+Materially inspired by [MetaSwarm](https://github.com/dsifry/metaswarm); see
+`docs/ACKNOWLEDGEMENTS.md`.
+
+- Deterministic repository research and selective external project knowledge.
+- Auto/fast/standard/critical workflow tiers with explicit cost circuits.
+- Mechanical plan preflight; independent feasibility, completeness, and
+  scope/alignment reviewers; selective security, UX, and architecture design
+  reviewers.
+- Task risk tags, external-dependency declarations, planned checkpoints, and
+  criterion-by-criterion review evidence.
+- Configurable exit-code gate plugins, including changed-path and tier triggers.
+- Parallel DAG layers in isolated worktrees with overlap serialization and
+  deterministic integration.
+- Final cross-task integration review, persistent PR lifecycle state, review
+  feedback fix rounds, reflection candidates, explicit knowledge promotion,
+  guided `regie init`, provider readiness reporting, and generated handoffs.
+- Parent/child run linkage as the durable foundation for recursive,
+  multi-repository orchestration.
+
 ## v2
 
-- **Provider failover on quota exhaustion** — profiles already model `fallback`
-  bindings; wire it: catch the CLI quota error, flip binding, `harness resume`.
-  Lets a run finish on provider B when provider A hits its session limit instead
-  of waiting for the window to reset.
 - **Local / OSS models** — third binding target via opencode/Ollama; slot exists
   in the profile schema. Candidate first use: trivial-complexity tasks and Red
   reviewers (cheap diversity).
-- **Drive modes** — config flag per run: `autonomous` (v1 default) vs
-  `checkpointed` (human gates at spec approval and/or pre-PR). Preference is
-  autonomous; the flag exists for higher-stakes changes and for other users.
+- **Policy-driven custom workflow compiler** — tiers and risk-selected stages
+  now ship; the remaining step is allowing projects to define arbitrary stage
+  graphs rather than the bounded built-in compiler.
 - **Separate Blue-team agent** — v1 folds triage into the reviewer's structured
   output; experiment with an independent triage agent (different model) and
   measure whether verdicts change.
-- **Per-project workflow selection** — the spec-er emits the workflow (stages,
-  parallelism, profiles) as data; the router executes it dumbly. The v1 pipeline
-  is already modeled as a DAG of stages to make this a config change, not a
-  rewrite.
 - **Per-app builder flavors** — the target monorepo is polyglot (FastAPI +
   Next.js + eval harness); builder/test-writer profiles may split into per-stack
   variants with tailored prompts and gates.

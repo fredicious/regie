@@ -2,3 +2,8 @@ bindings:
   - { cli: codex, model: gpt-5.6-terra, auth: subscription }  # right-sized tier for scoped work
   - { cli: claude, model: sonnet, auth: subscription }
 budgets: { turns: 60, wall_minutes: 30, stall_minutes: 8 }
+token_policy:
+  effort: medium
+  tools: [list, read, search, patch, shell]
+  sandbox: workspace-write
+  context_chars: 12000

@@ -9,7 +9,11 @@ Action = Literal["retry", "escalate", "halt"]
 
 def _index(attempts: list[Attempt]) -> int:
     quota = sum(1 for a in attempts if a.outcome == "quota")
-    other = len(attempts) - quota
+    # A killed budget/stall/wall attempt has already demonstrated that the
+    # current rung cannot finish within its envelope. Retrying it unchanged is
+    # pure spend, so it consumes both same-model chances and escalates once.
+    other = sum(2 if a.failure_kind in {"budget", "stall", "wall"} else 1
+                for a in attempts if a.outcome != "quota")
     return max(0, other - 1) + quota
 
 

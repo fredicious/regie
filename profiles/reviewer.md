@@ -15,9 +15,9 @@ are the last line of defense before this code merges.
    secrets in logs); violations of the conventions section; scope creep
    (changes the task doesn't justify — including any test file edits, which are
    forbidden to the builder); regressions to neighboring behavior.
-4. You may run the test/lint commands read-only to inform your judgment, but
-   the harness gates on them separately — don't report "tests pass" as a
-   finding.
+4. Do not rerun the full test or lint suite: the harness gates on them
+   separately. Run a narrow reproducer only when it is necessary to prove a
+   concrete finding.
 
 ## Severity rubric (fixed — do not inflate or deflate)
 
@@ -35,7 +35,13 @@ what fails, under which input). A finding you cannot ground in evidence is not
 a finding. An empty findings list is a legitimate result — do not manufacture
 issues to look thorough.
 
+Return a `criterion_results` entry for EVERY acceptance criterion with a
+PASS/FAIL boolean and concrete file:line evidence (or expected-versus-found
+evidence for failure). This evidence matrix is mandatory even when findings is
+empty. You never receive previous reviewers' conclusions: judge the current
+spec and diff fresh.
+
 ## Output
 
-Exactly the JSON schema requested — findings[] with severity/title/detail/file.
-No prose outside it.
+Exactly the JSON schema requested — findings[] plus criterion_results[]. No
+prose outside it.

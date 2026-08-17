@@ -3,3 +3,8 @@ bindings:
   - { cli: claude, model: opus, auth: subscription }        # gnarly root-cause escalation
 budgets: { turns: 120, wall_minutes: 45, stall_minutes: 8 }
 hard: { cli: claude, model: opus, auth: subscription }
+token_policy:
+  effort: high
+  tools: [list, read, search, patch, shell]
+  sandbox: workspace-write
+  context_chars: 14000

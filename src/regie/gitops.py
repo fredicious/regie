@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -186,3 +187,50 @@ def ci_status(worktree: Path) -> str:
     if all(p == "SUCCESS" for p in parts):
         return "green"
     return "pending"
+
+
+def pr_snapshot(worktree: Path) -> dict:
+    """Best-effort PR lifecycle state; CI remains independently authoritative."""
+    try:
+        raw = _tool(worktree, "gh", "pr", "view", "--json",
+                    "number,state,reviewDecision,mergeStateStatus,url,comments,reviews")
+        data = json.loads(raw)
+    except (GitError, json.JSONDecodeError):
+        return {}
+    data["unresolvedThreads"] = _unresolved_threads(worktree, data.get("number"))
+    comments = data.get("comments") or []
+    data["lastCommentId"] = str(comments[-1].get("id", "")) if comments else ""
+    return data
+
+
+def pr_feedback(worktree: Path) -> str:
+    snapshot = pr_snapshot(worktree)
+    parts = []
+    for review in snapshot.get("reviews") or []:
+        body = (review.get("body") or "").strip()
+        if body:
+            parts.append(f"Review ({review.get('state', 'unknown')}): {body}")
+    for comment in snapshot.get("comments") or []:
+        body = (comment.get("body") or "").strip()
+        if body:
+            parts.append(f"Comment: {body}")
+    return "\n\n".join(parts)[-8000:]
+
+
+def _unresolved_threads(worktree: Path, number: int | None) -> int:
+    if not number:
+        return 0
+    try:
+        owner_name = json.loads(_tool(
+            worktree, "gh", "repo", "view", "--json", "nameWithOwner"))["nameWithOwner"]
+        owner, name = owner_name.split("/", 1)
+        query = ("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,"
+                 "name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{"
+                 "isResolved}}}}}")
+        raw = _tool(worktree, "gh", "api", "graphql", "-f", f"query={query}",
+                    "-f", f"owner={owner}", "-f", f"name={name}",
+                    "-F", f"number={number}")
+        nodes = json.loads(raw)["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+        return sum(not node.get("isResolved", False) for node in nodes)
+    except (GitError, KeyError, ValueError, json.JSONDecodeError):
+        return 0

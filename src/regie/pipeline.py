@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -18,25 +21,46 @@ from regie.gitops import (
     ci_status,
     commit_all,
     create_pr,
+    create_run_worktree,
+    delete_branch,
     git,
     head_sha,
+    pr_feedback,
+    pr_snapshot,
     push_branch,
     rebuild_history,
+    remove_run_worktree,
     run_commit_groups,
 )
+from regie.knowledge import prime as prime_knowledge
+from regie.knowledge import propose_learnings
 from regie.ladder import next_action
 from regie.models import (
     Attempt,
     Binding,
+    CheckpointState,
+    CriterionEvidence,
     CycleError,
     Finding,
     GateResult,
+    PlanReview,
     RunState,
     TaskSpec,
     TaskState,
 )
 from regie.packets import render_packet, write_packet
+from regie.providers import task_cost, total_cost
+from regie.research import research_repository
 from regie.rundir import RunDir
+from regie.workflow import (
+    active_gate_plugins,
+    checkpoint_report,
+    infer_risks,
+    plan_preflight,
+    resolve_tier,
+    review_profiles,
+    scopes_overlap,
+)
 
 if TYPE_CHECKING:
     from regie.agents.base import AgentResult
@@ -45,17 +69,41 @@ if TYPE_CHECKING:
 # additionalProperties:false (invalid_json_schema, found live 2026-07-31 when
 # a quota skip-ahead handed a review to codex). Keep EVERY object level strict.
 FINDINGS_SCHEMA = {
-    "type": "object", "required": ["findings"], "additionalProperties": False,
-    "properties": {"findings": {"type": "array", "items": {
+    "type": "object", "required": ["findings", "criterion_results"],
+    "additionalProperties": False,
+    "properties": {"findings": {"type": "array", "maxItems": 8, "items": {
         "type": "object",
-        "required": ["severity", "title", "detail"],
+        "required": ["severity", "title", "detail", "file"],
         "additionalProperties": False,
         "properties": {
             "severity": {"type": "string", "enum": ["blocker", "major", "minor"]},
-            "title": {"type": "string"},
-            "detail": {"type": "string"},
+            "title": {"type": "string", "maxLength": 160},
+            "detail": {"type": "string", "maxLength": 1200},
             "file": {"type": ["string", "null"]},
-        }}}}}
+        }}}, "criterion_results": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["criterion", "passed", "evidence", "file", "line"],
+            "properties": {
+                "criterion": {"type": "string"}, "passed": {"type": "boolean"},
+                "evidence": {"type": "string"},
+                "file": {"type": ["string", "null"]},
+                "line": {"type": ["integer", "null"]},
+            }}}}}
+
+SPECIALIST_SCHEMA = {
+    "type": "object", "required": ["findings"], "additionalProperties": False,
+    "properties": {"findings": FINDINGS_SCHEMA["properties"]["findings"]},
+}
+
+PLAN_REVIEW_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["verdict", "evidence", "findings"],
+    "properties": {
+        "verdict": {"type": "string", "enum": ["pass", "fail"]},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "findings": SPECIALIST_SCHEMA["properties"]["findings"],
+    },
+}
 
 # Task items are FULLY specified (exact TaskSpec field names, no extras):
 # smoke-test finding — with a bare {"type": "array"} the model invents its own
@@ -68,9 +116,12 @@ PLAN_SCHEMA = {
     "additionalProperties": False,
     "properties": {
         "spec_markdown": {"type": "string"},
-        "tasks": {"type": "array", "items": {
+        "tasks": {"type": "array", "maxItems": 24, "items": {
             "type": "object",
-            "required": ["id", "title", "profile", "criteria", "planned_tests"],
+            "required": ["id", "title", "complexity", "profile", "criteria",
+                         "planned_tests", "file_scope", "checklist", "depends_on",
+                         "risk_tags", "review_lenses", "external_dependencies",
+                         "checkpoint", "parallel_safe"],
             "additionalProperties": False,
             "properties": {
                 "id": {"type": "string"}, "title": {"type": "string"},
@@ -78,6 +129,10 @@ PLAN_SCHEMA = {
                 "profile": {"type": "string"}, "criteria": _STR_ARRAY,
                 "planned_tests": _STR_ARRAY, "file_scope": _STR_ARRAY,
                 "checklist": _STR_ARRAY, "depends_on": _STR_ARRAY,
+                "risk_tags": _STR_ARRAY, "review_lenses": _STR_ARRAY,
+                "external_dependencies": _STR_ARRAY,
+                "checkpoint": {"type": ["string", "null"]},
+                "parallel_safe": {"type": "boolean"},
             }}}}}
 
 SCRIBE_SCHEMA = {"type": "object",
@@ -102,9 +157,19 @@ CI_WALL_MINUTES = 30
 
 @dataclass
 class PipelineContext:
-    spec_excerpt: str
-    decisions_path: Path
-    conventions: str
+    spec_excerpt: str = ""
+    spec_path: Path = Path()
+    decisions_path: Path = Path()
+    conventions: str = ""
+    convention_paths: list[Path] = field(default_factory=list)
+
+
+def _artifacts(ctx: PipelineContext) -> dict[str, str]:
+    artifacts = {"full spec": str(ctx.spec_path),
+                 "decisions": str(ctx.decisions_path)}
+    for path in ctx.convention_paths:
+        artifacts[f"repository rules ({path.name})"] = str(path)
+    return artifacts
 
 
 def _decisions(ctx: PipelineContext) -> str:
@@ -143,6 +208,48 @@ def _effective_bindings(profile: Profile, complexity: str) -> list[Binding]:
     return [hard] + [b for b in profile.bindings if b.cli != hard.cli]
 
 
+def _failure_signature(kind: str, text: str) -> str:
+    stable = re.sub(r"\b\d+(?:\.\d+)?\b", "#", text.lower())
+    stable = re.sub(r"/[^\s:]+", "<path>", stable)
+    return f"{kind}:{hashlib.sha256(stable[:4000].encode()).hexdigest()[:16]}"
+
+
+def _classify_dispatch_failure(text: str) -> str:
+    low = text.lower()
+    if "turn budget" in low or "max-turns" in low:
+        return "budget"
+    if "stall budget" in low:
+        return "stall"
+    if "wall budget" in low:
+        return "wall"
+    if "schema" in low or "json" in low:
+        return "contract"
+    return "dispatch"
+
+
+def _budget_reason(run: RunState, cfg: RegieConfig, task_id: str | None = None) -> str | None:
+    run_limit = cfg.workflow.max_run_usd
+    if run_limit and total_cost(run) >= run_limit:
+        return f"run cost budget exhausted (${total_cost(run):.2f}/${run_limit:.2f})"
+    if task_id is not None:
+        task_limit = cfg.workflow.max_task_usd
+        spent = task_cost(run.tasks[task_id])
+        if task_limit and spent >= task_limit:
+            return f"task {task_id} cost budget exhausted (${spent:.2f}/${task_limit:.2f})"
+    return None
+
+
+def _change_manifest(repo: Path, start_sha: str) -> str:
+    if not start_sha:
+        return ""
+    try:
+        names = git(repo, "diff", "--name-only", f"{start_sha}..HEAD")
+        stat = git(repo, "diff", "--stat", f"{start_sha}..HEAD")
+    except GitError:
+        return ""
+    return f"Changed files:\n{names or '(none)'}\n\nDiff stat:\n{stat or '(none)'}"
+
+
 def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
               profile: Profile, cfg: RegieConfig, repo: Path,
               ctx: PipelineContext, extra: str) -> tuple[Attempt, AgentResult]:
@@ -154,18 +261,33 @@ def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
     if attempts:
         _action, binding = next_action(attempts, ladder)
         # caller already checked for halt; retry keeps binding, escalate upgrades
-    packet = render_packet(task.spec, ctx.spec_excerpt, _decisions(ctx),
-                           ctx.conventions, extra=extra)
+    packet = render_packet(
+        task.spec, ctx.spec_excerpt, _decisions(ctx), ctx.conventions,
+        extra=extra, stage=stage, context_budget=profile.token_policy.context_chars,
+        artifacts=_artifacts(ctx),
+        change_manifest=_change_manifest(repo, task.start_sha) if stage == "review" else "")
     write_packet(rundir.task_dir(task_id), packet)
-    req = AgentRequest(prompt=profile.prompt_text() + "\n\n" + packet, cwd=repo,
+    schema = None
+    if stage == "review":
+        schema = json.loads(json.dumps(FINDINGS_SCHEMA))
+        schema["properties"]["findings"]["maxItems"] = profile.token_policy.max_findings
+        item = schema["properties"]["findings"]["items"]["properties"]
+        item["detail"]["maxLength"] = profile.token_policy.max_finding_chars
+    req = AgentRequest(prompt=packet, instructions=profile.prompt_text(), cwd=repo,
                        binding=binding, budgets=profile.budgets,
-                       output_schema=FINDINGS_SCHEMA if stage == "review" else None)
+                       token_policy=profile.token_policy,
+                       allowed_commands=(getattr(cfg, "commands", {})
+                                         if stage in ("test", "build") else {}),
+                       output_schema=schema)
     attempt = Attempt(binding=binding, prompt_hash=profile.prompt_hash())
     result = run_agent(rundir, task_id, stage, len(attempts) + 1, req)
     attempt.outcome = {"done": "done", "blocked": "blocked",
                        "quota": "quota"}.get(result.outcome, "failed")
     attempt.blocked_question = result.blocked_question
-    attempt.usage, attempt.turns = result.usage, result.turns
+    attempt.usage, attempt.metrics, attempt.turns = result.usage, result.metrics, result.turns
+    if attempt.outcome == "failed":
+        attempt.failure_kind = _classify_dispatch_failure(result.text)
+        attempt.failure_signature = _failure_signature(attempt.failure_kind, result.text)
     attempts.append(attempt)
     return attempt, result
 
@@ -199,6 +321,86 @@ def _should_halt(rundir: RunDir, run: RunState, task_id: str, stage: str,
     return False
 
 
+def _specialist_profiles(task: TaskSpec, repo: Path, start_sha: str,
+                         cfg: RegieConfig) -> list[str]:
+    """Deterministically activate expensive review expertise only on risk."""
+    try:
+        files = [p for p in git(repo, "diff", "--name-only", f"{start_sha}..HEAD").splitlines()
+                 if p]
+    except GitError:
+        files = []
+    evidence = " ".join([task.title, *task.criteria, *task.checklist,
+                         *task.risk_tags, *task.review_lenses,
+                         *task.external_dependencies, *files]).lower()
+    selected: list[str] = review_profiles(task, cfg)
+    triggers = {
+        "security-reviewer": ("auth", "permission", "secret", "token", "crypto",
+                              "sanitize", "injection", "password"),
+        "migration-reviewer": ("migration", "schema", ".sql", "database", "alembic"),
+        "api-reviewer": ("/api/", "endpoint", "route", "public api", "openapi", "graphql"),
+        "ui-reviewer": (".tsx", ".jsx", ".css", ".html", "accessibility", "frontend", " ui "),
+    }
+    for profile_name, needles in triggers.items():
+        if (profile_name in cfg.profiles and profile_name not in selected
+                and any(needle in evidence for needle in needles)):
+            selected.append(profile_name)
+    roots = {path.split("/", 1)[0] for path in files}
+    if ("architecture-reviewer" in cfg.profiles
+            and "architecture-reviewer" not in selected
+            and (len(files) >= 8 or len(roots) >= 3 or task.complexity == "hard")):
+        selected.append("architecture-reviewer")
+    return selected
+
+
+def _run_specialist_reviews(rundir: RunDir, run: RunState, task_id: str,
+                            cfg: RegieConfig, repo: Path,
+                            ctx: PipelineContext) -> tuple[list[Finding], str | None]:
+    task = run.tasks[task_id]
+    if not cfg.workflow.design_reviews or resolve_tier(run, cfg) == "fast":
+        return [], None
+    selected = _specialist_profiles(task.spec, repo, task.start_sha, cfg)
+    findings: list[Finding] = []
+    manifest = _change_manifest(repo, task.start_sha)
+    for name in selected:
+        profile = cfg.profiles[name]
+        attempts = task.specialist_attempts.setdefault(name, [])
+        completed = False
+        for binding in profile.bindings:
+            packet = render_packet(
+                task.spec, ctx.spec_excerpt, _decisions(ctx), ctx.conventions,
+                stage="specialist-review", context_budget=profile.token_policy.context_chars,
+                artifacts=_artifacts(ctx), change_manifest=manifest)
+            write_packet(rundir.task_dir(f"{task_id}-{name.upper()}"), packet)
+            schema = json.loads(json.dumps(SPECIALIST_SCHEMA))
+            schema["properties"]["findings"]["maxItems"] = profile.token_policy.max_findings
+            schema["properties"]["findings"]["items"]["properties"]["detail"][
+                "maxLength"] = profile.token_policy.max_finding_chars
+            req = AgentRequest(
+                prompt=packet, instructions=profile.prompt_text(), cwd=repo,
+                binding=binding, budgets=profile.budgets,
+                token_policy=profile.token_policy, output_schema=schema)
+            result = run_agent(rundir, f"{task_id}-{name.upper()}",
+                               f"review:{name}", len(attempts) + 1, req)
+            attempt = Attempt(
+                binding=binding, prompt_hash=profile.prompt_hash(), turns=result.turns,
+                usage=result.usage, metrics=result.metrics,
+                outcome={"done": "done", "quota": "quota",
+                         "blocked": "blocked"}.get(result.outcome, "failed"))
+            if attempt.outcome == "failed":
+                attempt.failure_kind = _classify_dispatch_failure(result.text)
+                attempt.failure_signature = _failure_signature(attempt.failure_kind, result.text)
+            attempts.append(attempt)
+            _discard_worktree_scratch(repo)
+            if result.outcome == "done" and result.structured is not None:
+                findings.extend(Finding(**raw)
+                                for raw in result.structured.get("findings", []))
+                completed = True
+                break
+        if not completed:
+            return findings, f"specialist review unavailable: {name}"
+    return findings, None
+
+
 def _gate_and_advance(rundir: RunDir, run: RunState, task_id: str, stage: str,
                       gates: list[GateResult], attempt: Attempt, on_pass,
                       repo: Path) -> None:
@@ -208,6 +410,12 @@ def _gate_and_advance(rundir: RunDir, run: RunState, task_id: str, stage: str,
     else:
         attempt.outcome = "failed"
         failed = [g for g in gates if not g.passed]
+        detail = "\n".join(f"{g.name}: {g.detail[:1500]}" for g in failed)
+        attempt.failure_kind = "gate"
+        attempt.failure_signature = _failure_signature("gate", detail)
+        earlier = run.tasks[task_id].attempts[stage][:-1]
+        if any(a.failure_signature == attempt.failure_signature for a in earlier):
+            attempt.failure_kind = "repeated-gate"
         _write_note(rundir, task_id, stage,
                     "Previous attempt failed gates:\n" + "\n".join(
                         f"- {g.name}: {g.detail[:1500]}" for g in failed))
@@ -218,26 +426,61 @@ def _gate_and_advance(rundir: RunDir, run: RunState, task_id: str, stage: str,
     rundir.write_state(run)
 
 
+def _policy_gates(run: RunState, cfg: RegieConfig, repo: Path,
+                  stage: str, start_sha: str) -> list[GateResult]:
+    tier = resolve_tier(run, cfg)
+    gates: list[GateResult] = []
+    if stage in {"build", "finalize"}:
+        names = ["typecheck", "build"]
+        if tier != "fast":
+            names.append("coverage")
+        for name in names:
+            if name in cfg.commands:
+                gates.append(run_command_gate(name, cfg.commands[name], repo,
+                                              rerun_on_fail=(name == "coverage")))
+    try:
+        changed = [line for line in
+                   git(repo, "diff", "--name-only", f"{start_sha}..HEAD").splitlines()
+                   if line]
+    except GitError:
+        changed = []
+    for plugin in active_gate_plugins(cfg, stage, tier, changed):
+        gates.append(run_command_gate(plugin.name, plugin.command, repo))
+    return gates
+
+
 def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
              repo: Path, ctx: PipelineContext,
              max_dispatches: int | None = None) -> None:
     """Advance one task through test → build → review. Test seam: max_dispatches."""
     task = run.tasks[task_id]
     task.status = "running"
+    if not task.start_sha:
+        task.start_sha = head_sha(repo)
     dispatched = 0
+    primed = (prime_knowledge(rundir, repo, task.spec, "implementation")
+              if cfg.workflow.knowledge else [])
 
     while task.status == "running":
         if max_dispatches is not None and dispatched >= max_dispatches:
             return
         stage = task.stage
+        budget_reason = _budget_reason(run, cfg, task_id)
+        if budget_reason:
+            _halt(rundir, run, task_id, budget_reason)
+            return
         if _should_halt(rundir, run, task_id, stage, cfg):
             return
         extra = _notes_for(rundir, task_id, stage)
+        if primed:
+            extra += "\n\nRelevant project knowledge:\n" + "\n".join(
+                f"- {entry.fact}" for entry in primed)
         profile = cfg.profiles[{"test": "test-writer", "build": "builder",
                                 "review": "reviewer"}[stage]]
         pre_dispatch = set(changed_files(repo))
         attempt, result = _dispatch(rundir, run, task_id, stage, profile, cfg,
                                     repo, ctx, extra)
+        attempt.made_progress = set(changed_files(repo)) != pre_dispatch
         dispatched += 1
 
         if attempt.outcome == "quota":
@@ -296,6 +539,7 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
                                       rerun_on_fail=True),
                      run_command_gate("lint", cfg.commands["lint"], repo),
                      diff_gate(repo, cfg.test_globs)]
+            gates.extend(_policy_gates(run, cfg, repo, "build", task.start_sha))
             def _pass_build(pre=pre_dispatch):
                 if set(changed_files(repo)) - pre:
                     commit_all(repo, f"feat({task_id}): {task.spec.title}")
@@ -309,7 +553,27 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             git(repo, "clean", "-fd")
             findings = [Finding(**f) for f in
                         (result.structured or {}).get("findings", [])]
+            evidence = [CriterionEvidence(**raw) for raw in
+                        (result.structured or {}).get("criterion_results", [])]
+            task.criterion_evidence = evidence
+            if evidence:
+                (rundir.task_dir(task_id) / "criterion-evidence.json").write_text(
+                    json.dumps([item.model_dump() for item in evidence], indent=2))
+            for item in evidence:
+                if not item.passed:
+                    findings.append(Finding(
+                        severity="blocker",
+                        title=f"acceptance criterion failed: {item.criterion[:100]}",
+                        detail=item.evidence, file=item.file))
             serious = [f for f in findings if f.severity in ("blocker", "major")]
+            if not serious:
+                specialist_findings, specialist_error = _run_specialist_reviews(
+                    rundir, run, task_id, cfg, repo, ctx)
+                if specialist_error:
+                    _halt(rundir, run, task_id, specialist_error)
+                    return
+                findings.extend(specialist_findings)
+                serious = [f for f in findings if f.severity in ("blocker", "major")]
             minors = [f for f in findings if f.severity == "minor"]
             tdir = rundir.task_dir(task_id)
             if minors:
@@ -341,12 +605,23 @@ def _notes_for(rundir: RunDir, task_id: str, stage: str) -> str:
 
 
 def _render_plan_packet(brief_text: str, conventions: str, decisions: str,
-                        extra: str) -> str:
+                        extra: str, *, context_budget: int = 20_000,
+                        artifacts: dict[str, str] | None = None) -> str:
+    fixed_budget = max(2_000, context_budget)
+    brief_budget = fixed_budget // 2
+    other_budget = max(1_000, fixed_budget // 6)
+    def bounded(value: str, budget: int) -> str:
+        if len(value) <= budget:
+            return value
+        return value[:budget] + "\n[... truncated; read full artifact]"
+    artifact_lines = "\n".join(
+        f"- {name}: `{path}`" for name, path in (artifacts or {}).items()) or "- (none)"
     return "\n\n".join([
-        f"# Brief\n{brief_text}",
-        f"## Conventions\n{conventions}",
-        f"## Decisions so far\n{decisions or '(none yet)'}",
-        f"## Notes\n{extra or '(none)'}",
+        f"# Brief\n{bounded(brief_text, brief_budget)}",
+        f"## Conventions\n{bounded(conventions, other_budget)}",
+        f"## Decisions so far\n{bounded(decisions, other_budget) or '(none yet)'}",
+        f"## Notes\n{bounded(extra, other_budget) or '(none)'}",
+        f"## Full artifacts\n{artifact_lines}",
     ]) + "\n"
 
 
@@ -396,12 +671,83 @@ def _halt_run(rundir: RunDir, run: RunState, reason: str) -> None:
     rundir.write_state(run)
 
 
+_PLAN_LENSES = (
+    "plan-feasibility", "plan-completeness", "plan-scope",
+)
+
+
+def _plan_review_names(tasks: list[TaskSpec], cfg: RegieConfig,
+                       tier: str) -> list[str]:
+    if not cfg.workflow.plan_reviews or tier == "fast":
+        return []
+    names = [name for name in _PLAN_LENSES if name in cfg.profiles]
+    risks = {risk for task in tasks for risk in infer_risks(task)}
+    design = {
+        "security": "security-design-reviewer",
+        "ui": "ux-design-reviewer",
+        "api": "architecture-design-reviewer",
+        "architecture": "architecture-design-reviewer",
+        "migration": "architecture-design-reviewer",
+    }
+    if cfg.workflow.design_reviews:
+        for risk in sorted(risks):
+            name = design.get(risk)
+            if name and name in cfg.profiles and name not in names:
+                names.append(name)
+    return names
+
+
+def _run_plan_reviews(rundir: RunDir, run: RunState, cfg: RegieConfig,
+                      worktree: Path, brief: str, structured: dict) -> list[str]:
+    tasks = [TaskSpec(**raw) for raw in structured["tasks"]]
+    prospective = run.model_copy(deep=True)
+    prospective.tasks = {task.id: TaskState(spec=task) for task in tasks}
+    tier = resolve_tier(prospective, cfg)
+    names = _plan_review_names(tasks, cfg, tier)
+    if not names:
+        return []
+    packet = "\n\n".join([
+        "# Original brief\n" + brief,
+        "## Proposed spec\n" + structured["spec_markdown"],
+        "## Proposed task plan\n```json\n"
+        + json.dumps(structured["tasks"], indent=2) + "\n```",
+        ("## Rules\nReturn PASS only when this plan is executable against the "
+         "repository and complete for your lens. Cite concrete evidence."),
+    ]) + "\n"
+    failures: list[str] = []
+    for name in names:
+        profile = cfg.profiles[name]
+        result = run_agent(
+            rundir, f"PLAN-{name.upper()}", f"plan-review:{name}", 1,
+            AgentRequest(prompt=packet, instructions=profile.prompt_text(), cwd=worktree,
+                         binding=profile.primary, budgets=profile.budgets,
+                         token_policy=profile.token_policy,
+                         output_schema=PLAN_REVIEW_SCHEMA))
+        if result.outcome != "done" or not result.structured:
+            failures.append(f"{name}: reviewer unavailable ({result.outcome})")
+            continue
+        review = PlanReview(lens=name, **result.structured)
+        run.plan_reviews.append(review)
+        if review.verdict == "fail":
+            failures.extend(
+                f"{name}: {finding.title}: {finding.detail}"
+                for finding in review.findings)
+            if not review.findings:
+                failures.append(f"{name}: failed without a finding")
+    rundir.write_state(run)
+    return failures
+
+
 def _apply_plan(rundir: RunDir, run: RunState, structured: dict) -> None:
     spec_dir = rundir.path / "spec"
     spec_dir.mkdir(parents=True, exist_ok=True)
     (spec_dir / "spec.md").write_text(structured["spec_markdown"])
     specs = [TaskSpec(**t) for t in structured["tasks"]]
+    for spec in specs:
+        spec.risk_tags = infer_risks(spec)
     run.tasks = {s.id: TaskState(spec=s) for s in specs}
+    run.checkpoints = [CheckpointState(task_id=s.id, reason=s.checkpoint)
+                       for s in specs if s.checkpoint]
     run.stage = "tasks" if run.autonomous else "approve"
     rundir.write_state(run)
 
@@ -415,6 +761,13 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
     decisions = decisions_path.read_text() if decisions_path.exists() else ""
     conventions = _conventions(worktree)
     profile = cfg.profiles["planner"]
+    if not run.research_path:
+        research_repository(rundir, worktree)
+        run.research_path = str(rundir.path / "research.md")
+    if cfg.workflow.knowledge and not run.knowledge_snapshot:
+        selected = prime_knowledge(rundir, worktree, None, "planning")
+        run.knowledge_snapshot = [entry.id for entry in selected]
+    rundir.write_state(run)
 
     while True:
         attempts = run.planner_attempts
@@ -425,21 +778,33 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
                 return
 
         extra = _notes_for(rundir, _PLAN_TASK_ID, "plan")
-        packet = _render_plan_packet(brief_text, conventions, decisions, extra)
+        packet = _render_plan_packet(
+            brief_text, conventions, decisions, extra,
+            context_budget=profile.token_policy.context_chars,
+            artifacts={"full brief": str(rundir.path / "brief.md"),
+                       "decisions": str(decisions_path),
+                       "repository research": run.research_path,
+                       "knowledge prime": str(rundir.path / "knowledge-prime.md"),
+                       **{f"repository rules ({p.name})": str(p)
+                          for p in _convention_paths(worktree)}})
         write_packet(rundir.task_dir(_PLAN_TASK_ID), packet)
 
         binding = profile.primary
         if attempts:
             _action, binding = next_action(attempts, profile.bindings)
-        req = AgentRequest(prompt=profile.prompt_text() + "\n\n" + packet, cwd=worktree,
+        req = AgentRequest(prompt=packet, instructions=profile.prompt_text(), cwd=worktree,
                            binding=binding, budgets=profile.budgets,
+                           token_policy=profile.token_policy,
                            output_schema=PLAN_SCHEMA)
         attempt = Attempt(binding=binding, prompt_hash=profile.prompt_hash())
         result = run_agent(rundir, _PLAN_TASK_ID, "plan", len(attempts) + 1, req)
         attempt.outcome = {"done": "done", "blocked": "blocked",
                            "quota": "quota"}.get(result.outcome, "failed")
         attempt.blocked_question = result.blocked_question
-        attempt.usage, attempt.turns = result.usage, result.turns
+        attempt.usage, attempt.metrics, attempt.turns = result.usage, result.metrics, result.turns
+        if attempt.outcome == "failed":
+            attempt.failure_kind = _classify_dispatch_failure(result.text)
+            attempt.failure_signature = _failure_signature(attempt.failure_kind, result.text)
         attempts.append(attempt)
         rundir.write_state(run)
 
@@ -452,8 +817,18 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
             continue
 
         errors = _validate_plan(result.structured, cfg)
+        prospective_tasks = ([TaskSpec(**raw) for raw in result.structured["tasks"]]
+                             if not errors and result.structured else [])
+        advanced_profiles = any(name in cfg.profiles for name in _PLAN_LENSES)
+        if advanced_profiles:
+            errors.extend(plan_preflight(prospective_tasks))
+        if not errors:
+            errors.extend(_run_plan_reviews(
+                rundir, run, cfg, worktree, brief_text, result.structured))
         if errors:
             attempt.outcome = "failed"
+            attempt.failure_kind = "contract"
+            attempt.failure_signature = _failure_signature("contract", "\n".join(errors))
             _write_note(rundir, _PLAN_TASK_ID, "plan",
                        "Previous plan failed validation:\n" + "\n".join(
                            f"- {e}" for e in errors))
@@ -461,6 +836,8 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
             continue
 
         _apply_plan(rundir, run, result.structured)
+        run.workflow = resolve_tier(run, cfg)
+        rundir.write_state(run)
         return
 
 
@@ -469,16 +846,104 @@ def run_tasks_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
     ctx = PipelineContext(
         spec_excerpt=(rundir.path / "spec" / "spec.md").read_text()
         if (rundir.path / "spec" / "spec.md").exists() else "",
+        spec_path=rundir.path / "spec" / "spec.md",
         decisions_path=rundir.path / "decisions.md",
-        conventions=_conventions(repo))
-    for task_id in run.ordered_task_ids():
-        if run.tasks[task_id].status == "done":
+        conventions=_conventions(repo),
+        convention_paths=_convention_paths(repo))
+    for layer in run.task_layers():
+        pending = [task_id for task_id in layer
+                   if run.tasks[task_id].status != "done"]
+        if not pending:
             continue
-        run_task(rundir, run, task_id, cfg, repo, ctx)
+        batch_specs = [run.tasks[task_id].spec for task_id in pending]
+        can_parallel = (cfg.workflow.max_parallel_tasks > 1 and len(pending) > 1
+                        and not scopes_overlap(batch_specs))
+        if can_parallel:
+            _run_parallel_batch(rundir, run, cfg, repo, ctx, pending)
+        else:
+            for task_id in pending:
+                run_task(rundir, run, task_id, cfg, repo, ctx)
+                if run.stage == "halted":
+                    return
         if run.stage == "halted":
+            return
+        checkpoint = next((item for item in run.checkpoints
+                           if item.status == "pending"
+                           and run.tasks[item.task_id].status == "done"), None)
+        if checkpoint:
+            report = checkpoint_report(run.tasks[checkpoint.task_id].spec, repo)
+            (rundir.path / "checkpoint.md").write_text(report)
+            run.stage = "checkpoint"
+            rundir.write_state(run)
             return
     run.stage = "finalize"
     rundir.write_state(run)
+
+
+def _run_parallel_batch(rundir: RunDir, run: RunState, cfg: RegieConfig,
+                        repo: Path, ctx: PipelineContext,
+                        task_ids: list[str]) -> None:
+    """Execute one independent DAG layer in isolated task worktrees."""
+    base = head_sha(repo)
+    task_worktrees: dict[str, tuple[Path, str]] = {}
+    root = rundir.path / "task-worktrees"
+    root.mkdir(exist_ok=True)
+    try:
+        for task_id in task_ids:
+            slug = re.sub(r"[^a-zA-Z0-9-]+", "-", task_id).strip("-").lower()
+            branch = f"{run.branch}-task-{slug}"
+            path = root / slug
+            create_run_worktree(repo, branch, base, path)
+            task_worktrees[task_id] = (path, branch)
+
+        workers = min(cfg.workflow.max_parallel_tasks, len(task_ids))
+        with ThreadPoolExecutor(max_workers=workers,
+                                thread_name_prefix="regie-task") as pool:
+            futures = {
+                pool.submit(
+                    run_task, rundir, run, task_id, cfg, path,
+                    PipelineContext(
+                        spec_excerpt=ctx.spec_excerpt, spec_path=ctx.spec_path,
+                        decisions_path=ctx.decisions_path,
+                        conventions=_conventions(path),
+                        convention_paths=_convention_paths(path))): task_id
+                for task_id, (path, _branch) in task_worktrees.items()
+            }
+            for future in as_completed(futures):
+                task_id = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:  # noqa: BLE001 - convert worker crash to run halt
+                    _halt_run(rundir, run, f"parallel task {task_id} crashed: {exc}")
+
+        if run.stage == "halted" or any(
+                run.tasks[task_id].status != "done" for task_id in task_ids):
+            return
+        for task_id in sorted(task_ids):
+            path, _branch = task_worktrees[task_id]
+            commits = git(path, "rev-list", "--reverse", f"{base}..HEAD").splitlines()
+            try:
+                for commit in commits:
+                    git(repo, "cherry-pick", commit)
+            except GitError as exc:
+                try:
+                    git(repo, "cherry-pick", "--abort")
+                except GitError:
+                    pass
+                _halt_run(rundir, run,
+                          f"parallel integration conflict for {task_id}: {exc}")
+                return
+        rundir.write_state(run)
+    finally:
+        for path, branch in task_worktrees.values():
+            try:
+                remove_run_worktree(repo, path)
+            except GitError:
+                pass
+            try:
+                delete_branch(repo, branch)
+            except GitError:
+                pass
 
 
 def _is_ancestor(worktree: Path, maybe_ancestor: str, ref: str) -> bool:
@@ -523,8 +988,7 @@ def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
     gates = [run_command_gate("test", cfg.commands["test"], worktree,
                               rerun_on_fail=True),
              run_command_gate("lint", cfg.commands["lint"], worktree)]
-    if "typecheck" in cfg.commands:
-        gates.append(run_command_gate("typecheck", cfg.commands["typecheck"], worktree))
+    gates.extend(_policy_gates(run, cfg, worktree, "finalize", run.base_sha))
     for gate in gates:
         if not gate.passed:
             _halt_run(rundir, run, f"{gate.name} gate failed: {gate.detail[:500]}")
@@ -539,6 +1003,11 @@ def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
         if not eval_gate.passed:
             _halt_run(rundir, run, f"eval gate failed: {eval_gate.detail[:500]}")
             return
+
+    final_error = _run_final_review(rundir, run, cfg, worktree)
+    if final_error:
+        _halt_run(rundir, run, final_error)
+        return
 
     git(worktree, "fetch", "origin")
     base_ref = f"origin/{run.base_branch}"
@@ -567,6 +1036,47 @@ def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
     run.base_sha = git(worktree, "rev-parse", base_ref).strip()
     run.stage = "pr"
     rundir.write_state(run)
+
+
+def _run_final_review(rundir: RunDir, run: RunState, cfg: RegieConfig,
+                      worktree: Path) -> str | None:
+    if (not cfg.workflow.final_review or resolve_tier(run, cfg) == "fast"
+            or "integration-reviewer" not in cfg.profiles):
+        return None
+    if run.final_review_attempts and run.final_review_attempts[-1].outcome == "done":
+        return None
+    profile = cfg.profiles["integration-reviewer"]
+    packet = "\n\n".join([
+        "# Final cross-task integration review",
+        "## Spec\n" + _spec_text(rundir),
+        "## Combined change\n" + _change_manifest(worktree, run.base_sha),
+        ("## Mandate\nCheck cross-task contracts, missing wiring, duplicated "
+         "abstractions, incompatible assumptions, and regressions. Do not edit."),
+    ]) + "\n"
+    write_packet(rundir.task_dir("FINAL-REVIEW"), packet)
+    result = run_agent(
+        rundir, "FINAL-REVIEW", "final-review", len(run.final_review_attempts) + 1,
+        AgentRequest(prompt=packet, instructions=profile.prompt_text(), cwd=worktree,
+                     binding=profile.primary, budgets=profile.budgets,
+                     token_policy=profile.token_policy,
+                     output_schema=SPECIALIST_SCHEMA))
+    attempt = Attempt(
+        binding=profile.primary, prompt_hash=profile.prompt_hash(),
+        outcome={"done": "done", "quota": "quota", "blocked": "blocked"}.get(
+            result.outcome, "failed"),
+        turns=result.turns, usage=result.usage, metrics=result.metrics)
+    run.final_review_attempts.append(attempt)
+    rundir.write_state(run)
+    if result.outcome != "done" or not result.structured:
+        return f"final integration review unavailable: {result.outcome}"
+    findings = [Finding(**raw) for raw in result.structured.get("findings", [])]
+    serious = [finding for finding in findings
+               if finding.severity in {"blocker", "major"}]
+    if serious:
+        _append_json(rundir.task_dir("FINAL-REVIEW") / "findings.json", serious)
+        return "final integration review failed: " + "; ".join(
+            finding.title for finding in serious)
+    return None
 
 
 def reconcile(rundir: RunDir, run: RunState, repo: Path) -> int:
@@ -609,12 +1119,12 @@ def reconcile(rundir: RunDir, run: RunState, repo: Path) -> int:
 
 
 def _conventions(repo: Path) -> str:
-    parts = []
-    for name in ("CLAUDE.md", "AGENTS.md"):
-        p = repo / name
-        if p.exists():
-            parts.append(p.read_text())
-    return "\n\n".join(parts)
+    return "\n\n".join(path.read_text() for path in _convention_paths(repo))
+
+
+def _convention_paths(repo: Path) -> list[Path]:
+    return [repo / name for name in ("CLAUDE.md", "AGENTS.md")
+            if (repo / name).exists()]
 
 
 def _spec_text(rundir: RunDir) -> str:
@@ -642,53 +1152,10 @@ def _fallback_title(spec_text: str, run_id: str) -> str:
 
 def _scribe(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path,
            groups: list[tuple[str, list[str]]]) -> tuple[list[str], str, str]:
-    """Best-effort commit-message/PR-copy polish: one dispatch of the planner
-    profile, never blocking the run. Any dispatch failure or structural
-    mismatch (wrong outcome, missing/mis-sized commit_messages) falls back to
-    deterministic output derived from the commit groups and spec -- scribe
-    output is local to this call, never recorded onto RunState."""
+    """Derive commit/PR copy without spending a planner-grade invocation."""
+    del cfg, worktree
     spec_text = _spec_text(rundir)
-    fallback = ([g[0] for g in groups], _fallback_title(spec_text, run.id), spec_text)
-
-    profile = cfg.profiles["planner"]
-    log_subjects = git(worktree, "log", "--reverse", "--format=%s",
-                       f"{run.base_sha}..HEAD")
-    prompt = "\n\n".join([
-        f"# Spec\n{spec_text}",
-        # Smoke-test finding: without an explicit count the model writes one
-        # message per raw commit (test+feat), not one per task group, and the
-        # size check rejects it. State the contract in the prompt.
-        (f"## Your job\nWrite a PR title, a PR body, and EXACTLY "
-         f"{len(groups)} conventional commit message(s) — one per task group "
-         f"listed below, in order. Do NOT write one message per git-log line."),
-        ("## Commit message rules (Conventional Commits)\n"
-         "- Format: `type(scope): subject` — type from feat/fix/test/refactor/"
-         "chore/docs; scope is the MODULE or package the change touches (e.g. "
-         "`calc`, `api`, `search`), NEVER a task id like T1.\n"
-         "- Subject: imperative mood, lowercase, no trailing period, ≤50 chars "
-         "(72 hard max).\n"
-         "- After a blank line, an optional short body explaining WHY the "
-         "change was made — the diff already shows the what.\n"
-         "- PR title follows the same conventional format and summarizes the "
-         "whole change."),
-        "## Task groups (one commit message each, replacing these defaults)\n" +
-        "\n".join(f"{i + 1}. {g[0]}" for i, g in enumerate(groups)),
-        f"## git log subjects (context only)\n{log_subjects}",
-    ]) + "\n"
-    write_packet(rundir.task_dir(_SCRIBE_TASK_ID), prompt)
-    req = AgentRequest(prompt=profile.prompt_text() + "\n\n" + prompt, cwd=worktree,
-                       binding=profile.primary, budgets=profile.budgets,
-                       output_schema=SCRIBE_SCHEMA)
-    result = run_agent(rundir, _SCRIBE_TASK_ID, "scribe", 1, req)
-    if result.outcome != "done" or not result.structured:
-        return fallback
-
-    messages = result.structured.get("commit_messages")
-    if not isinstance(messages, list) or len(messages) != len(groups):
-        return fallback
-    title = result.structured.get("pr_title") or fallback[1]
-    body = result.structured.get("pr_body") or fallback[2]
-    return list(messages), title, body
+    return [g[0] for g in groups], _fallback_title(spec_text, run.id), spec_text
 
 
 def _append_minors(rundir: RunDir, body: str) -> str:
@@ -716,7 +1183,8 @@ def _debugger_profile(cfg: RegieConfig) -> Profile:
         return cfg.profiles["debugger"]
     builder = cfg.profiles["builder"]
     return Profile(name="debugger", bindings=builder.bindings,
-                   prompt_path=_DEBUGGER_PROMPT_FALLBACK, budgets=builder.budgets)
+                   prompt_path=_DEBUGGER_PROMPT_FALLBACK, budgets=builder.budgets,
+                   token_policy=builder.token_policy)
 
 
 def _debug_review_binding(debugger_binding: Binding, cfg: RegieConfig) -> Binding:
@@ -726,6 +1194,13 @@ def _debug_review_binding(debugger_binding: Binding, cfg: RegieConfig) -> Bindin
     if debugger_binding.cli == reviewer.cli:
         return cfg.profiles["builder"].primary
     return reviewer
+
+
+def _debug_review_profile(debugger_binding: Binding, cfg: RegieConfig) -> Profile:
+    """Full cross-provider review ladder for a debugger result."""
+    reviewer = cfg.profiles["reviewer"]
+    return (cfg.profiles["builder"]
+            if debugger_binding.cli == reviewer.primary.cli else reviewer)
 
 
 def _discard_worktree_scratch(worktree: Path) -> None:
@@ -746,15 +1221,24 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
     packet = (f"# CI failure — debugger round {round_no}\n\n"
              f"## Notes\n{failure_detail}\n")
     write_packet(rundir.task_dir(task_id), packet)
-    req = AgentRequest(prompt=profile.prompt_text() + "\n\n" + packet, cwd=worktree,
-                       binding=profile.primary, budgets=profile.budgets)
     pre_dispatch = set(changed_files(worktree))
-    result = run_agent(rundir, task_id, "debug", 1, req)
-    if result.outcome == "quota":
-        _discard_worktree_scratch(worktree)
-        _halt_run(rundir, run, f"quota exhausted during debugger round {round_no}")
+    result = None
+    debugger_binding = None
+    for attempt_no, binding in enumerate(profile.bindings, 1):
+        req = AgentRequest(
+            prompt=packet, instructions=profile.prompt_text(), cwd=worktree,
+            binding=binding, budgets=profile.budgets,
+            token_policy=profile.token_policy, allowed_commands=cfg.commands)
+        candidate = run_agent(rundir, task_id, "debug", attempt_no, req)
+        if candidate.outcome == "quota":
+            _discard_worktree_scratch(worktree)
+            continue
+        result, debugger_binding = candidate, binding
+        break
+    if result is None:
+        _halt_run(rundir, run, f"quota exhausted across debugger providers in round {round_no}")
         return False
-    if result.outcome != "done":
+    if result.outcome != "done" or debugger_binding is None:
         _discard_worktree_scratch(worktree)
         return False
 
@@ -768,17 +1252,27 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
         commit_all(worktree,
                    f"fix(ci): debugger round {round_no}\n\n{REGIE_TRAILER}")
 
-    reviewer = cfg.profiles["reviewer"]
-    review_req = AgentRequest(prompt=reviewer.prompt_text() + "\n\n" + packet, cwd=worktree,
-                              binding=_debug_review_binding(profile.primary, cfg),
-                              budgets=reviewer.budgets, output_schema=FINDINGS_SCHEMA)
-    review_result = run_agent(rundir, task_id, "review", 1, review_req)
-    if review_result.outcome == "quota":
+    reviewer = _debug_review_profile(debugger_binding, cfg)
+    review_result = None
+    first_review_attempt = len(profile.bindings) + 1
+    for offset, binding in enumerate(reviewer.bindings):
+        review_req = AgentRequest(
+            prompt=packet, instructions=reviewer.prompt_text(), cwd=worktree,
+            binding=binding, budgets=reviewer.budgets,
+            token_policy=reviewer.token_policy, output_schema=FINDINGS_SCHEMA)
+        candidate = run_agent(
+            rundir, task_id, "review", first_review_attempt + offset, review_req)
+        if candidate.outcome == "quota":
+            continue
+        review_result = candidate
+        break
+    if review_result is None:
         # The fix(ci) commit above is already part of history at this
         # point -- a quota-halted reviewer must not leave it there forever.
         git(worktree, "reset", "--hard", pre_round_sha)
         git(worktree, "clean", "-fd")
-        _halt_run(rundir, run, f"quota exhausted during debugger round {round_no}")
+        _halt_run(rundir, run,
+                  f"quota exhausted across review providers in debugger round {round_no}")
         return False
     findings = [Finding(**f) for f in (review_result.structured or {}).get("findings", [])]
     rejected = (review_result.outcome != "done"
@@ -797,14 +1291,44 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
 def _ci_loop(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) -> None:
     debug_round = 0
     started = time.monotonic()
+    run.pr_state.status = "monitoring"
     while True:
         status = ci_status(worktree)
-        if status == "green":
-            run.stage = "done"
+        snapshot = pr_snapshot(worktree)
+        run.pr_state.ci = status
+        run.pr_state.review_decision = snapshot.get("reviewDecision") or ""
+        run.pr_state.unresolved_threads = int(snapshot.get("unresolvedThreads") or 0)
+        run.pr_state.last_comment_id = snapshot.get("lastCommentId") or ""
+        run.pr_state.updated_at = datetime.now(UTC).isoformat()
+        if snapshot.get("state") == "MERGED":
+            run.pr_state.status = "merged"
+            run.stage = "reflect" if cfg.workflow.reflection else "done"
             rundir.write_state(run)
             return
-        if status == "red":
+        review_blocked = (run.pr_state.review_decision == "CHANGES_REQUESTED"
+                          or run.pr_state.unresolved_threads > 0)
+        if status == "green" and not review_blocked:
+            run.pr_state.status = "ready"
+            run.stage = "reflect" if cfg.workflow.reflection else "done"
+            rundir.write_state(run)
+            return
+        if review_blocked:
+            run.pr_state.status = "fixing"
             debug_round += 1
+            if debug_round > CI_MAX_DEBUG_ROUNDS:
+                run.pr_state.status = "waiting-human"
+                _halt_run(rundir, run,
+                          "PR review still requests changes after bounded fix rounds")
+                return
+            detail = pr_feedback(worktree) or "PR has unresolved review feedback"
+            _debugger_round(rundir, run, cfg, worktree, debug_round, detail)
+            if run.stage == "halted":
+                return
+            continue
+        if status == "red":
+            run.pr_state.status = "fixing"
+            debug_round += 1
+            run.pr_state.debug_rounds = debug_round
             if debug_round > CI_MAX_DEBUG_ROUNDS:
                 _halt_run(rundir, run,
                          f"CI red after {CI_MAX_DEBUG_ROUNDS} debugger rounds")
@@ -814,6 +1338,7 @@ def _ci_loop(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) ->
                 return
             continue
         if time.monotonic() - started >= CI_WALL_MINUTES * 60:
+            run.pr_state.status = "waiting-human"
             _halt_run(rundir, run, "CI timeout")
             return
         time.sleep(CI_POLL_SECONDS)
@@ -868,3 +1393,22 @@ def pr_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) ->
         rundir.write_state(run)
 
     _ci_loop(rundir, run, cfg, worktree)
+    if run.stage == "reflect":
+        reflect_stage(rundir, run, cfg)
+
+
+def reflect_stage(rundir: RunDir, run: RunState, cfg: RegieConfig) -> None:
+    if cfg.workflow.reflection:
+        propose_learnings(rundir, run)
+    run.stage = "done"
+    rundir.write_state(run)
+    if run.parent_id:
+        try:
+            parent_dir = RunDir.open(rundir.path.parents[1], run.parent_id)
+            parent = parent_dir.read_state()
+            for child in parent.children:
+                if child.run_id == run.id:
+                    child.status = "done"
+            parent_dir.write_state(parent)
+        except FileNotFoundError:
+            pass

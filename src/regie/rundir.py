@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +18,7 @@ class RunDir:
     def __init__(self, path: Path):
         self.path = path
         self._lock_fh = None
+        self._io_lock = threading.RLock()
 
     @classmethod
     def create(cls, home: Path, run_id: str) -> RunDir:
@@ -47,15 +49,16 @@ class RunDir:
             self._lock_fh = None
 
     def write_state(self, state: RunState) -> None:
-        tmp = self.path / "state.json.tmp"
-        tmp.write_text(state.model_dump_json(indent=2))
-        os.replace(tmp, self.path / "state.json")
+        with self._io_lock:
+            tmp = self.path / f"state.json.tmp.{os.getpid()}.{threading.get_ident()}"
+            tmp.write_text(state.model_dump_json(indent=2))
+            os.replace(tmp, self.path / "state.json")
 
     def read_state(self) -> RunState:
         return RunState.model_validate_json((self.path / "state.json").read_text())
 
     def _append_jsonl(self, name: str, record: dict) -> None:
-        with (self.path / name).open("a") as f:
+        with self._io_lock, (self.path / name).open("a") as f:
             f.write(json.dumps(record) + "\n")
             f.flush()
             os.fsync(f.fileno())
