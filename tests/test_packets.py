@@ -17,11 +17,20 @@ def test_packet_has_fixed_section_order():
                        artifacts={"full spec": "/run/spec.md"},
                        change_manifest="src/calc.py | 2 ++")
     positions = [md.index(h) for h in
-                 ("# Task", "## Acceptance criteria", "## Reviewer checklist",
+                 ("# Task", "## Execution mode", "## Acceptance criteria",
+                  "## Reviewer checklist",
                   "## Change manifest", "## Full artifacts", "## Relevant spec context",
                   "## Relevant conventions")]
     assert positions == sorted(positions)
     assert "Add divide" in md and "test_divide" in md and "src/calc.py" in md
+
+
+def test_direct_packet_authorizes_owner_authored_focused_tests():
+    task = _task().model_copy(update={"execution": "direct"})
+
+    md = render_packet(task, stage="review")
+
+    assert "direct — one owner is authorized to edit production code and focused tests" in md
 
 
 def test_oversized_section_is_truncated_with_marker():

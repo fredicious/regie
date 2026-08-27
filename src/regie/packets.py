@@ -54,6 +54,10 @@ def render_packet(task: TaskSpec, spec_excerpt: str = "", decisions: str = "",
 
     fixed = [
         f"# Task {task.id}: {task.title}",
+        ("## Execution mode\n"
+         + ("direct — one owner is authorized to edit production code and focused tests"
+            if task.execution == "direct"
+            else "tdd — test and implementation authorship is mechanically separated")),
         f"## Acceptance criteria\n{criteria}",
         f"## Planned tests\n{tests}",
         f"## Predicted file scope\n{scope}",

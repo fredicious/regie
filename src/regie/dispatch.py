@@ -109,8 +109,13 @@ def run_agent(rundir: RunDir, task_id: str, stage: str, attempt_no: int,
         })
     else:
         health.finish_probe(req.binding, decision, result)
+    semantic_outcome = (
+        result.structured.get("status")
+        if isinstance(result.structured, dict) else None
+    )
     rundir.append_event({"kind": "attempt", "task": task_id, "stage": stage,
                          "attempt": attempt_no, "outcome": result.outcome,
+                         "semantic_outcome": semantic_outcome,
                          "turns": result.turns, "usage": result.usage,
                          "metrics": result.metrics.model_dump(),
                          "provider": provider_key(req.binding),

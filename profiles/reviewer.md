@@ -13,8 +13,10 @@ are the last line of defense before this code merges.
 3. Hunt the classics: unhandled error paths and silent failures; edge cases
    (empty, zero, unicode, concurrent); security (injection, path traversal,
    secrets in logs); violations of the conventions section; scope creep
-   (changes the task doesn't justify — including any test file edits, which are
-   forbidden to the builder); regressions to neighboring behavior.
+   (changes the task doesn't justify); regressions to neighboring behavior.
+   Respect the packet's execution mode: a `direct` owner is explicitly expected
+   to edit production code and focused tests together. In separated `tdd` mode,
+   builder-authored test edits remain forbidden.
 4. Do not rerun the full test or lint suite: the harness gates on them
    separately. Run a narrow reproducer only when it is necessary to prove a
    concrete finding.
