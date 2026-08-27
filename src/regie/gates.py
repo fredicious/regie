@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+import shlex
 import subprocess
 import time
 from functools import lru_cache
@@ -136,9 +138,45 @@ def diff_gate(repo: Path, test_globs: list[str]) -> GateResult:
     return GateResult(name="diff-guard", passed=True, duration_seconds=duration)
 
 
+def _node_test_command(cwd: Path, test_cmd: str) -> bool:
+    """Whether a gate command ultimately invokes Node's built-in test runner."""
+    if re.search(r"(?:^|\s)node\s+--test(?:\s|$)", test_cmd):
+        return True
+    try:
+        tokens = shlex.split(test_cmd)
+    except ValueError:
+        return False
+    if not tokens or tokens[0] not in {"npm", "pnpm", "yarn"}:
+        return False
+    script = None
+    if len(tokens) >= 2 and tokens[1] == "test":
+        script = "test"
+    elif len(tokens) >= 3 and tokens[1] == "run":
+        script = tokens[2]
+    if script is None:
+        return False
+    try:
+        package = json.loads((cwd / "package.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    command = package.get("scripts", {}).get(script, "")
+    return bool(re.search(r"(?:^|\s)node\s+--test(?:\s|$)", command))
+
+
+def _collection_command(cwd: Path, test_cmd: str) -> str:
+    # `npm test --collect-only` does not forward the flag to the script: npm
+    # treats it as config and executes the tests. Node's `--test-only` mode
+    # loads every test module (so syntax/import errors still fail) while
+    # skipping ordinary test bodies, which is the collection contract needed
+    # by the red gate.
+    if _node_test_command(cwd, test_cmd):
+        return f"NODE_OPTIONS='--test-only' {test_cmd}"
+    return f"{test_cmd} --collect-only"
+
+
 def red_test_gate(cwd: Path, test_cmd: str) -> GateResult:
     collect_code, collect_out, collect_duration = _run(
-        f"{test_cmd} --collect-only", cwd)
+        _collection_command(cwd, test_cmd), cwd)
     if collect_code != 0:
         return GateResult(name="tdd-red", passed=False,
                           detail=f"collection-error: {collect_out[-1000:]}",

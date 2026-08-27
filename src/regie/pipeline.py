@@ -175,6 +175,15 @@ PLAN_SCHEMA = {
                 "parallel_safe": {"type": "boolean"},
             }}}}}
 
+
+def _plan_schema(cfg: RegieConfig) -> dict:
+    """Bind planner output to profile names that this installation can load."""
+    schema = json.loads(json.dumps(PLAN_SCHEMA))
+    profile = schema["properties"]["tasks"]["items"]["properties"]["profile"]
+    profile["enum"] = sorted(cfg.profiles)
+    return schema
+
+
 SCRIBE_SCHEMA = {"type": "object",
                  "required": ["commit_messages", "pr_title", "pr_body"],
                  "additionalProperties": False,
@@ -1184,7 +1193,7 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
         req = AgentRequest(prompt=packet, instructions=profile.prompt_text(), cwd=worktree,
                            binding=binding, budgets=profile.budgets,
                            token_policy=profile.token_policy,
-                           output_schema=PLAN_SCHEMA)
+                           output_schema=_plan_schema(cfg))
         attempt = Attempt(binding=binding, prompt_hash=profile.prompt_hash())
         result = run_agent(rundir, _PLAN_TASK_ID, "plan", len(attempts) + 1, req)
         attempt.outcome = {"done": "done", "blocked": "blocked",

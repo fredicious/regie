@@ -4,7 +4,7 @@ import pytest
 
 from regie.config import Profile, WorkflowConfig, load_config
 from regie.models import Binding, Budgets, RunState
-from regie.pipeline import plan_stage, reconcile
+from regie.pipeline import _plan_schema, plan_stage, reconcile
 from regie.rundir import RunDir
 
 PLAN = {"spec_markdown": "# Spec\n...", "tasks": [
@@ -68,6 +68,14 @@ def test_plan_stage_rejects_unknown_profile(regie_home, fixture_repo, cfg):
     rd, run = _seed(regie_home, fixture_repo, bad)
     plan_stage(rd, run, cfg, fixture_repo)
     assert run.stage == "halted"
+
+
+def test_plan_schema_constrains_profile_to_loaded_configuration(cfg):
+    profile_schema = _plan_schema(cfg)["properties"]["tasks"]["items"][
+        "properties"
+    ]["profile"]
+
+    assert profile_schema["enum"] == sorted(cfg.profiles)
 
 
 def test_plan_stage_rejects_dangling_depends_on(regie_home, fixture_repo, cfg):

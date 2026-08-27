@@ -1,3 +1,4 @@
+import json
 import subprocess
 
 from regie.gates import _glob_match, diff_gate, red_test_gate, run_command_gate
@@ -131,3 +132,31 @@ def test_red_gate_accepts_fixture_error_red(fixture_repo):
     commit_all(fixture_repo, "add fixture-error red test")
     result = red_test_gate(fixture_repo, "python -m pytest tests/test_new.py -q")
     assert result.passed and "red-suite" in result.detail
+
+
+def test_red_gate_accepts_node_test_assertion_failure(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({
+        "scripts": {"test": "node --test"},
+        "type": "module",
+    }))
+    (tmp_path / "red.test.js").write_text(
+        "import test from 'node:test';\n"
+        "import assert from 'node:assert/strict';\n"
+        "test('red', () => assert.equal(1, 2));\n"
+    )
+
+    result = red_test_gate(tmp_path, "npm test")
+
+    assert result.passed and result.detail == "red-suite"
+
+
+def test_red_gate_rejects_node_test_syntax_error(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({
+        "scripts": {"test": "node --test"},
+        "type": "module",
+    }))
+    (tmp_path / "broken.test.js").write_text("this is not valid javascript !!!\n")
+
+    result = red_test_gate(tmp_path, "npm test")
+
+    assert not result.passed and "collection-error" in result.detail
