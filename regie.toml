@@ -9,6 +9,7 @@ design_reviews = true
 final_review = true
 knowledge = true
 reflection = true
+submit_pr = true
 
 [commands]
 setup = "uv sync --frozen"

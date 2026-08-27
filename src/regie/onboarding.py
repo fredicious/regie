@@ -85,7 +85,7 @@ def render_config(
         "", "[workflow]", 'default_tier = "auto"', "max_parallel_tasks = 3",
         "direct_execution = true",
         "plan_reviews = true", "design_reviews = true", "final_review = true",
-        "knowledge = true", "reflection = true", "", "[commands]",
+        "knowledge = true", "reflection = true", "submit_pr = true", "", "[commands]",
     ]
     if detection.setup:
         lines.append(f'setup = "{detection.setup}"')

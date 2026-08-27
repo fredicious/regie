@@ -98,6 +98,7 @@ design_reviews = true
 final_review = true
 knowledge = true
 reflection = true
+submit_pr = true           # false keeps the completed run local (benchmarks/evals)
 max_task_usd = 0             # 0 disables this cost circuit
 max_run_usd = 0
 

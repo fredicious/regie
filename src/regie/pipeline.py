@@ -1492,7 +1492,10 @@ def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
             return
 
     run.base_sha = git(worktree, "rev-parse", base_ref).strip()
-    run.stage = "pr"
+    if cfg.workflow.submit_pr:
+        run.stage = "pr"
+    else:
+        run.stage = "reflect" if cfg.workflow.reflection else "done"
     rundir.write_state(run)
 
 

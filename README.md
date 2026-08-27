@@ -91,3 +91,11 @@ Régie's lean execution ladder is also inspired by
 the implementation and the workflow, never the understanding, safety, or
 validation. Régie applies that principle to orchestration itself—complexity must
 be earned by evidence.
+
+## Benchmarking
+
+[Régie Bench](https://github.com/fredicious/regie-bench) provides repeatable
+product briefs, isolated fixture repositories, hidden acceptance checks, and
+fresh/cached token, cost, routing, and latency comparisons. Benchmark targets set
+`workflow.submit_pr = false` so every implementation and review gate runs without
+creating real branches or pull requests.

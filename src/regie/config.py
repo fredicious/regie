@@ -47,6 +47,7 @@ class WorkflowConfig(BaseModel):
     final_review: bool = True
     knowledge: bool = True
     reflection: bool = True
+    submit_pr: bool = True
     max_task_usd: float = Field(default=0.0, ge=0)
     max_run_usd: float = Field(default=0.0, ge=0)
 

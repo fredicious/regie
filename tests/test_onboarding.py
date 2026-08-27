@@ -17,6 +17,7 @@ def test_detects_python_and_renders_workflow_config(tmp_path):
     assert "[workflow]" in rendered
     assert "max_parallel_tasks = 3" in rendered
     assert "direct_execution = true" in rendered
+    assert "submit_pr = true" in rendered
     assert "[commands]" in rendered
 
 

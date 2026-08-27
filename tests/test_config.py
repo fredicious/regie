@@ -50,6 +50,15 @@ def test_loads_commands_globs_and_profiles(tmp_path):
     assert len(cfg.profiles["builder"].prompt_hash()) == 64
 
 
+def test_submit_pr_can_be_disabled_for_local_evaluation(tmp_path):
+    cfg = load_config(
+        _repo_with(tmp_path, GOOD_TOML + "\n[workflow]\nsubmit_pr = false\n"),
+        PROFILES,
+    )
+
+    assert cfg.workflow.submit_pr is False
+
+
 def test_enabled_providers_filter_every_profile_ladder(tmp_path):
     repo = _repo_with(
         tmp_path,

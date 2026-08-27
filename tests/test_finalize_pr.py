@@ -38,6 +38,21 @@ def test_finalize_green_advances_to_pr(regie_home, fixture_repo, remote_repo,
     assert run.stage == "pr"
 
 
+def test_finalize_can_complete_locally_without_submitting_pr(
+        regie_home, fixture_repo, remote_repo, tmp_path, fake_profiles):
+    rd, run, wt = _wt_run(regie_home, fixture_repo, remote_repo, tmp_path)
+    (fixture_repo / "regie.toml").write_text(
+        'test_globs = ["tests/**"]\n'
+        '[workflow]\nreflection = false\nsubmit_pr = false\n'
+        '[commands]\ntest = "true"\nlint = "true"\n')
+
+    finalize_stage(rd, run, load_config(fixture_repo, fake_profiles), wt)
+
+    assert run.stage == "done"
+    assert run.pr_url == ""
+    assert run.pushed is False
+
+
 def test_finalize_runs_eval_gate_when_triggered(regie_home, fixture_repo,
                                                 remote_repo, tmp_path, fake_profiles):
     from regie.config import load_config
