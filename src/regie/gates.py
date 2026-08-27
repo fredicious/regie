@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -79,15 +80,17 @@ def match_globs(path: str, globs: list[str]) -> bool:
     return any(_glob_match(path, g) for g in globs)
 
 
-def _run(cmd: str, cwd: Path) -> tuple[int, str]:
+def _run(cmd: str, cwd: Path) -> tuple[int, str, float]:
     # shell=True is deliberate: cmd is an operator-authored shell string from
     # regie.toml (same trust level as a Makefile), never agent output or task
     # data. Invariant: nothing agent-generated is ever interpolated into a gate
     # command string; agents can only influence gate outcomes through the files
     # the commands inspect.
+    started = time.monotonic()
     proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True,
                           check=False)
-    return proc.returncode, (proc.stdout + proc.stderr)[-_TAIL:]
+    duration = time.monotonic() - started
+    return proc.returncode, (proc.stdout + proc.stderr)[-_TAIL:], duration
 
 
 def classify_gate_failure(output: str) -> str:
@@ -97,39 +100,56 @@ def classify_gate_failure(output: str) -> str:
 
 def run_command_gate(name: str, cmd: str, cwd: Path,
                      rerun_on_fail: bool = False) -> GateResult:
-    code, output = _run(cmd, cwd)
+    code, output, duration = _run(cmd, cwd)
     if code == 0:
-        return GateResult(name=name, passed=True, detail=output)
+        return GateResult(
+            name=name, passed=True, detail=output, duration_seconds=duration)
     if rerun_on_fail:
-        code2, output2 = _run(cmd, cwd)
+        code2, output2, rerun_duration = _run(cmd, cwd)
+        duration += rerun_duration
         if code2 == 0:
-            return GateResult(name=name, passed=True, detail=output2, flaky=True)
+            return GateResult(
+                name=name,
+                passed=True,
+                detail=output2,
+                flaky=True,
+                duration_seconds=duration,
+            )
         output = output2
     return GateResult(
         name=name,
         passed=False,
         detail=output,
         failure_kind=classify_gate_failure(output),
+        duration_seconds=duration,
     )
 
 
 def diff_gate(repo: Path, test_globs: list[str]) -> GateResult:
+    started = time.monotonic()
     hits = [f for f in changed_files(repo) if match_globs(f, test_globs)]
+    duration = time.monotonic() - started
     if hits:
         return GateResult(name="diff-guard", passed=False,
-                          detail=f"test files modified: {', '.join(hits)}")
-    return GateResult(name="diff-guard", passed=True)
+                          detail=f"test files modified: {', '.join(hits)}",
+                          duration_seconds=duration)
+    return GateResult(name="diff-guard", passed=True, duration_seconds=duration)
 
 
 def red_test_gate(cwd: Path, test_cmd: str) -> GateResult:
-    collect_code, collect_out = _run(f"{test_cmd} --collect-only", cwd)
+    collect_code, collect_out, collect_duration = _run(
+        f"{test_cmd} --collect-only", cwd)
     if collect_code != 0:
         return GateResult(name="tdd-red", passed=False,
                           detail=f"collection-error: {collect_out[-1000:]}",
-                          failure_kind=classify_gate_failure(collect_out))
-    code, _output = _run(test_cmd, cwd)
+                          failure_kind=classify_gate_failure(collect_out),
+                          duration_seconds=collect_duration)
+    code, _output, run_duration = _run(test_cmd, cwd)
+    duration = collect_duration + run_duration
     if code == 0:
-        return GateResult(name="tdd-red", passed=False, detail="unexpectedly-green")
+        return GateResult(
+            name="tdd-red", passed=False, detail="unexpectedly-green",
+            duration_seconds=duration)
     # Honest red = test files collect and the suite does not pass. That is
     # the gate's whole contract (third dogfood iteration): the earlier
     # AssertionError whitelist rejected domain-exception reds, and the
@@ -139,4 +159,6 @@ def red_test_gate(cwd: Path, test_cmd: str) -> GateResult:
     # the collection check above, and the build stage demands a fully green
     # suite the builder can only reach via honest code (or the bad-test
     # escape back to the test author).
-    return GateResult(name="tdd-red", passed=True, detail="red-suite")
+    return GateResult(
+        name="tdd-red", passed=True, detail="red-suite",
+        duration_seconds=duration)

@@ -473,6 +473,7 @@ def _run_specialist_reviews(rundir: RunDir, run: RunState, task_id: str,
 def _gate_and_advance(rundir: RunDir, run: RunState, task_id: str, stage: str,
                       gates: list[GateResult], attempt: Attempt, on_pass,
                       repo: Path) -> None:
+    _record_gate_events(rundir, task_id, stage, gates)
     attempt.gate_results = gates
     if all(g.passed for g in gates):
         on_pass()
@@ -516,6 +517,21 @@ def _gate_and_advance(rundir: RunDir, run: RunState, task_id: str, stage: str,
     rundir.write_state(run)
 
 
+def _record_gate_events(rundir: RunDir, task_id: str, stage: str,
+                        gates: list[GateResult]) -> None:
+    for gate in gates:
+        rundir.append_event({
+            "kind": "gate",
+            "task": task_id,
+            "stage": stage,
+            "gate": gate.name,
+            "outcome": "passed" if gate.passed else "failed",
+            "flaky": gate.flaky,
+            "failure_kind": gate.failure_kind,
+            "duration_seconds": round(gate.duration_seconds, 3),
+        })
+
+
 def _prepare_environment(rundir: RunDir, run: RunState, task_id: str,
                          cfg: RegieConfig, repo: Path) -> bool:
     """Prepare one isolated worktree before spending any model tokens."""
@@ -538,6 +554,7 @@ def _prepare_environment(rundir: RunDir, run: RunState, task_id: str,
         "command": command,
         "outcome": "passed" if gate.passed else "failed",
         "failure_kind": gate.failure_kind,
+        "duration_seconds": round(gate.duration_seconds, 3),
     })
     if not gate.passed:
         run.tasks[task_id].status = "blocked"
@@ -1447,6 +1464,7 @@ def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
     ])
     gates.extend(_policy_gates(
         run, cfg, worktree, "finalize", run.base_sha, include_build=False))
+    _record_gate_events(rundir, "FINALIZE", "finalize", gates)
     for gate in gates:
         if not gate.passed:
             _halt_run(rundir, run, f"{gate.name} gate failed: {gate.detail[:500]}")
@@ -1458,6 +1476,7 @@ def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
     if cfg.commands.get("eval") and any(match_globs(p, cfg.eval_trigger_globs)
                                         for p in changed):
         eval_gate = run_command_gate("eval", cfg.commands["eval"], worktree)
+        _record_gate_events(rundir, "FINALIZE", "finalize", [eval_gate])
         if not eval_gate.passed:
             _halt_run(rundir, run, f"eval gate failed: {eval_gate.detail[:500]}")
             return
@@ -1726,6 +1745,7 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
     gates = [run_command_gate("test", cfg.commands["test"], worktree, rerun_on_fail=True),
              run_command_gate("lint", cfg.commands["lint"], worktree),
              diff_gate(worktree, cfg.test_globs)]
+    _record_gate_events(rundir, task_id, "debug", gates)
     if not all(g.passed for g in gates):
         _discard_worktree_scratch(worktree)
         return False

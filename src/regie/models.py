@@ -61,6 +61,7 @@ class GateResult(BaseModel):
     detail: str = ""
     flaky: bool = False
     failure_kind: Literal["code", "infrastructure"] | None = None
+    duration_seconds: float = Field(default=0.0, ge=0)
 
 
 class Finding(BaseModel):

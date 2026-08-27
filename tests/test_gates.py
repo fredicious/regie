@@ -5,9 +5,12 @@ from regie.gitops import commit_all
 
 
 def test_command_gate_pass_and_fail(tmp_path):
-    assert run_command_gate("ok", "true", tmp_path).passed
+    passed = run_command_gate("ok", "true", tmp_path)
+    assert passed.passed
+    assert passed.duration_seconds >= 0
     result = run_command_gate("boom", "echo nope && false", tmp_path)
     assert not result.passed and "nope" in result.detail
+    assert result.duration_seconds >= 0
 
 
 def test_command_gate_classifies_missing_tool_as_infrastructure(tmp_path):
