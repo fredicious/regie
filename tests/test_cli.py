@@ -41,6 +41,23 @@ def test_status_prints_task_lines(regie_home, fixture_repo):
     assert "T1" in result.output and "pending" in result.output
 
 
+def test_bare_regie_launches_control_room(regie_home, monkeypatch):
+    launched = []
+    monkeypatch.setattr("regie.control_room.ControlRoom.run",
+                        lambda self: launched.append((self.home, self.run_id)))
+
+    result = runner.invoke(app, [])
+
+    assert result.exit_code == 0
+    assert launched == [(regie_home, None)]
+
+
+def test_watch_missing_run_is_friendly(regie_home):
+    result = runner.invoke(app, ["watch", "missing"])
+    assert result.exit_code == 2
+    assert "not found" in result.output.lower()
+
+
 def test_reconcile_marks_orphaned_intent_failed_and_cleans_worktree(
         regie_home, fixture_repo):
     _seed_run(regie_home, fixture_repo)
@@ -106,6 +123,32 @@ def test_run_command_executes_tasks_from_tasks_json(regie_home, fixture_repo,
                                  "--tasks-file", str(tmp_path / "tasks.json")])
     assert result.exit_code == 1  # halted on blocked
     assert "halted" in result.output.lower()
+
+
+def test_auto_run_routes_low_risk_brief_directly_without_planner(
+        regie_home, fixture_repo, fake_profiles, tmp_path):
+    _toml(fixture_repo)
+    brief = tmp_path / "small-fix.md"
+    brief.write_text("Fix multi-row selection in the checklist")
+    (fixture_repo / ".fake_agent.json").write_text(json.dumps({
+        "result": {
+            "outcome": "blocked",
+            "blocked_question": "clarify: Should Shift-click extend selection?",
+        }
+    }))
+    commit_all(fixture_repo, "chore: configure fake agent")
+
+    result = runner.invoke(app, [
+        "run", str(brief), "--repo", str(fixture_repo),
+        "--profiles", str(fake_profiles),
+    ])
+
+    assert result.exit_code == 1
+    state = RunDir.open(regie_home, _last_run_id(regie_home)).read_state()
+    assert state.execution_route == "direct"
+    assert state.planner_attempts == []
+    assert state.tasks["T1"].stage == "build"
+    assert "clarify:" in (state.halt_reason or "")
 
 
 def test_run_missing_brief_friendly_error(regie_home, fixture_repo):

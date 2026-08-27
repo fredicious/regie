@@ -44,10 +44,12 @@ from regie.models import (
     Finding,
     GateResult,
     PlanReview,
+    ProductOwnerDecision,
     RunState,
     TaskSpec,
     TaskState,
 )
+from regie.onboarding import bootstrap_command
 from regie.packets import render_packet, write_packet
 from regie.providers import task_cost, total_cost
 from regie.research import research_repository
@@ -95,6 +97,21 @@ SPECIALIST_SCHEMA = {
     "properties": {"findings": FINDINGS_SCHEMA["properties"]["findings"]},
 }
 
+DIRECT_OWNER_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["status", "summary", "question", "evidence"],
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["completed", "clarify", "needs_planning"],
+        },
+        "summary": {"type": "string", "maxLength": 1200},
+        "question": {"type": ["string", "null"], "maxLength": 1800},
+        "evidence": {"type": ["string", "null"], "maxLength": 1800},
+    },
+}
+
 PLAN_REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["verdict", "evidence", "findings"],
@@ -102,6 +119,29 @@ PLAN_REVIEW_SCHEMA = {
         "verdict": {"type": "string", "enum": ["pass", "fail"]},
         "evidence": {"type": "array", "items": {"type": "string"}},
         "findings": SPECIALIST_SCHEMA["properties"]["findings"],
+    },
+}
+
+PRODUCT_OWNER_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": [
+        "action", "summary", "directives", "accepted_findings",
+        "rejected_findings", "human_question",
+    ],
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["revise", "accept", "ask_human", "halt"],
+        },
+        "summary": {"type": "string", "maxLength": 1200},
+        "directives": {"type": "array", "items": {"type": "string"}},
+        "accepted_findings": {
+            "type": "array", "items": {"type": "string"},
+        },
+        "rejected_findings": {
+            "type": "array", "items": {"type": "string"},
+        },
+        "human_question": {"type": ["string", "null"]},
     },
 }
 
@@ -146,6 +186,9 @@ SCRIBE_SCHEMA = {"type": "object",
 CRITERION_RE = re.compile(r"given.+when.+then", re.IGNORECASE | re.DOTALL)
 
 _PLAN_TASK_ID = "PLAN"
+_MAX_PLAN_CONTRACT_ATTEMPTS = 3
+_PRODUCT_OWNER_TASK_ID = "PRODUCT-OWNER"
+_MAX_PRODUCT_OWNER_REVISIONS = 1
 _SCRIBE_TASK_ID = "SCRIBE"
 
 _DEBUGGER_PROMPT_FALLBACK = Path(__file__).parent.parent.parent / "profiles" / "debugger.md"
@@ -193,6 +236,13 @@ def _review_binding(run: RunState, task_id: str, cfg: RegieConfig) -> Binding:
     accessor over _review_profile kept for callers/tests that only need
     the binding, not the whole profile."""
     return _review_profile(run, task_id, cfg).primary
+
+
+def _stage_profile(task: TaskState, stage: str, cfg: RegieConfig) -> Profile:
+    if stage == "build" and task.spec.execution == "direct":
+        return cfg.profiles.get("implementer", cfg.profiles["builder"])
+    return cfg.profiles[{"test": "test-writer", "build": "builder",
+                         "review": "reviewer"}[stage]]
 
 
 def _effective_bindings(profile: Profile, complexity: str) -> list[Binding]:
@@ -267,7 +317,8 @@ def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
         artifacts=_artifacts(ctx),
         change_manifest=_change_manifest(repo, task.start_sha) if stage == "review" else "")
     write_packet(rundir.task_dir(task_id), packet)
-    schema = None
+    schema = DIRECT_OWNER_SCHEMA if (
+        stage == "build" and task.spec.execution == "direct") else None
     if stage == "review":
         schema = json.loads(json.dumps(FINDINGS_SCHEMA))
         schema["properties"]["findings"]["maxItems"] = profile.token_policy.max_findings
@@ -281,6 +332,25 @@ def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
                        output_schema=schema)
     attempt = Attempt(binding=binding, prompt_hash=profile.prompt_hash())
     result = run_agent(rundir, task_id, stage, len(attempts) + 1, req)
+    if (stage == "build" and task.spec.execution == "direct"
+            and result.outcome == "done" and result.structured):
+        status = result.structured.get("status")
+        if status == "clarify":
+            question = str(result.structured.get("question") or "").strip()
+            if question:
+                result.outcome = "blocked"
+                result.blocked_question = "clarify: " + question
+            else:
+                result.outcome = "error"
+                result.text = "direct owner returned clarify without a question"
+        elif status == "needs_planning":
+            evidence = str(result.structured.get("evidence") or "").strip()
+            if evidence:
+                result.outcome = "blocked"
+                result.blocked_question = "needs-planning: " + evidence
+            else:
+                result.outcome = "error"
+                result.text = "direct owner requested planning without evidence"
     attempt.outcome = {"done": "done", "blocked": "blocked",
                        "quota": "quota"}.get(result.outcome, "failed")
     attempt.blocked_question = result.blocked_question
@@ -311,8 +381,7 @@ def _should_halt(rundir: RunDir, run: RunState, task_id: str, stage: str,
     if not attempts:
         return False
     ladder_profile = (_review_profile(run, task_id, cfg) if stage == "review" else
-                     cfg.profiles[{"test": "test-writer", "build": "builder",
-                                  "review": "reviewer"}[stage]])
+                      _stage_profile(run.tasks[task_id], stage, cfg))
     ladder = _effective_bindings(ladder_profile, run.tasks[task_id].spec.complexity)
     action, _ = next_action(attempts, ladder)
     if action == "halt":
@@ -419,6 +488,27 @@ def _gate_and_advance(rundir: RunDir, run: RunState, task_id: str, stage: str,
         _write_note(rundir, task_id, stage,
                     "Previous attempt failed gates:\n" + "\n".join(
                         f"- {g.name}: {g.detail[:1500]}" for g in failed))
+        infrastructure = [
+            gate for gate in failed if gate.failure_kind == "infrastructure"
+        ]
+        if infrastructure:
+            attempt.failure_kind = "infrastructure"
+            task = run.tasks[task_id]
+            task.status = "blocked"
+            run.stage = "halted"
+            run.halt_reason = (
+                "infrastructure gate failed; implementation preserved: "
+                + ", ".join(gate.name for gate in infrastructure)
+            )
+            rundir.append_event({
+                "kind": "infrastructure_blocked",
+                "task": task_id,
+                "stage": stage,
+                "gates": [gate.name for gate in infrastructure],
+                "reason": run.halt_reason,
+            })
+            rundir.write_state(run)
+            return
         # Discard the failed attempt's uncommitted worktree edits so the next
         # attempt starts from a clean tree instead of building on top of them.
         git(repo, "checkout", "--", ".")
@@ -426,12 +516,50 @@ def _gate_and_advance(rundir: RunDir, run: RunState, task_id: str, stage: str,
     rundir.write_state(run)
 
 
+def _prepare_environment(rundir: RunDir, run: RunState, task_id: str,
+                         cfg: RegieConfig, repo: Path) -> bool:
+    """Prepare one isolated worktree before spending any model tokens."""
+    command = getattr(cfg, "commands", {}).get("setup") or bootstrap_command(repo)
+    if not command:
+        return True
+    marker_dir = rundir.path / "environment"
+    marker_dir.mkdir(exist_ok=True)
+    key = hashlib.sha256(str(repo.resolve()).encode()).hexdigest()[:16]
+    marker = marker_dir / f"{key}.json"
+    if marker.is_file():
+        return True
+
+    gate = run_command_gate("setup", command, repo)
+    (marker_dir / f"{key}.log").write_text(gate.detail)
+    rundir.append_event({
+        "kind": "environment_setup",
+        "task": task_id,
+        "stage": "setup",
+        "command": command,
+        "outcome": "passed" if gate.passed else "failed",
+        "failure_kind": gate.failure_kind,
+    })
+    if not gate.passed:
+        run.tasks[task_id].status = "blocked"
+        run.stage = "halted"
+        run.halt_reason = (
+            f"worktree setup failed before agent dispatch: {gate.detail[-500:]}"
+        )
+        rundir.write_state(run)
+        return False
+    marker.write_text(json.dumps({"command": command, "prepared": True}, indent=2))
+    return True
+
+
 def _policy_gates(run: RunState, cfg: RegieConfig, repo: Path,
-                  stage: str, start_sha: str) -> list[GateResult]:
+                  stage: str, start_sha: str, *, include_build: bool = True
+                  ) -> list[GateResult]:
     tier = resolve_tier(run, cfg)
     gates: list[GateResult] = []
     if stage in {"build", "finalize"}:
-        names = ["typecheck", "build"]
+        names = ["typecheck"]
+        if include_build:
+            names.append("build")
         if tier != "fast":
             names.append("coverage")
         for name in names:
@@ -454,6 +582,8 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
              max_dispatches: int | None = None) -> None:
     """Advance one task through test → build → review. Test seam: max_dispatches."""
     task = run.tasks[task_id]
+    if not _prepare_environment(rundir, run, task_id, cfg, repo):
+        return
     task.status = "running"
     if not task.start_sha:
         task.start_sha = head_sha(repo)
@@ -475,8 +605,7 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
         if primed:
             extra += "\n\nRelevant project knowledge:\n" + "\n".join(
                 f"- {entry.fact}" for entry in primed)
-        profile = cfg.profiles[{"test": "test-writer", "build": "builder",
-                                "review": "reviewer"}[stage]]
+        profile = _stage_profile(task, stage, cfg)
         pre_dispatch = set(changed_files(repo))
         attempt, result = _dispatch(rundir, run, task_id, stage, profile, cfg,
                                     repo, ctx, extra)
@@ -496,6 +625,25 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             git(repo, "checkout", "--", ".")
             git(repo, "clean", "-fd")
             question = attempt.blocked_question or ""
+            if (stage == "build" and task.spec.execution == "direct"
+                    and question.startswith("needs-planning:")):
+                run.tasks = {}
+                run.checkpoints = []
+                run.execution_route = "planned"
+                run.route_reason = (
+                    "direct owner found planning evidence: "
+                    + question.removeprefix("needs-planning:").strip()
+                )
+                run.stage = "plan"
+                rundir.append_event({
+                    "kind": "workflow_escalated",
+                    "task": task_id,
+                    "stage": "build",
+                    "route": "planned",
+                    "reason": run.route_reason,
+                })
+                rundir.write_state(run)
+                return
             if stage == "build" and question.startswith("bad-test:"):
                 if not task.escaped:
                     task.escaped = True
@@ -535,11 +683,18 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             _gate_and_advance(rundir, run, task_id, stage, gates, attempt,
                               _pass_test, repo)
         elif stage == "build":
-            gates = [run_command_gate("test", cfg.commands["test"], repo,
-                                      rerun_on_fail=True),
-                     run_command_gate("lint", cfg.commands["lint"], repo),
-                     diff_gate(repo, cfg.test_globs)]
-            gates.extend(_policy_gates(run, cfg, repo, "build", task.start_sha))
+            gates = []
+            if "build" in cfg.commands:
+                gates.append(run_command_gate("build", cfg.commands["build"], repo))
+            gates.extend([
+                run_command_gate("test", cfg.commands["test"], repo,
+                                 rerun_on_fail=True),
+                run_command_gate("lint", cfg.commands["lint"], repo),
+            ])
+            if task.spec.execution != "direct":
+                gates.append(diff_gate(repo, cfg.test_globs))
+            gates.extend(_policy_gates(
+                run, cfg, repo, "build", task.start_sha, include_build=False))
             def _pass_build(pre=pre_dispatch):
                 if set(changed_files(repo)) - pre:
                     commit_all(repo, f"feat({task_id}): {task.spec.title}")
@@ -717,14 +872,27 @@ def _run_plan_reviews(rundir: RunDir, run: RunState, cfg: RegieConfig,
     failures: list[str] = []
     for name in names:
         profile = cfg.profiles[name]
-        result = run_agent(
-            rundir, f"PLAN-{name.upper()}", f"plan-review:{name}", 1,
-            AgentRequest(prompt=packet, instructions=profile.prompt_text(), cwd=worktree,
-                         binding=profile.primary, budgets=profile.budgets,
-                         token_policy=profile.token_policy,
-                         output_schema=PLAN_REVIEW_SCHEMA))
-        if result.outcome != "done" or not result.structured:
-            failures.append(f"{name}: reviewer unavailable ({result.outcome})")
+        result = None
+        last_outcome = "unavailable"
+        for attempt_no, binding in enumerate(profile.bindings, 1):
+            candidate = run_agent(
+                rundir, f"PLAN-{name.upper()}", f"plan-review:{name}", attempt_no,
+                AgentRequest(
+                    prompt=packet,
+                    instructions=profile.prompt_text(),
+                    cwd=worktree,
+                    binding=binding,
+                    budgets=profile.budgets,
+                    token_policy=profile.token_policy,
+                    output_schema=PLAN_REVIEW_SCHEMA,
+                ),
+            )
+            last_outcome = candidate.outcome
+            if candidate.outcome == "done" and candidate.structured:
+                result = candidate
+                break
+        if result is None:
+            failures.append(f"{name}: reviewer unavailable ({last_outcome})")
             continue
         review = PlanReview(lens=name, **result.structured)
         run.plan_reviews.append(review)
@@ -738,6 +906,145 @@ def _run_plan_reviews(rundir: RunDir, run: RunState, cfg: RegieConfig,
     return failures
 
 
+def _write_product_owner_decision(
+    rundir: RunDir,
+    decision: ProductOwnerDecision,
+) -> None:
+    payload = decision.model_dump()
+    (rundir.path / "product-owner-decision.json").write_text(
+        json.dumps(payload, indent=2) + "\n"
+    )
+    lines = [
+        "# Product Owner recovery decision",
+        "",
+        f"**Action:** {decision.action}",
+        "",
+        decision.summary,
+    ]
+    for title, values in (
+        ("Directives", decision.directives),
+        ("Accepted findings", decision.accepted_findings),
+        ("Rejected findings", decision.rejected_findings),
+    ):
+        if values:
+            lines.extend(["", f"## {title}", "", *[f"- {item}" for item in values]])
+    if decision.human_question:
+        lines.extend(["", "## Human question", "", decision.human_question])
+    (rundir.path / "product-owner-decision.md").write_text("\n".join(lines) + "\n")
+
+
+def _run_product_owner(
+    rundir: RunDir,
+    run: RunState,
+    cfg: RegieConfig,
+    worktree: Path,
+    brief: str,
+    structured: dict,
+    deterministic_errors: list[str],
+    review_errors: list[str],
+) -> tuple[ProductOwnerDecision | None, str | None]:
+    """Ask one bounded advisor to resolve plan non-convergence.
+
+    The returned decision is only a recommendation. ``plan_stage`` validates
+    its authority before changing state; notably, ``accept`` cannot waive
+    schema/preflight failures.
+    """
+    profile = cfg.profiles.get("product-owner")
+    if profile is None:
+        return None, "product-owner profile is not configured"
+    packet = "\n\n".join([
+        "# Recovery boundary\nThe plan did not converge after three reviewed drafts.",
+        "## Original brief\n" + brief,
+        "## Latest proposed spec\n" + str(structured.get("spec_markdown", "")),
+        "## Latest proposed task plan\n```json\n"
+        + json.dumps(structured.get("tasks", []), indent=2) + "\n```",
+        "## Deterministic validation failures\n"
+        + ("\n".join(f"- {item}" for item in deterministic_errors) or "- None"),
+        "## Review-panel findings\n"
+        + ("\n".join(f"- {item}" for item in review_errors) or "- None"),
+        "## Attempt and provider evidence\n"
+        + json.dumps([
+            {
+                "provider": attempt.binding.cli,
+                "model": attempt.binding.model,
+                "outcome": attempt.outcome,
+                "failure_kind": attempt.failure_kind,
+                "failure_signature": attempt.failure_signature,
+            }
+            for attempt in run.planner_attempts
+        ], indent=2),
+        ("## Authority boundary\nYou may consolidate findings, reject advisory "
+         "scope suggestions, or direct one final planner revision. You may not "
+         "waive deterministic validation, tests, security gates, destructive "
+         "approval, credentials, provider policy, or budgets. Ask the human "
+         "when their authority is required."),
+    ]) + "\n"
+    write_packet(rundir.task_dir(_PRODUCT_OWNER_TASK_ID), packet)
+    first_attempt = len(run.product_owner_attempts) + 1
+    last_outcome = "unavailable"
+    for offset, binding in enumerate(profile.bindings):
+        result = run_agent(
+            rundir,
+            _PRODUCT_OWNER_TASK_ID,
+            "product-owner",
+            first_attempt + offset,
+            AgentRequest(
+                prompt=packet,
+                instructions=profile.prompt_text(),
+                cwd=worktree,
+                binding=binding,
+                budgets=profile.budgets,
+                token_policy=profile.token_policy,
+                output_schema=PRODUCT_OWNER_SCHEMA,
+            ),
+        )
+        outcome = {"done": "done", "quota": "quota", "blocked": "blocked"}.get(
+            result.outcome, "failed"
+        )
+        attempt = Attempt(
+            binding=binding,
+            prompt_hash=profile.prompt_hash(),
+            outcome=outcome,
+            blocked_question=result.blocked_question,
+            turns=result.turns,
+            usage=result.usage,
+            metrics=result.metrics,
+        )
+        if outcome == "failed":
+            attempt.failure_kind = _classify_dispatch_failure(result.text)
+            attempt.failure_signature = _failure_signature(
+                attempt.failure_kind, result.text
+            )
+        run.product_owner_attempts.append(attempt)
+        rundir.write_state(run)
+        last_outcome = outcome
+        if result.outcome != "done" or not result.structured:
+            continue
+        try:
+            decision = ProductOwnerDecision(**result.structured)
+        except Exception:  # noqa: BLE001 - malformed provider contract; try next rung
+            attempt.outcome = "failed"
+            attempt.failure_kind = "contract"
+            attempt.failure_signature = _failure_signature(
+                "contract", json.dumps(result.structured, sort_keys=True)
+            )
+            rundir.write_state(run)
+            last_outcome = "invalid contract"
+            continue
+        run.product_owner_decision = decision
+        _write_product_owner_decision(rundir, decision)
+        rundir.append_event({
+            "kind": "product_owner_decision",
+            "task": _PRODUCT_OWNER_TASK_ID,
+            "stage": "product-owner",
+            "action": decision.action,
+            "summary": decision.summary,
+        })
+        rundir.write_state(run)
+        return decision, None
+    return None, f"product owner unavailable ({last_outcome})"
+
+
 def _apply_plan(rundir: RunDir, run: RunState, structured: dict) -> None:
     spec_dir = rundir.path / "spec"
     spec_dir.mkdir(parents=True, exist_ok=True)
@@ -749,6 +1056,42 @@ def _apply_plan(rundir: RunDir, run: RunState, structured: dict) -> None:
     run.checkpoints = [CheckpointState(task_id=s.id, reason=s.checkpoint)
                        for s in specs if s.checkpoint]
     run.stage = "tasks" if run.autonomous else "approve"
+    rundir.write_state(run)
+
+
+def apply_direct_brief(rundir: RunDir, run: RunState, brief_text: str) -> None:
+    """Compile an accepted low-risk brief into one owner task without an LLM plan."""
+    first = next((line.strip().lstrip("#").strip() for line in brief_text.splitlines()
+                  if line.strip()), "Implement the requested change")
+    title = first[:120]
+    spec_dir = rundir.path / "spec"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "spec.md").write_text(
+        "# Direct brief contract\n\n" + brief_text.strip() + "\n"
+    )
+    spec = TaskSpec(
+        id="T1",
+        title=title,
+        profile="implementer",
+        criteria=[brief_text.strip()],
+        planned_tests=["Add or adapt the smallest focused regression tests needed by the brief."],
+        checklist=[
+            "Every explicit brief requirement is covered by implementation evidence.",
+            "Focused regression tests prove the changed behavior.",
+            "The solution reuses existing code or platform capabilities before adding machinery.",
+            "No unrelated refactor, speculative abstraction, or unnecessary dependency was added.",
+        ],
+        execution="direct",
+    )
+    run.tasks = {spec.id: TaskState(spec=spec, stage="build")}
+    run.stage = "tasks"
+    rundir.append_event({
+        "kind": "workflow_routed",
+        "task": spec.id,
+        "stage": "intake",
+        "route": "direct",
+        "reason": run.route_reason,
+    })
     rundir.write_state(run)
 
 
@@ -771,11 +1114,43 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
 
     while True:
         attempts = run.planner_attempts
+        binding = profile.primary
         if attempts:
-            action, _ = next_action(attempts, profile.bindings)
+            action, binding = next_action(attempts, profile.bindings)
             if action == "halt":
-                _halt_run(rundir, run, _ladder_halt_reason("plan", attempts[-1], _PLAN_TASK_ID))
-                return
+                contract_attempts = sum(
+                    attempt.failure_kind == "contract" for attempt in attempts
+                )
+                if attempts[-1].failure_kind == "contract":
+                    recovery_revisions = (
+                        _MAX_PRODUCT_OWNER_REVISIONS
+                        if run.product_owner_decision is not None
+                        and run.product_owner_decision.action == "revise"
+                        else 0
+                    )
+                    if contract_attempts < (
+                        _MAX_PLAN_CONTRACT_ATTEMPTS + recovery_revisions
+                    ):
+                        # Provider failover and plan convergence are separate
+                        # budgets. A valid provider response rejected by preflight
+                        # or review must get a bounded repair pass even when quota
+                        # skips already consumed the routing ladder.
+                        binding = attempts[-1].binding
+                    else:
+                        _halt_run(
+                            rundir,
+                            run,
+                            "plan validation did not converge after "
+                            f"{contract_attempts} reviewed drafts",
+                        )
+                        return
+                else:
+                    _halt_run(
+                        rundir,
+                        run,
+                        _ladder_halt_reason("plan", attempts[-1], _PLAN_TASK_ID),
+                    )
+                    return
 
         extra = _notes_for(rundir, _PLAN_TASK_ID, "plan")
         packet = _render_plan_packet(
@@ -789,9 +1164,6 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
                           for p in _convention_paths(worktree)}})
         write_packet(rundir.task_dir(_PLAN_TASK_ID), packet)
 
-        binding = profile.primary
-        if attempts:
-            _action, binding = next_action(attempts, profile.bindings)
         req = AgentRequest(prompt=packet, instructions=profile.prompt_text(), cwd=worktree,
                            binding=binding, budgets=profile.budgets,
                            token_policy=profile.token_policy,
@@ -816,15 +1188,17 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
         if attempt.outcome == "failed":
             continue
 
-        errors = _validate_plan(result.structured, cfg)
+        deterministic_errors = _validate_plan(result.structured, cfg)
         prospective_tasks = ([TaskSpec(**raw) for raw in result.structured["tasks"]]
-                             if not errors and result.structured else [])
+                             if not deterministic_errors and result.structured else [])
         advanced_profiles = any(name in cfg.profiles for name in _PLAN_LENSES)
         if advanced_profiles:
-            errors.extend(plan_preflight(prospective_tasks))
-        if not errors:
-            errors.extend(_run_plan_reviews(
-                rundir, run, cfg, worktree, brief_text, result.structured))
+            deterministic_errors.extend(plan_preflight(prospective_tasks))
+        review_errors: list[str] = []
+        if not deterministic_errors:
+            review_errors = _run_plan_reviews(
+                rundir, run, cfg, worktree, brief_text, result.structured)
+        errors = [*deterministic_errors, *review_errors]
         if errors:
             attempt.outcome = "failed"
             attempt.failure_kind = "contract"
@@ -833,6 +1207,84 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
                        "Previous plan failed validation:\n" + "\n".join(
                            f"- {e}" for e in errors))
             rundir.write_state(run)
+            contract_attempts = sum(
+                item.failure_kind == "contract" for item in run.planner_attempts
+            )
+            if contract_attempts >= _MAX_PLAN_CONTRACT_ATTEMPTS:
+                if run.product_owner_decision is not None:
+                    _halt_run(
+                        rundir,
+                        run,
+                        "plan validation did not converge after Product Owner recovery",
+                    )
+                    return
+                decision, po_error = _run_product_owner(
+                    rundir,
+                    run,
+                    cfg,
+                    worktree,
+                    brief_text,
+                    result.structured or {},
+                    deterministic_errors,
+                    review_errors,
+                )
+                if decision is None:
+                    _halt_run(
+                        rundir,
+                        run,
+                        "plan validation did not converge after "
+                        f"{contract_attempts} reviewed drafts; {po_error}",
+                    )
+                    return
+                if decision.action == "revise":
+                    if not decision.directives:
+                        _halt_run(
+                            rundir,
+                            run,
+                            "Product Owner requested revision without directives",
+                        )
+                        return
+                    _write_note(
+                        rundir,
+                        _PLAN_TASK_ID,
+                        "plan",
+                        "Product Owner recovery directives (one final revision):\n"
+                        + "\n".join(f"- {item}" for item in decision.directives)
+                        + "\n\nUnresolved validation evidence:\n"
+                        + "\n".join(f"- {item}" for item in errors),
+                    )
+                    continue
+                if decision.action == "accept":
+                    if deterministic_errors:
+                        _halt_run(
+                            rundir,
+                            run,
+                            "Product Owner cannot accept a plan with deterministic "
+                            "validation failures",
+                        )
+                        return
+                    if any(
+                        not item.startswith("plan-scope:") for item in review_errors
+                    ):
+                        _halt_run(
+                            rundir,
+                            run,
+                            "Product Owner cannot accept mandatory feasibility, "
+                            "completeness, design, or reviewer-availability failures",
+                        )
+                        return
+                    _apply_plan(rundir, run, result.structured)
+                    run.workflow = resolve_tier(run, cfg)
+                    rundir.write_state(run)
+                    return
+                if decision.action == "ask_human":
+                    question = decision.human_question or decision.summary
+                    _halt_run(
+                        rundir, run, f"Product Owner requests human decision: {question}"
+                    )
+                    return
+                _halt_run(rundir, run, f"Product Owner halted recovery: {decision.summary}")
+                return
             continue
 
         _apply_plan(rundir, run, result.structured)
@@ -863,9 +1315,9 @@ def run_tasks_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
         else:
             for task_id in pending:
                 run_task(rundir, run, task_id, cfg, repo, ctx)
-                if run.stage == "halted":
+                if run.stage != "tasks":
                     return
-        if run.stage == "halted":
+        if run.stage != "tasks":
             return
         checkpoint = next((item for item in run.checkpoints
                            if item.status == "pending"
@@ -985,10 +1437,16 @@ def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
     git(worktree, "checkout", "--", ".")
     git(worktree, "clean", "-fd")
 
-    gates = [run_command_gate("test", cfg.commands["test"], worktree,
-                              rerun_on_fail=True),
-             run_command_gate("lint", cfg.commands["lint"], worktree)]
-    gates.extend(_policy_gates(run, cfg, worktree, "finalize", run.base_sha))
+    gates = []
+    if "build" in cfg.commands:
+        gates.append(run_command_gate("build", cfg.commands["build"], worktree))
+    gates.extend([
+        run_command_gate("test", cfg.commands["test"], worktree,
+                         rerun_on_fail=True),
+        run_command_gate("lint", cfg.commands["lint"], worktree),
+    ])
+    gates.extend(_policy_gates(
+        run, cfg, worktree, "finalize", run.base_sha, include_build=False))
     for gate in gates:
         if not gate.passed:
             _halt_run(rundir, run, f"{gate.name} gate failed: {gate.detail[:500]}")
@@ -1054,21 +1512,39 @@ def _run_final_review(rundir: RunDir, run: RunState, cfg: RegieConfig,
          "abstractions, incompatible assumptions, and regressions. Do not edit."),
     ]) + "\n"
     write_packet(rundir.task_dir("FINAL-REVIEW"), packet)
-    result = run_agent(
-        rundir, "FINAL-REVIEW", "final-review", len(run.final_review_attempts) + 1,
-        AgentRequest(prompt=packet, instructions=profile.prompt_text(), cwd=worktree,
-                     binding=profile.primary, budgets=profile.budgets,
-                     token_policy=profile.token_policy,
-                     output_schema=SPECIALIST_SCHEMA))
-    attempt = Attempt(
-        binding=profile.primary, prompt_hash=profile.prompt_hash(),
-        outcome={"done": "done", "quota": "quota", "blocked": "blocked"}.get(
-            result.outcome, "failed"),
-        turns=result.turns, usage=result.usage, metrics=result.metrics)
-    run.final_review_attempts.append(attempt)
-    rundir.write_state(run)
-    if result.outcome != "done" or not result.structured:
-        return f"final integration review unavailable: {result.outcome}"
+    result = None
+    last_outcome = "unavailable"
+    first_attempt = len(run.final_review_attempts) + 1
+    for offset, binding in enumerate(profile.bindings):
+        candidate = run_agent(
+            rundir, "FINAL-REVIEW", "final-review", first_attempt + offset,
+            AgentRequest(
+                prompt=packet,
+                instructions=profile.prompt_text(),
+                cwd=worktree,
+                binding=binding,
+                budgets=profile.budgets,
+                token_policy=profile.token_policy,
+                output_schema=SPECIALIST_SCHEMA,
+            ),
+        )
+        last_outcome = candidate.outcome
+        attempt = Attempt(
+            binding=binding,
+            prompt_hash=profile.prompt_hash(),
+            outcome={"done": "done", "quota": "quota", "blocked": "blocked"}.get(
+                candidate.outcome, "failed"),
+            turns=candidate.turns,
+            usage=candidate.usage,
+            metrics=candidate.metrics,
+        )
+        run.final_review_attempts.append(attempt)
+        rundir.write_state(run)
+        if candidate.outcome == "done" and candidate.structured:
+            result = candidate
+            break
+    if result is None:
+        return f"final integration review unavailable: {last_outcome}"
     findings = [Finding(**raw) for raw in result.structured.get("findings", [])]
     serious = [finding for finding in findings
                if finding.severity in {"blocker", "major"}]
@@ -1103,6 +1579,8 @@ def reconcile(rundir: RunDir, run: RunState, repo: Path) -> int:
     for (task_id, stage), count in intents.items():
         if task_id == _PLAN_TASK_ID:
             attempts = run.planner_attempts
+        elif task_id == _PRODUCT_OWNER_TASK_ID:
+            attempts = run.product_owner_attempts
         elif task_id in run.tasks:
             attempts = run.tasks[task_id].attempts[stage]
         else:

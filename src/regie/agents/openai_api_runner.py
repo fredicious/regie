@@ -235,11 +235,13 @@ def run(cfg: dict) -> dict:
                 structured = parsed
         except json.JSONDecodeError:
             pass
-        for line in text.splitlines():
-            if line.strip().lower().startswith("blocked:"):
-                return {"regie_result": True, "outcome": "blocked", "text": text,
-                        "blocked_question": line.split(":", 1)[1].strip(),
-                        "usage": raw, "metrics": metrics, "turns": turn}
+        from regie.agents.base import blocked_question_from_text
+
+        blocked = blocked_question_from_text(text)
+        if blocked is not None:
+            return {"regie_result": True, "outcome": "blocked", "text": text,
+                    "blocked_question": blocked,
+                    "usage": raw, "metrics": metrics, "turns": turn}
         return {"regie_result": True, "outcome": "done", "text": text,
                 "structured": structured, "usage": raw, "metrics": metrics,
                 "turns": turn}

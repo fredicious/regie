@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 import re
 
-from regie.agents.base import AgentRequest, AgentResult, register
+from regie.agents.base import (
+    AgentRequest,
+    AgentResult,
+    blocked_question_from_text,
+    register,
+)
 from regie.models import UsageMetrics
 from regie.quota import quota_metadata
 
@@ -116,10 +121,10 @@ class ClaudeAdapter:
                 quota_kind=quota.kind, quota_scope=quota.scope,
                 quota_reset_at=quota.reset_at, quota_reason=quota.reason,
             )
-        for line in text.splitlines():
-            if line.strip().lower().startswith("blocked:"):
-                return AgentResult(outcome="blocked", text=text, **telemetry,
-                                   blocked_question=line.split(":", 1)[1].strip())
+        blocked = blocked_question_from_text(text)
+        if blocked is not None:
+            return AgentResult(outcome="blocked", text=text, **telemetry,
+                               blocked_question=blocked)
         if (doc.get("subtype") == "error_max_turns"
                 or str(doc.get("terminal_reason")) == "max_turns"):
             # Name the death precisely: a budget exhaustion retried blind is a

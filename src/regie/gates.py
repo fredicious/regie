@@ -9,6 +9,16 @@ from regie.gitops import changed_files
 from regie.models import GateResult
 
 _TAIL = 4000
+_INFRASTRUCTURE_FAILURE = re.compile(
+    r"(?:"
+    r"(?:command not found|executable .*not found|executable doesn't exist)|"
+    r"(?:\bENOENT\b|\bENOTFOUND\b|\bECONNREFUSED\b|\bETIMEDOUT\b)|"
+    r"(?:ERR_PNPM_(?:META_FETCH|FETCH)|unable to resolve package registry)|"
+    r"(?:chromium|chrome|firefox|webkit).*(?:not found|isn't installed)|"
+    r"server files not found.*did you run [`']?build"
+    r")",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _segment_regex(segment: str) -> str:
@@ -80,6 +90,11 @@ def _run(cmd: str, cwd: Path) -> tuple[int, str]:
     return proc.returncode, (proc.stdout + proc.stderr)[-_TAIL:]
 
 
+def classify_gate_failure(output: str) -> str:
+    """Separate unavailable tooling/runtime from failures in the submitted code."""
+    return "infrastructure" if _INFRASTRUCTURE_FAILURE.search(output) else "code"
+
+
 def run_command_gate(name: str, cmd: str, cwd: Path,
                      rerun_on_fail: bool = False) -> GateResult:
     code, output = _run(cmd, cwd)
@@ -90,7 +105,12 @@ def run_command_gate(name: str, cmd: str, cwd: Path,
         if code2 == 0:
             return GateResult(name=name, passed=True, detail=output2, flaky=True)
         output = output2
-    return GateResult(name=name, passed=False, detail=output)
+    return GateResult(
+        name=name,
+        passed=False,
+        detail=output,
+        failure_kind=classify_gate_failure(output),
+    )
 
 
 def diff_gate(repo: Path, test_globs: list[str]) -> GateResult:
@@ -105,7 +125,8 @@ def red_test_gate(cwd: Path, test_cmd: str) -> GateResult:
     collect_code, collect_out = _run(f"{test_cmd} --collect-only", cwd)
     if collect_code != 0:
         return GateResult(name="tdd-red", passed=False,
-                          detail=f"collection-error: {collect_out[-1000:]}")
+                          detail=f"collection-error: {collect_out[-1000:]}",
+                          failure_kind=classify_gate_failure(collect_out))
     code, _output = _run(test_cmd, cwd)
     if code == 0:
         return GateResult(name="tdd-red", passed=False, detail="unexpectedly-green")

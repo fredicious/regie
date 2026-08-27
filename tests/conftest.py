@@ -4,6 +4,12 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def disable_desktop_notifications(monkeypatch) -> None:
+    """Tests must never produce real operating-system notifications."""
+    monkeypatch.setenv("REGIE_NOTIFICATIONS", "0")
+
+
 @pytest.fixture
 def fake_profiles(tmp_path) -> Path:
     d = tmp_path / "profiles"

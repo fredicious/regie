@@ -50,6 +50,40 @@ def test_loads_commands_globs_and_profiles(tmp_path):
     assert len(cfg.profiles["builder"].prompt_hash()) == 64
 
 
+def test_enabled_providers_filter_every_profile_ladder(tmp_path):
+    repo = _repo_with(
+        tmp_path,
+        GOOD_TOML + '\n[providers]\nenabled = ["codex"]\n',
+    )
+
+    cfg = load_config(repo, PROFILES)
+
+    assert cfg.enabled_providers == {"codex"}
+    assert all(
+        binding.cli == "codex"
+        for profile in cfg.profiles.values()
+        for binding in profile.bindings
+    )
+    assert all(
+        profile.hard_binding is None or profile.hard_binding.cli == "codex"
+        for profile in cfg.profiles.values()
+    )
+
+
+def test_provider_filter_rejects_profiles_without_a_viable_binding(tmp_path):
+    profiles = _profiles_dir_with(
+        tmp_path,
+        "binding: { cli: claude, model: sonnet }\n",
+    )
+    repo = _repo_with(
+        tmp_path,
+        GOOD_TOML + '\n[providers]\nenabled = ["codex"]\n',
+    )
+
+    with pytest.raises(ConfigError, match="no bindings from enabled providers"):
+        load_config(repo, profiles)
+
+
 def test_missing_keys_reported_together(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_config(_repo_with(tmp_path, "[commands]\nlint='x'"), PROFILES)

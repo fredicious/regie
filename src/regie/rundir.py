@@ -64,7 +64,10 @@ class RunDir:
             os.fsync(f.fileno())
 
     def append_intent(self, record: dict) -> None:
-        self._append_jsonl("intent.jsonl", record)
+        self._append_jsonl(
+            "intent.jsonl",
+            {"ts": datetime.now(UTC).isoformat(), **record},
+        )
 
     def read_intents(self) -> list[dict]:
         file = self.path / "intent.jsonl"

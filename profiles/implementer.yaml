@@ -1,0 +1,9 @@
+bindings:
+  - { cli: codex, model: gpt-5.6-sol, auth: subscription }
+  - { cli: claude, model: sonnet, auth: subscription }
+budgets: { turns: 120, wall_minutes: 45, stall_minutes: 8 }
+token_policy:
+  effort: medium
+  tools: [list, read, search, patch, shell]
+  sandbox: workspace-write
+  context_chars: 14000

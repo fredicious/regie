@@ -70,7 +70,7 @@ def render_packet(task: TaskSpec, spec_excerpt: str = "", decisions: str = "",
     # Criteria are the task's spec contract. Inline spec text is only useful
     # when it contains a directly relevant paragraph not already decomposed.
     snippets = []
-    if stage in ("test", "review", "specialist-review"):
+    if stage in ("test", "review", "specialist-review") or task.execution == "direct":
         relevant_spec = _relevant(spec_excerpt, task, min(remaining // 3, 3000))
         if relevant_spec:
             snippets.append(f"## Relevant spec context\n{relevant_spec}")

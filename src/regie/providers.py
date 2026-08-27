@@ -27,7 +27,8 @@ def health(binding: Binding) -> ProviderHealth:
 
 
 def total_cost(run) -> float:
-    attempts = list(run.planner_attempts) + list(run.final_review_attempts)
+    attempts = (list(run.planner_attempts) + list(run.product_owner_attempts)
+                + list(run.final_review_attempts))
     for task in run.tasks.values():
         for stage_attempts in task.attempts.values():
             attempts.extend(stage_attempts)

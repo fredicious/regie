@@ -103,6 +103,16 @@ def test_parse_blocked_line():
     assert r.outcome == "blocked" and "cache per user" in r.blocked_question
 
 
+def test_parse_natural_material_clarification():
+    r = get_adapter("claude").parse(_doc(
+        result=("These lead to fundamentally different implementations. "
+                "Could you clarify which behavior you want — native text "
+                "selection or row item selection?")), 0)
+    assert r.outcome == "blocked"
+    assert r.blocked_question.startswith("clarify:")
+    assert "native text selection" in r.blocked_question
+
+
 def test_parse_error_on_garbage_and_nonzero_exit():
     assert get_adapter("claude").parse("not json at all", 0).outcome == "error"
     assert get_adapter("claude").parse(_doc(), 1).outcome == "error"

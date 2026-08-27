@@ -107,6 +107,12 @@ def collect(home: Path) -> RunsStats:
             stats.bucket("plan", key).record(
                 a.get("outcome"), a.get("turns") or 0, pos,
                 _metrics(a, b.get("cli", "")))
+        for pos, a in enumerate(state.get("product_owner_attempts") or []):
+            b = a.get("binding") or {}
+            key = f"{b.get('cli', '?')}:{b.get('model', '?')}"
+            stats.bucket("product-owner", key).record(
+                a.get("outcome"), a.get("turns") or 0, pos,
+                _metrics(a, b.get("cli", "")))
     return stats
 
 

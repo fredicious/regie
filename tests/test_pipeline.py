@@ -12,7 +12,12 @@ from regie.models import (
     TaskSpec,
     TaskState,
 )
-from regie.pipeline import PipelineContext, run_task, run_tasks_stage
+from regie.pipeline import (
+    PipelineContext,
+    apply_direct_brief,
+    run_task,
+    run_tasks_stage,
+)
 from regie.rundir import RunDir
 
 PROFILES_FAKE = None  # built by fixture below
@@ -66,6 +71,160 @@ def test_happy_path_test_build_review_done(regie_home, fixture_repo, cfg):
         run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
     assert run.tasks[tid].status == "done"
     assert (rd.path / "tasks" / "T1" / "context.md").exists()
+
+
+def test_direct_brief_creates_one_owner_task_without_plan(regie_home, fixture_repo):
+    rd = RunDir.create(regie_home, "r1")
+    run = RunState(
+        id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+        stage="intake", execution_route="direct",
+        route_reason="no material risk signal requires an upfront plan",
+    )
+
+    apply_direct_brief(rd, run, "# Support multi-row selection\n\nUse shift-click.")
+
+    assert run.stage == "tasks"
+    assert list(run.tasks) == ["T1"]
+    assert run.tasks["T1"].stage == "build"
+    assert run.tasks["T1"].spec.execution == "direct"
+    assert "Support multi-row selection" in (rd.path / "spec" / "spec.md").read_text()
+
+
+def test_direct_owner_may_change_tests_and_skips_separate_test_writer(
+        regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   stage="tasks", execution_route="direct")
+    spec = TaskSpec(
+        id="T1", title="add divide", profile="implementer",
+        criteria=["divide returns the quotient"], execution="direct")
+    run.tasks["T1"] = TaskState(spec=spec, stage="build")
+    ctx = PipelineContext(spec_excerpt="Direct brief", decisions_path=rd.path / "decisions.md")
+    _script(fixture_repo, [{"result": {"outcome": "done"}, "writes": {
+        "src/calc.py": "def add(a, b):\n    return a + b\n\ndef divide(a, b):\n    return a // b\n",
+        "tests/test_div.py": (
+            "from src.calc import divide\n\ndef test_divide():\n    assert divide(6, 3) == 2\n"),
+    }}])
+
+    run_task(rd, run, "T1", cfg, fixture_repo, ctx, max_dispatches=1)
+
+    task = run.tasks["T1"]
+    assert task.stage == "review"
+    assert task.attempts["test"] == []
+    assert all(gate.name != "diff-guard" for gate in task.attempts["build"][0].gate_results)
+
+
+def test_direct_owner_escalates_to_plan_only_with_repository_evidence(
+        regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   stage="tasks", execution_route="direct")
+    spec = TaskSpec(id="T1", title="change", profile="implementer",
+                    criteria=["change it"], execution="direct")
+    run.tasks["T1"] = TaskState(spec=spec, stage="build")
+    ctx = PipelineContext(decisions_path=rd.path / "decisions.md")
+    _script(fixture_repo, [{"result": {
+        "outcome": "blocked",
+        "blocked_question": "needs-planning: requires coordinated schema migration",
+    }}])
+
+    run_task(rd, run, "T1", cfg, fixture_repo, ctx, max_dispatches=1)
+
+    assert run.stage == "plan"
+    assert run.execution_route == "planned"
+    assert run.tasks == {}
+    assert "schema migration" in run.route_reason
+
+
+def test_direct_owner_structured_clarification_halts_before_gates(
+        regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   stage="tasks", execution_route="direct")
+    spec = TaskSpec(id="T1", title="selection", profile="implementer",
+                    criteria=["select rows"], execution="direct")
+    run.tasks["T1"] = TaskState(spec=spec, stage="build")
+    ctx = PipelineContext(decisions_path=rd.path / "decisions.md")
+    _script(fixture_repo, [{"result": {
+        "outcome": "done",
+        "structured": {
+            "status": "clarify",
+            "summary": "Two materially different interactions are possible.",
+            "question": "Text selection or item selection?",
+            "evidence": None,
+        },
+    }}])
+
+    run_task(rd, run, "T1", cfg, fixture_repo, ctx, max_dispatches=1)
+
+    assert run.stage == "halted"
+    assert run.tasks["T1"].status == "blocked"
+    assert "clarify: Text selection" in (run.halt_reason or "")
+    assert run.tasks["T1"].attempts["build"][0].gate_results == []
+
+
+def test_setup_failure_halts_before_any_agent_dispatch(
+        regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    cfg.commands["setup"] = "false"
+    ctx = PipelineContext(decisions_path=rd.path / "decisions.md")
+
+    run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+
+    assert run.stage == "halted"
+    assert "before agent dispatch" in (run.halt_reason or "")
+    assert run.tasks[tid].attempts["test"] == []
+    assert not (rd.path / "tasks" / tid / "attempt-1.out").exists()
+
+
+def test_infrastructure_gate_preserves_direct_owner_edits_and_halts(
+        regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   stage="tasks", execution_route="direct")
+    spec = TaskSpec(id="T1", title="change", profile="implementer",
+                    criteria=["change it"], execution="direct")
+    run.tasks["T1"] = TaskState(spec=spec, stage="build")
+    cfg.commands["test"] = "missing-regie-test-tool"
+    cfg.commands["lint"] = "true"
+    ctx = PipelineContext(decisions_path=rd.path / "decisions.md")
+    _script(fixture_repo, [{"result": {"outcome": "done"}, "writes": {
+        "src/kept.py": "value = 1\n",
+    }}])
+
+    run_task(rd, run, "T1", cfg, fixture_repo, ctx, max_dispatches=1)
+
+    assert run.stage == "halted"
+    assert "implementation preserved" in (run.halt_reason or "")
+    assert (fixture_repo / "src" / "kept.py").read_text() == "value = 1\n"
+    attempt = run.tasks["T1"].attempts["build"][0]
+    assert attempt.failure_kind == "infrastructure"
+
+
+def test_build_gate_runs_before_test_for_preview_based_suites(
+        regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   stage="tasks", execution_route="direct")
+    spec = TaskSpec(id="T1", title="change", profile="implementer",
+                    criteria=["change it"], execution="direct")
+    run.tasks["T1"] = TaskState(spec=spec, stage="build")
+    cfg.commands.update({
+        "build": "touch .preview-build",
+        "test": "test -f .preview-build",
+        "lint": "true",
+    })
+    ctx = PipelineContext(decisions_path=rd.path / "decisions.md")
+    _script(fixture_repo, [{"result": {"outcome": "done"}, "writes": {
+        "src/changed.py": "value = 1\n",
+    }}])
+
+    run_task(rd, run, "T1", cfg, fixture_repo, ctx, max_dispatches=1)
+
+    assert run.tasks["T1"].stage == "review"
+    names = [gate.name for gate in run.tasks["T1"].attempts["build"][0].gate_results]
+    assert names[:3] == ["build", "test", "lint"]
 
 
 def test_reviewer_blocker_routes_back_to_builder(regie_home, fixture_repo, cfg):

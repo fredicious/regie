@@ -2,14 +2,14 @@
 
 Everything consciously deferred from v1. Nothing here is a commitment; it's the
 memory of good ideas so they don't get lost. Source: 2026-07-29 brainstorming
-session (see `docs/superpowers/specs/2026-07-29-agent-harness-v1-design.md`).
+session (see `docs/superpowers/specs/2026-07-29-regie-v1-design.md`).
 
 ## v1.5
 
 - **Web dashboard** — Next.js app over the run directories (pure reader of
   `state.json` + `events.jsonl`): real-time state-machine view, drill into any
-  agent transcript, full run history. Planned as the harness's own first
-  assignment: write the brief, let the harness build it.
+  agent transcript, full run history. The terminal control room now covers the
+  local operator experience; a web version would target remote/shared access.
 
 ## Reconsidered after the 2026-07-29 adversarial review
 
@@ -20,7 +20,8 @@ session (see `docs/superpowers/specs/2026-07-29-agent-harness-v1-design.md`).
   by the escalation ladder (evidence beats prediction).
 - **Automated `blocked`-question routing** — v1 halts and notifies instead of
   machine-mediated Q&A dispatch.
-- **`harness watch` TUI** — v1 ships `regie status` + `tail -f events.jsonl | jq`.
+- **`harness watch` TUI** — superseded by the shipped `regie` control room; the
+  plain `status` and JSONL interfaces remain automation-friendly fallbacks.
 - **Six-profile roster** — v1 merges spec-er+decomposer into planner and makes
   debugger a builder variant; split again if telemetry says so.
 - **Autonomous-by-default** — v1 defaults to a human spec checkpoint
@@ -115,6 +116,35 @@ Materially inspired by [MetaSwarm](https://github.com/dsifry/metaswarm); see
   guided `regie init`, provider readiness reporting, and generated handoffs.
 - Parent/child run linkage as the durable foundation for recursive,
   multi-repository orchestration.
+
+## Done 2026-08-17 — terminal control room
+
+- Bare `regie` launches a live Textual application; every existing subcommand
+  remains available for scripts and CI.
+- In-app brief composer and run launcher with repository, workflow-tier, and
+  autonomous-mode controls.
+- On-demand historical run picker, expanded dependency/task status table,
+  acceptance-evidence detail, live event ledger, provider health, normalized
+  usage/cost, and PR-shepherd telemetry. Compact telemetry lives in the top
+  overview so the bottom is reserved for two wider scrolling evidence panes.
+- Lock-safe approval and resume actions backed by the same durable transitions
+  and CLI engine used outside the interface.
+
+## Done 2026-08-17 — bounded Product Owner recovery
+
+- Three rejected reviewed plan drafts invoke one read-only Product Owner agent
+  before Régie halts.
+- Structured `revise`, `accept`, `ask_human`, and `halt` decisions are persisted
+  as run evidence and projected in Agent Activity and the artifact browser.
+- `revise` grants exactly one additional planner contract attempt; `accept` is
+  limited to scope/alignment findings and cannot waive deterministic checks or
+  mandatory technical reviews.
+- The state machine remains the sole orchestration authority and provider
+  failover remains deterministic.
+- In-app Markdown/JSON artifact reader for briefs, specs, research, checkpoints,
+  handoffs, PR bodies, and reflection candidates.
+- Managed background engine processes keep the interface responsive and retain
+  a diagnostic log under `$REGIE_HOME`.
 
 ## v2
 

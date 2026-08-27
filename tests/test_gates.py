@@ -10,6 +10,19 @@ def test_command_gate_pass_and_fail(tmp_path):
     assert not result.passed and "nope" in result.detail
 
 
+def test_command_gate_classifies_missing_tool_as_infrastructure(tmp_path):
+    result = run_command_gate("test", "definitely-not-a-regie-command", tmp_path)
+    assert not result.passed
+    assert result.failure_kind == "infrastructure"
+
+
+def test_command_gate_keeps_assertion_failure_as_code(tmp_path):
+    result = run_command_gate(
+        "test", "python -c 'raise AssertionError(\"wrong value\")'", tmp_path)
+    assert not result.passed
+    assert result.failure_kind == "code"
+
+
 def test_flaky_rerun_marks_flaky(tmp_path):
     # fails first run, passes second: a file acts as the coin
     cmd = "test -f flag || { touch flag; false; }"

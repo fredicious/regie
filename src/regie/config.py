@@ -40,6 +40,7 @@ class Profile(BaseModel):
 
 class WorkflowConfig(BaseModel):
     default_tier: WorkflowTier = "auto"
+    direct_execution: bool = True
     max_parallel_tasks: int = Field(default=1, ge=1, le=8)
     plan_reviews: bool = True
     design_reviews: bool = True
@@ -67,6 +68,7 @@ class RegieConfig(BaseModel):
     base_branch: str = "main"
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     gate_plugins: list[GatePlugin] = Field(default_factory=list)
+    enabled_providers: set[str] = Field(default_factory=set)
 
 
 def _bindings_of(name: str, raw: dict, errors: list[str]) -> list[Binding]:
@@ -125,8 +127,39 @@ def load_config(repo: Path, profiles_dir: Path) -> RegieConfig:
         errors.append("missing required key test_globs")
 
     profiles = _load_profiles(profiles_dir, errors)
+    providers_section = data.get("providers", {})
+    configured_providers = providers_section.get("enabled")
+    if configured_providers is not None:
+        if (not isinstance(configured_providers, list)
+                or not all(isinstance(name, str) for name in configured_providers)):
+            errors.append("providers.enabled must be a list of provider names")
+        elif not configured_providers:
+            errors.append("providers.enabled must contain at least one provider")
+        else:
+            enabled = set(configured_providers)
+            for name, profile in list(profiles.items()):
+                bindings = [binding for binding in profile.bindings
+                            if binding.cli in enabled]
+                if not bindings:
+                    errors.append(
+                        f"profile '{name}' has no bindings from enabled providers"
+                    )
+                    continue
+                hard = profile.hard_binding
+                if hard is not None and hard.cli not in enabled:
+                    hard = None
+                profiles[name] = profile.model_copy(update={
+                    "bindings": bindings,
+                    "hard_binding": hard,
+                })
     if errors:
         raise ConfigError("; ".join(errors))
+
+    enabled_providers = (
+        set(configured_providers)
+        if configured_providers is not None
+        else {binding.cli for profile in profiles.values() for binding in profile.bindings}
+    )
 
     plugins = []
     for name, raw in data.get("gates", {}).items():
@@ -143,4 +176,5 @@ def load_config(repo: Path, profiles_dir: Path) -> RegieConfig:
         base_branch=data.get("base_branch", "main"),
         workflow=WorkflowConfig(**data.get("workflow", {})),
         gate_plugins=plugins,
+        enabled_providers=enabled_providers,
     )

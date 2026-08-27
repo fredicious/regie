@@ -55,6 +55,39 @@ def test_plan_passes_three_independent_review_lenses(
     assert len(calls) == 3
 
 
+def test_plan_review_fails_over_when_primary_provider_has_quota(
+        regie_home, fixture_repo, monkeypatch):
+    rundir = RunDir.create(regie_home, "r1")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   workflow="standard")
+    cfg = _cfg(fixture_repo)
+    calls = []
+
+    monkeypatch.setattr(
+        "regie.pipeline._plan_review_names",
+        lambda _tasks, _cfg, _tier: ["plan-completeness"],
+    )
+
+    def quota_then_pass(_rd, _task_id, _stage, attempt_no, request):
+        calls.append((attempt_no, request.binding.cli, request.binding.model))
+        if len(calls) == 1:
+            return AgentResult(outcome="quota")
+        return AgentResult(outcome="done", structured={
+            "verdict": "pass",
+            "evidence": ["fallback verified the plan"],
+            "findings": [],
+        })
+
+    monkeypatch.setattr("regie.pipeline.run_agent", quota_then_pass)
+    structured = {"spec_markdown": "# Spec", "tasks": [_task().model_dump()]}
+
+    assert _run_plan_reviews(
+        rundir, run, cfg, fixture_repo, "brief", structured) == []
+    assert [cli for _, cli, _ in calls] == ["claude", "codex"]
+    assert [number for number, _, _ in calls] == [1, 2]
+    assert run.plan_reviews[-1].lens == "plan-completeness"
+
+
 def test_checkpoint_is_a_blocking_state_transition(
         regie_home, fixture_repo, monkeypatch):
     rundir = RunDir.create(regie_home, "r1")
@@ -89,3 +122,26 @@ def test_final_integration_review_is_persisted(
     assert _run_final_review(rundir, run, cfg, fixture_repo) is None
     assert run.final_review_attempts[-1].outcome == "done"
     assert (rundir.task_dir("FINAL-REVIEW") / "context.md").exists()
+
+
+def test_final_integration_review_fails_over_after_quota(
+        regie_home, fixture_repo, monkeypatch):
+    rundir = RunDir.create(regie_home, "r1")
+    (rundir.path / "spec").mkdir()
+    (rundir.path / "spec" / "spec.md").write_text("# Spec")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   base_sha="HEAD", workflow="standard")
+    cfg = _cfg(fixture_repo)
+    calls = []
+
+    def quota_then_pass(_rd, _task_id, _stage, _attempt_no, request):
+        calls.append(request.binding.cli)
+        if len(calls) == 1:
+            return AgentResult(outcome="quota")
+        return AgentResult(outcome="done", structured={"findings": []})
+
+    monkeypatch.setattr("regie.pipeline.run_agent", quota_then_pass)
+
+    assert _run_final_review(rundir, run, cfg, fixture_repo) is None
+    assert calls == ["claude", "codex"]
+    assert [attempt.outcome for attempt in run.final_review_attempts] == ["quota", "done"]

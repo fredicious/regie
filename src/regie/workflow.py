@@ -4,7 +4,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from regie.config import GatePlugin, RegieConfig
-from regie.models import RunState, TaskSpec, WorkflowTier
+from regie.models import ExecutionRoute, RunState, TaskSpec, WorkflowTier
 
 RISK_LENSES = {
     "security": "security-reviewer",
@@ -13,6 +13,44 @@ RISK_LENSES = {
     "ui": "ui-reviewer",
     "architecture": "architecture-reviewer",
 }
+
+
+_PLANNING_SIGNALS = {
+    "security": ("authentication", "authorization", "permission", "password",
+                 "secret", "cryptography", "security boundary"),
+    "migration": ("migration", "database schema", "data migration", "backfill",
+                  "destructive", "data loss"),
+    "public API": ("public api", "breaking api", "openapi", "graphql schema"),
+    "architecture": ("architecture", "cross-service", "multiple services",
+                     "distributed", "concurrency", "multi-repository"),
+    "external dependency": ("external dependency", "third-party integration",
+                            "production credential", "production access"),
+}
+
+
+def route_brief(brief: str, requested: WorkflowTier,
+                cfg: RegieConfig) -> tuple[ExecutionRoute, str]:
+    """Choose the smallest safe workflow before spending a planner call.
+
+    Explicit tiers are authority. Auto routing is deliberately upgrade-biased:
+    a low-risk request starts with one owner, while deterministic risk evidence
+    enters the planned workflow. The owner can still escalate after inspecting
+    the repository by returning ``needs-planning:``.
+    """
+    selected = requested if requested != "auto" else cfg.workflow.default_tier
+    if selected == "fast":
+        return "direct", "fast workflow explicitly selected"
+    if selected in {"standard", "critical"}:
+        return "planned", f"{selected} workflow explicitly selected"
+    if not cfg.workflow.direct_execution:
+        return "planned", "direct execution disabled by project configuration"
+
+    normalized = " ".join(brief.lower().split())
+    for label, signals in _PLANNING_SIGNALS.items():
+        matched = next((signal for signal in signals if signal in normalized), None)
+        if matched:
+            return "planned", f"brief contains {label} signal: {matched}"
+    return "direct", "no material risk signal requires an upfront plan"
 
 
 def infer_risks(task: TaskSpec) -> list[str]:

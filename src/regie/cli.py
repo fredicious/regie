@@ -23,6 +23,7 @@ from regie.gitops import (
 from regie.models import ChildRun, RunState, TaskSpec, TaskState
 from regie.notify import notify
 from regie.pipeline import (
+    apply_direct_brief,
     finalize_stage,
     plan_stage,
     pr_stage,
@@ -32,8 +33,9 @@ from regie.pipeline import (
 )
 from regie.provider_health import ProviderHealthStore
 from regie.rundir import RunDir, RunLocked
+from regie.workflow import route_brief
 
-app = typer.Typer(add_completion=False)
+app = typer.Typer(add_completion=False, invoke_without_command=True, no_args_is_help=False)
 
 _DEFAULT_PROFILES = Path(__file__).parent.parent.parent / "profiles"
 _DEFAULT_REPO = Path.cwd()
@@ -41,6 +43,15 @@ _DEFAULT_REPO = Path.cwd()
 
 def _home() -> Path:
     return Path(os.environ.get("REGIE_HOME", Path.home() / ".regie"))
+
+
+@app.callback()
+def main(ctx: typer.Context) -> None:
+    """Régie control room; subcommands remain available for automation."""
+    if ctx.invoked_subcommand is None:
+        from regie.control_room import ControlRoom
+
+        ControlRoom(_home(), default_repo=Path.cwd()).run()
 
 
 def _repo_marker_path(home: Path, repo: Path) -> Path:
@@ -127,8 +138,17 @@ def _print_approve_hint(rundir: RunDir, state: RunState) -> None:
 def _advance(rundir: RunDir, state: RunState, cfg: RegieConfig, worktree: Path) -> None:
     """From stage "tasks" onward: run tasks, then finalize, then the PR stage
     (squash, scribe, push, CI watch with gated debugger rounds)."""
+    if state.stage == "plan":
+        plan_stage(rundir, state, cfg, worktree)
+        if _after_plan_stage(rundir, state):
+            return
     if state.stage == "tasks":
         run_tasks_stage(rundir, state, cfg, worktree)
+    # A direct owner may discover concrete evidence that planning is needed.
+    if state.stage == "plan":
+        plan_stage(rundir, state, cfg, worktree)
+        if _after_plan_stage(rundir, state):
+            return
     if state.stage == "halted":
         _finish(state)
         return
@@ -185,14 +205,15 @@ def run(brief: Path, repo: Annotated[Path, typer.Option()],
     rundir.acquire_lock()
     _mark_live(home, repo, run_id)
 
-    (rundir.path / "brief.md").write_text(brief.read_text())
+    brief_text = brief.read_text()
+    (rundir.path / "brief.md").write_text(brief_text)
 
     base = _resolve_base_sha(repo, cfg.base_branch)
     wt = create_run_worktree(repo, f"regie/{run_id}", base, home / "worktrees" / run_id)
 
     state = RunState(id=run_id, target_repo=str(repo), branch=f"regie/{run_id}",
                      base_sha=base, base_branch=cfg.base_branch, worktree_path=str(wt),
-                     autonomous=autonomous, stage="plan", workflow=workflow,
+                     autonomous=autonomous, stage="intake", workflow=workflow,
                      parent_id=parent)
     if parent:
         parent_dir = _open_rundir(home, parent)
@@ -207,10 +228,21 @@ def run(brief: Path, repo: Annotated[Path, typer.Option()],
         state.stage = "tasks"
         rundir.write_state(state)
     else:
-        rundir.write_state(state)
-        plan_stage(rundir, state, cfg, Path(state.worktree_path))
-        if _after_plan_stage(rundir, state):
-            return
+        route, reason = route_brief(brief_text, workflow, cfg)
+        state.execution_route = route
+        state.route_reason = reason
+        if route == "direct":
+            apply_direct_brief(rundir, state, brief_text)
+        else:
+            state.stage = "plan"
+            rundir.append_event({
+                "kind": "workflow_routed",
+                "task": "PLAN",
+                "stage": "intake",
+                "route": "planned",
+                "reason": reason,
+            })
+            rundir.write_state(state)
 
     _advance(rundir, state, cfg, Path(state.worktree_path))
 
@@ -268,6 +300,10 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
             # planning. A fresh ladder means clearing planner_attempts too.
             state.stage = "plan"
             state.planner_attempts = []
+            state.product_owner_attempts = []
+            state.product_owner_decision = None
+            rundir.append_intent({"task": "PLAN", "reset": True})
+            rundir.append_intent({"task": "PRODUCT-OWNER", "reset": True})
 
     if state.stage == "plan":
         plan_stage(rundir, state, cfg, worktree)
@@ -283,21 +319,33 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
 
 @app.command()
 def approve(run_id: str):
+    from regie.operations import approve_waiting_state
+
     rundir = _open_rundir(_home(), run_id)
     state = rundir.read_state()
-    if state.stage not in {"approve", "checkpoint"}:
-        typer.echo(f"run {run_id} is not awaiting approval (stage={state.stage})", err=True)
+    try:
+        approve_waiting_state(rundir, state)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
         raise typer.Exit(2)
-    if state.stage == "checkpoint":
-        checkpoint = next((item for item in state.checkpoints
-                           if item.status == "pending"
-                           and state.tasks[item.task_id].status == "done"), None)
-        if checkpoint:
-            checkpoint.status = "approved"
-            checkpoint.decided_at = datetime.now(UTC).isoformat()
-    state.stage = "tasks"
-    rundir.write_state(state)
+
     typer.echo(f"approved — run `regie resume {run_id} --repo <path>`")
+
+
+@app.command()
+def answer(run_id: str, response: str):
+    """Answer a material clarification requested by the current owner."""
+    from regie.operations import record_clarification
+
+    rundir = _open_rundir(_home(), run_id)
+    state = rundir.read_state()
+    try:
+        question = record_clarification(rundir, state, response)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2)
+    typer.echo(f"answer recorded for: {question}")
+    typer.echo(f"run `regie resume {run_id} --repo {state.target_repo}`")
 
 
 @app.command()
@@ -313,17 +361,33 @@ def status(run_id: str):
         typer.echo(f"  child {child.run_id}  {child.status:8s} repo={child.repo}")
 
 
+@app.command()
+def watch(
+    run_id: Annotated[str | None, typer.Argument()] = None,
+    refresh: Annotated[float, typer.Option(min=0.2, max=60.0)] = 1.0,
+):
+    """Open the live terminal control room for a run (latest by default)."""
+    from regie.control_room import ControlRoom, resolve_run_id
+
+    home = _home()
+    try:
+        selected = resolve_run_id(home, run_id)
+    except FileNotFoundError:
+        typer.echo(f"run {run_id} not found" if run_id else "no Régie runs found", err=True)
+        raise typer.Exit(2) from None
+    ControlRoom(home, selected, refresh_interval=refresh).run()
+
+
 @app.command(name="init")
 def init_(repo: Annotated[Path, typer.Option()] = _DEFAULT_REPO,
           force: Annotated[bool, typer.Option("--force")] = False):
     """Detect project tooling and create a verified starter regie.toml."""
-    from regie.onboarding import detect, render_config
+    from regie.onboarding import initialize
     target = repo / "regie.toml"
     if target.exists() and not force:
         typer.echo(f"{target} already exists; use --force to replace it", err=True)
         raise typer.Exit(2)
-    detection = detect(repo)
-    target.write_text(render_config(detection))
+    detection = initialize(repo)
     typer.echo(f"created {target}")
     typer.echo(f"detected language={detection.language} test={detection.test}")
 

@@ -60,6 +60,7 @@ class GateResult(BaseModel):
     passed: bool
     detail: str = ""
     flaky: bool = False
+    failure_kind: Literal["code", "infrastructure"] | None = None
 
 
 class Finding(BaseModel):
@@ -84,6 +85,17 @@ class PlanReview(BaseModel):
     verdict: Literal["pass", "fail"]
     evidence: list[str] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
+
+
+class ProductOwnerDecision(BaseModel):
+    """A bounded recovery recommendation; the engine remains authoritative."""
+
+    action: Literal["revise", "accept", "ask_human", "halt"]
+    summary: str
+    directives: list[str] = Field(default_factory=list)
+    accepted_findings: list[str] = Field(default_factory=list)
+    rejected_findings: list[str] = Field(default_factory=list)
+    human_question: str | None = None
 
 
 class CheckpointState(BaseModel):
@@ -146,6 +158,9 @@ class TaskSpec(BaseModel):
     # "trivial" downgrade — a wrong "hard" wastes a little quota, a wrong
     # "trivial" wastes two failed attempts plus review churn.
     complexity: Literal["standard", "hard"] = "standard"
+    # Direct tasks are owned end-to-end by one implementer, including focused
+    # tests. Planned tasks retain the separated test-writer/builder workflow.
+    execution: Literal["direct", "tdd"] = "tdd"
 
 
 TaskStage = Literal["test", "build", "review"]
@@ -171,6 +186,7 @@ RunStage = Literal[
     "finalize", "pr", "reflect", "done", "halted",
 ]
 WorkflowTier = Literal["auto", "fast", "standard", "critical"]
+ExecutionRoute = Literal["direct", "planned"]
 
 
 class RunState(BaseModel):
@@ -184,11 +200,15 @@ class RunState(BaseModel):
     pushed: bool = False
     autonomous: bool = False
     workflow: WorkflowTier = "auto"
+    execution_route: ExecutionRoute = "planned"
+    route_reason: str = ""
     stage: RunStage = "intake"
     tasks: dict[str, TaskState] = Field(default_factory=dict)
     halt_reason: str | None = None
     planner_attempts: list[Attempt] = Field(default_factory=list)
     plan_reviews: list[PlanReview] = Field(default_factory=list)
+    product_owner_attempts: list[Attempt] = Field(default_factory=list)
+    product_owner_decision: ProductOwnerDecision | None = None
     final_review_attempts: list[Attempt] = Field(default_factory=list)
     checkpoints: list[CheckpointState] = Field(default_factory=list)
     research_path: str = ""

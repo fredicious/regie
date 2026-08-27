@@ -32,6 +32,7 @@ def run_agent(rundir: RunDir, task_id: str, stage: str, attempt_no: int,
     _wall_seconds/_stall_seconds are test seams overriding budget-derived limits."""
     wall = _wall_seconds or req.budgets.wall_minutes * 60
     stall = _stall_seconds or req.budgets.stall_minutes * 60
+    attempt_started = time.monotonic()
     rundir.append_intent({"task": task_id, "stage": stage, "attempt": attempt_no,
                           "binding": req.binding.model_dump()})
 
@@ -58,6 +59,8 @@ def run_agent(rundir: RunDir, task_id: str, stage: str, attempt_no: int,
                 "kind": result.quota_kind, "scope": result.quota_scope,
                 "reset_at": result.quota_reset_at, "synthetic": True,
             },
+            "binding": req.binding.model_dump(),
+            "duration_seconds": round(time.monotonic() - attempt_started, 3),
         })
         return result
 
@@ -111,6 +114,9 @@ def run_agent(rundir: RunDir, task_id: str, stage: str, attempt_no: int,
                          "turns": result.turns, "usage": result.usage,
                          "metrics": result.metrics.model_dump(),
                          "provider": provider_key(req.binding),
+                         "binding": req.binding.model_dump(),
+                         "duration_seconds": round(
+                             time.monotonic() - attempt_started, 3),
                          "quota": ({"kind": result.quota_kind,
                                     "scope": result.quota_scope,
                                     "reset_at": result.quota_reset_at,

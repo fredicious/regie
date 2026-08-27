@@ -34,6 +34,7 @@ def test_intents_and_events_append(regie_home):
     rd.append_intent({"task": "T1", "stage": "build", "attempt": 1})
     rd.append_intent({"task": "T1", "stage": "build", "attempt": 2})
     assert [i["attempt"] for i in rd.read_intents()] == [1, 2]
+    assert all("ts" in intent for intent in rd.read_intents())
     rd.append_event({"kind": "dispatch"})
     line = json.loads((rd.path / "events.jsonl").read_text().splitlines()[0])
     assert line["kind"] == "dispatch" and "ts" in line

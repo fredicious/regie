@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -40,6 +41,28 @@ class AgentAdapter(Protocol):
 
 
 _REGISTRY: dict[str, AgentAdapter] = {}
+
+_NATURAL_CLARIFICATION = re.compile(
+    r"(?:could you clarify|please clarify|i need clarification|"
+    r"which (?:behavior|option|approach).*(?:do you want|should i)|"
+    r"these .* lead to .* different implementations)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def blocked_question_from_text(text: str) -> str | None:
+    """Parse the explicit protocol and recover obvious natural-language questions."""
+    for line in text.splitlines():
+        if line.strip().lower().startswith("blocked:"):
+            return line.split(":", 1)[1].strip()
+    if _NATURAL_CLARIFICATION.search(text):
+        paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+        question = next(
+            (part for part in reversed(paragraphs) if "?" in part),
+            paragraphs[-1] if paragraphs else text,
+        )
+        return "clarify: " + question[-1800:]
+    return None
 
 
 def register(cli: str, adapter: AgentAdapter) -> None:

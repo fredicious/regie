@@ -175,7 +175,8 @@ def test_full_pipeline_with_approve_checkpoint(regie_home, fixture_repo, remote_
     _dispatch_queue(monkeypatch, worktree, QUEUE)
 
     result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
-                                 "--profiles", str(fake_profiles)])
+                                 "--profiles", str(fake_profiles),
+                                 "--workflow", "standard"])
     assert result.exit_code == 0, result.output
     assert "run `regie approve" in result.output
     assert (regie_home / "runs" / run_id).is_dir()
@@ -210,7 +211,8 @@ def test_full_pipeline_autonomous_skips_approve(regie_home, fixture_repo, remote
     _dispatch_queue(monkeypatch, worktree, QUEUE)
 
     result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
-                                 "--profiles", str(fake_profiles), "--autonomous"])
+                                 "--profiles", str(fake_profiles), "--autonomous",
+                                 "--workflow", "standard"])
     assert result.exit_code == 0, result.output
     assert "run `regie approve" not in result.output
 

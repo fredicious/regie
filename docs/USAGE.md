@@ -2,10 +2,11 @@
 
 ## What works today
 
-The full pipeline runs end-to-end: **brief → repository research and knowledge
-prime → adversarially reviewed spec/task DAG → approval → dependency-aware TDD
-tasks → final integration review → squashed PR → CI/review shepherd → learning
-candidates**. Claude and Codex adapters have both been exercised live; every new
+The default low-risk pipeline runs end-to-end as **brief → one direct owner →
+mechanical gates → focused independent review → squashed PR**. When policy or
+evidence requires it, Régie expands to **repository research → reviewed spec/task
+DAG → approval → dependency-aware TDD tasks → integration review → PR shepherd**.
+Claude and Codex adapters have both been exercised live; every new
 target repository should still start with the supervised smoke test below.
 
 ## Install
@@ -14,17 +15,74 @@ No Python knowledge needed — [uv](https://docs.astral.sh/uv/) manages everythi
 
 ```bash
 cd ~/Code/regie && uv tool install --editable .
-regie --help
+regie
 ```
 
 `uv tool install` puts a `regie` command on your PATH with its own isolated
 environment. When published to PyPI this becomes `uv tool install regie`.
 
+## The control room
+
+Run `regie` with no arguments to enter the terminal application. The control
+room is scoped to the folder where it was launched: it opens that repository's
+most recently updated run and does not mix in runs from other projects. On the
+first launch without a `regie.toml`, Régie enters setup mode. It detects the
+project language and proposes test, lint, typecheck, build, coverage, and visual
+gate settings. It also shows Claude Code and Codex CLI readiness and lets you
+enable either or both providers. Review or edit the choices, then **Save &
+continue** to create the configuration. Régie then focuses the in-app product
+brief editor. Type the brief and launch without first creating an input file;
+the run name is optional and is inferred from the brief's first meaningful line.
+
+- `N` opens the same product brief composer at any time and lets you select the
+  repository/workflow tier.
+- `L` opens the repository-scoped run picker. Run history stays out of the main
+  dashboard until it is needed; selecting a row switches the control room.
+- The dependency table shows task state, stage, prerequisites, attempts, and
+  title; selecting a task shows its scope, risks, criteria, and review evidence.
+- The top overview keeps run identity/progress on the left and compact lifetime
+  usage, PR/CI state, provider readiness, and quota telemetry on the right.
+  Token usage separates fresh/cache-write/output work from cached-input reads;
+  Agent Activity exposes both values per attempt.
+- The two full-width lower panes stream the event ledger and a live Agent
+  Activity table. Every
+  planner, Product Owner recovery advisor, plan reviewer, test writer, builder,
+  specialist, integration reviewer, and debugger attempt is shown separately
+  with provider, model, state, runtime, output heartbeat, turns, and tokens.
+  Both panes receive enough horizontal room for their detailed columns.
+- `A` approves the current spec or reached checkpoint; `S` resumes the selected
+  run through the normal lock-protected CLI engine.
+- When a direct owner finds a material ambiguity, the run exposes its question
+  as a clarification halt. Press `C`, answer inside the control room, and Régie
+  records the decision before resuming the owner. Questions are reserved for
+  choices that would materially change the implementation.
+- `O` reads the brief, accepted spec, research, checkpoint, handoff, PR body, and
+  knowledge candidates inside Régie.
+- `P` enables or disables Claude and Codex for the current project. The change
+  applies to the next run or resume; an already-active attempt keeps its route.
+- `R` refreshes immediately and `Q` exits. The application also refreshes once
+  per second. These actions, including **Runs**, are available from the command
+  palette as well.
+
+Engine work runs in a managed child process so planning/building never freezes
+the interface. Failures are summarized in the event ledger, while full output
+is retained in `$REGIE_HOME/control-room.log`; the
+authoritative state and event ledgers remain the source of everything displayed.
+Desktop notifications are suppressed for child runs while the control room is
+visible, avoiding duplicate UI and operating-system alerts.
+
+All subcommands remain available for shell scripts, CI, recovery, and direct
+automation. `regie watch <run-id>` opens the same control room focused on a
+specific run even when it belongs to another workspace; `regie --help` lists
+the complete command surface.
+
 ## One-time setup per target repo
 
-Run `regie init --repo <path>` to detect the repository's language, package
-manager, tests, lint, types, build, coverage, and UI tooling. It creates a
-starter `regie.toml`. You can also write it manually:
+The first-run control-room setup handles this interactively. For scripts, run
+`regie init --repo <path>` to detect the repository's language, package manager,
+tests, lint, types, build, coverage, and UI tooling. Both paths create a starter
+`regie.toml`; review and commit it with the project. You can also write it
+manually:
 
 ```toml
 test_globs = ["tests/**", "apps/*/tests/**", "**/*.test.*"]
@@ -33,6 +91,7 @@ base_branch = "main"                                       # optional, default m
 
 [workflow]
 default_tier = "auto"       # auto | fast | standard | critical
+direct_execution = true     # auto may start with one owner and no planner
 max_parallel_tasks = 3      # independent DAG tasks get isolated worktrees
 plan_reviews = true
 design_reviews = true
@@ -43,6 +102,7 @@ max_task_usd = 0             # 0 disables this cost circuit
 max_run_usd = 0
 
 [commands]
+setup = "pnpm install --frozen-lockfile"  # before the first agent in each worktree
 test = "make test"        # gates call ONLY these commands
 lint = "make lint"
 typecheck = "make typecheck"   # optional
@@ -50,12 +110,36 @@ eval = "make eval"             # optional, runs when eval_trigger_globs match
 coverage = "make coverage"     # standard/critical task + final gate
 build = "make build"           # optional mechanical gate
 
+[providers]
+enabled = ["claude", "codex"]  # either provider may be disabled per project
+
 [gates.visual]
 command = "npx playwright test"
 stages = ["finalize"]
 trigger_globs = ["apps/web/**/*.tsx", "apps/web/**/*.css"]
 tiers = ["standard", "critical"]
 ```
+
+The shipped role profiles use cross-provider ladders: Codex leads direct ownership,
+test writing, implementation, and debugging; Claude leads planning and most reviews.
+Both are enabled by default for quota failover and independent review. Disabling
+one filters it from every role ladder; Régie rejects a configuration if that
+would leave any required role without a viable binding. Press `P` in the control
+room to change the project preference without editing TOML.
+
+Failover applies to the entire workflow, including planning panels, specialist
+reviews, and final integration review—not only the main planner/build stages.
+When a provider circuit is already open, Agent Activity records the bypass as
+`skipped`; this is an audit entry and does not launch another provider process.
+Planner drafts receive up to three contract-validation attempts independently of
+provider failover. If those reviewed drafts still do not converge, the shipped
+`product-owner` profile receives the brief, latest plan, validation failures,
+review findings, and attempt evidence. It can issue one binding set of planner
+directives, accept only scope/alignment review findings, or escalate to the operator.
+Its decision is retained as `product-owner-decision.json` and `.md` and appears
+in the control room. A final failed revision halts; deterministic validation,
+tests, security/destructive checkpoints, provider configuration, and budgets
+cannot be overridden by the Product Owner.
 
 Any `[gates.<name>]` entry is a deterministic plugin gate. It runs only at its
 declared stages, tiers, and changed-path triggers; its process exit code is the
@@ -69,10 +153,10 @@ command generates and the repo doesn't ignore will be committed — the first
 smoke test shipped `.pyc` files into its PR this way.
 
 Agent profiles (role prompts + model bindings + budgets) live in this repo's
-`profiles/`: planner, test-writer, builder, reviewer, debugger. Each profile's
-`.yaml` carries an ordered `bindings:` list (retry escalation and quota
-failover walk it in order, weakest/cheapest first) — a one-element list is
-fine for a profile that never escalates:
+`profiles/`: planner, Product Owner, test-writer, builder, reviewer, debugger,
+and specialist reviewers. Each profile's `.yaml` carries an ordered `bindings:`
+list (retry escalation and quota failover walk it in order, weakest/cheapest
+first) — a one-element list is fine for a profile that never escalates:
 
 ```yaml
 bindings:
@@ -123,6 +207,9 @@ continue using fallbacks. Direct API bindings remain opt-in profile entries and
 are never added automatically, because they can incur usage-based charges.
 
 ## Running
+
+The control room is the primary interactive workflow. The equivalent explicit
+commands are:
 
 ```bash
 # 1. Write a brief: goal, in scope, OUT of scope, acceptance signals
@@ -202,7 +289,9 @@ pushes, opens the PR via `gh`, and persists a PR shepherd state covering CI,
 review decisions, unresolved threads, bounded fix rounds, ready, and merged.
 After readiness it extracts candidate decisions/gotchas/anti-patterns; candidates
 remain outside the repository until explicitly promoted. Halts and completion
-fire a desktop notification.
+fire a desktop notification. Set `REGIE_NOTIFICATIONS=0` to suppress them for a
+shell or CI process. Régie's own test suite sets this automatically so tests can
+never produce real operating-system notifications.
 
 ## The run directory
 

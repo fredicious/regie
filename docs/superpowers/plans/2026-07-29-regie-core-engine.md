@@ -73,7 +73,7 @@ profiles/            # planner.yaml/.md, test-writer, builder, reviewer (Task 3)
 - [ ] **Step 1: Scaffold the project**
 
 ```bash
-cd /Users/frederic/Code/agent-harness
+cd /Users/frederic/Code/regie
 uv init --package --name regie --python 3.12
 uv add pydantic typer pyyaml
 uv add --dev pytest

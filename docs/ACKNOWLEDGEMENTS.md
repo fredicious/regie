@@ -17,6 +17,7 @@ The concepts that directly influenced Régie's direction include:
 - guided repository setup, provider health checks, cost controls, and PR
   shepherding;
 - durable handoff and recovery artifacts.
+- bounded Product Owner adjudication when reviewed plans do not converge.
 
 Régie does not use MetaSwarm as its execution substrate. These ideas are
 implemented independently around Régie's differentiating choices: an explicit
@@ -27,6 +28,24 @@ schemas; and transcripts/state live outside the target repository.
 
 We are grateful to MetaSwarm for making a rigorous, production-minded agentic
 software-development workflow public and inspectable.
+
+## Ponytail
+
+Régie's lean execution policy is inspired by
+[Ponytail](https://github.com/dietrichgebert/ponytail), created by Dietrich
+Gebert and distributed under the MIT License. Ponytail's solution ladder—avoid,
+reuse, standard library, native platform, installed dependency, then the minimum
+custom code—reinforced an important architectural correction for Régie:
+minimalism must apply to orchestration as well as implementation.
+
+Régie independently adapts that idea as an execution ladder. A low-risk brief
+starts with one end-to-end owner and earns planners, separate test authors,
+specialists, and management decisions only through explicit policy or concrete
+risk and coordination evidence. Mechanical validation, security, accessibility,
+data safety, and independent review are never traded away for a shorter run.
+
+Ponytail is inspiration rather than an execution dependency; Régie does not
+bundle or inject its ruleset.
 
 ## Superpowers
 

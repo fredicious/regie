@@ -7,7 +7,12 @@ import json
 import re
 import tempfile
 
-from regie.agents.base import AgentRequest, AgentResult, register
+from regie.agents.base import (
+    AgentRequest,
+    AgentResult,
+    blocked_question_from_text,
+    register,
+)
 from regie.models import UsageMetrics
 from regie.quota import quota_metadata
 
@@ -91,10 +96,10 @@ class CodexAdapter:
             return AgentResult(outcome="error", text=error_msg[-2000:], **telemetry)
         if text is None:
             return AgentResult(outcome="error", text=stdout[-2000:], **telemetry)
-        for line in text.splitlines():
-            if line.strip().lower().startswith("blocked:"):
-                return AgentResult(outcome="blocked", text=text, **telemetry,
-                                   blocked_question=line.split(":", 1)[1].strip())
+        blocked = blocked_question_from_text(text)
+        if blocked is not None:
+            return AgentResult(outcome="blocked", text=text, **telemetry,
+                               blocked_question=blocked)
         if exit_code != 0:
             return AgentResult(outcome="error", text=text[-2000:], **telemetry)
         structured = None

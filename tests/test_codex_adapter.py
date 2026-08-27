@@ -76,6 +76,17 @@ def test_parse_blocked_and_structured(tmp_path):
     assert get_adapter("codex").parse(out2, 0).structured == {"findings": []}
 
 
+def test_parse_natural_material_clarification():
+    out = _lines({
+        "type": "agent_message",
+        "text": ("I need clarification because these approaches differ. "
+                 "Could you clarify which behavior you want?"),
+    })
+    result = get_adapter("codex").parse(out, 0)
+    assert result.outcome == "blocked"
+    assert result.blocked_question.startswith("clarify:")
+
+
 def test_parse_no_message_is_error():
     assert get_adapter("codex").parse("", 0).outcome == "error"
     assert get_adapter("codex").parse("garbage\nlines", 0).outcome == "error"

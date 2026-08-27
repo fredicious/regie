@@ -57,6 +57,7 @@ def test_plan_stage_rejects_non_gwt_criteria_and_retries(regie_home, fixture_rep
     rd, run = _seed(regie_home, fixture_repo, bad)
     plan_stage(rd, run, cfg, fixture_repo)   # fake returns same bad plan every attempt
     assert run.stage == "halted" and len(run.planner_attempts) >= 3
+    assert "did not converge" in run.halt_reason
     assert "note-plan.md" in [p.name for p in (rd.path / "tasks" / "PLAN").iterdir()]
 
 
@@ -100,6 +101,17 @@ def _queue(fixture_repo, entries):
         (qdir / f"{i}.json").write_text(json.dumps(entry))
 
 
+def _add_product_owner(cfg, tmp_path):
+    prompt = tmp_path / "product-owner.md"
+    prompt.write_text("You are the bounded Product Owner recovery advisor.")
+    cfg.profiles["product-owner"] = Profile(
+        name="product-owner",
+        bindings=[Binding(cli="fake", model="po")],
+        prompt_path=prompt,
+        budgets=Budgets(turns=5, wall_minutes=1, stall_minutes=1),
+    )
+
+
 def test_ac14_planner_quota_advances_to_second_binding(regie_home, fixture_repo, cfg):
     """Planner profile is bindings: [fake:m1, fake:m2] (fake_profiles fixture).
     A quota outcome on the first plan attempt (fake:m1) must dispatch the next
@@ -117,6 +129,188 @@ def test_ac14_planner_quota_advances_to_second_binding(regie_home, fixture_repo,
         (Binding(cli="fake", model="m2"), "done"),
     ]
     assert run.stage == "approve"
+
+
+def test_plan_contract_repairs_have_budget_separate_from_provider_failover(
+        regie_home, fixture_repo, cfg):
+    invalid_profile = {
+        "spec_markdown": "# Spec",
+        "tasks": [{
+            "id": "T1",
+            "title": "divide",
+            "profile": "frontend-svelte",
+            "criteria": ["Given 6 and 3, When divided, Then return 2"],
+            "planned_tests": ["test_divide_exact"],
+        }],
+    }
+    incomplete = {
+        "spec_markdown": "# Spec",
+        "tasks": [{
+            "id": "T1",
+            "title": "divide",
+            "profile": "builder",
+            "criteria": ["Given 6 and 3, When divided, Then return 2"],
+            "planned_tests": [],
+        }],
+    }
+    rd, run = _seed(regie_home, fixture_repo, PLAN)
+    (fixture_repo / ".fake_agent.json").unlink()
+    _queue(fixture_repo, [
+        {"result": {"outcome": "quota"}},
+        {"result": {"outcome": "done", "structured": invalid_profile}},
+        {"result": {"outcome": "done", "structured": incomplete}},
+        {"result": {"outcome": "done", "structured": PLAN}},
+    ])
+
+    plan_stage(rd, run, cfg, fixture_repo)
+
+    assert [attempt.outcome for attempt in run.planner_attempts] == [
+        "quota", "failed", "failed", "done",
+    ]
+    assert [attempt.binding.model for attempt in run.planner_attempts] == [
+        "m1", "m2", "m2", "m2",
+    ]
+    assert run.stage == "approve"
+
+
+def test_product_owner_directs_one_final_plan_recovery(
+        regie_home, fixture_repo, cfg, tmp_path):
+    bad = {
+        "spec_markdown": "# Spec",
+        "tasks": [{
+            "id": "T1", "title": "divide", "profile": "builder",
+            "criteria": ["Given 6 and 3, When divided, Then return 2"],
+            "planned_tests": [],
+        }],
+    }
+    decision = {
+        "action": "revise",
+        "summary": "Keep the scope and restore the missing test contract.",
+        "directives": ["Add a named planned test for the divide criterion."],
+        "accepted_findings": ["The behavior remains in scope."],
+        "rejected_findings": [],
+        "human_question": None,
+    }
+    rd, run = _seed(regie_home, fixture_repo, PLAN)
+    (fixture_repo / ".fake_agent.json").unlink()
+    _add_product_owner(cfg, tmp_path)
+    _queue(fixture_repo, [
+        {"result": {"outcome": "done", "structured": bad}},
+        {"result": {"outcome": "done", "structured": bad}},
+        {"result": {"outcome": "done", "structured": bad}},
+        {"result": {"outcome": "done", "structured": decision}},
+        {"result": {"outcome": "done", "structured": PLAN}},
+    ])
+
+    plan_stage(rd, run, cfg, fixture_repo)
+
+    assert run.stage == "approve"
+    assert len(run.planner_attempts) == 4
+    assert len(run.product_owner_attempts) == 1
+    assert run.product_owner_decision is not None
+    assert run.product_owner_decision.action == "revise"
+    assert "Product Owner recovery directives" in (
+        rd.task_dir("PLAN") / "note-plan.md"
+    ).read_text()
+    assert (rd.path / "product-owner-decision.json").is_file()
+    assert (rd.path / "product-owner-decision.md").is_file()
+
+
+def test_product_owner_cannot_accept_deterministically_invalid_plan(
+        regie_home, fixture_repo, cfg, tmp_path):
+    bad = {
+        "spec_markdown": "# Spec",
+        "tasks": [{
+            "id": "T1", "title": "divide", "profile": "builder",
+            "criteria": ["Given 6 and 3, When divided, Then return 2"],
+            "planned_tests": [],
+        }],
+    }
+    forbidden_accept = {
+        "action": "accept",
+        "summary": "Proceed despite the missing mechanical contract.",
+        "directives": [],
+        "accepted_findings": [],
+        "rejected_findings": ["planned_tests must be non-empty"],
+        "human_question": None,
+    }
+    rd, run = _seed(regie_home, fixture_repo, PLAN)
+    (fixture_repo / ".fake_agent.json").unlink()
+    _add_product_owner(cfg, tmp_path)
+    _queue(fixture_repo, [
+        {"result": {"outcome": "done", "structured": bad}},
+        {"result": {"outcome": "done", "structured": bad}},
+        {"result": {"outcome": "done", "structured": bad}},
+        {"result": {"outcome": "done", "structured": forbidden_accept}},
+    ])
+
+    plan_stage(rd, run, cfg, fixture_repo)
+
+    assert run.stage == "halted"
+    assert "cannot accept" in (run.halt_reason or "")
+    assert not (rd.path / "spec" / "spec.md").exists()
+
+
+def test_product_owner_may_accept_scope_review_findings(
+        regie_home, fixture_repo, cfg, tmp_path, monkeypatch):
+    accept = {
+        "action": "accept",
+        "summary": "The remaining suggestion is outside the requested scope.",
+        "directives": [],
+        "accepted_findings": [],
+        "rejected_findings": ["Add an unrelated reporting endpoint."],
+        "human_question": None,
+    }
+    rd, run = _seed(regie_home, fixture_repo, PLAN)
+    (fixture_repo / ".fake_agent.json").unlink()
+    _add_product_owner(cfg, tmp_path)
+    monkeypatch.setattr(
+        "regie.pipeline._run_plan_reviews",
+        lambda *_args, **_kwargs: ["plan-scope: unrelated optional expansion"],
+    )
+    _queue(fixture_repo, [
+        {"result": {"outcome": "done", "structured": PLAN}},
+        {"result": {"outcome": "done", "structured": PLAN}},
+        {"result": {"outcome": "done", "structured": PLAN}},
+        {"result": {"outcome": "done", "structured": accept}},
+    ])
+
+    plan_stage(rd, run, cfg, fixture_repo)
+
+    assert run.stage == "approve"
+    assert run.product_owner_decision is not None
+    assert run.product_owner_decision.action == "accept"
+    assert (rd.path / "spec" / "spec.md").is_file()
+
+
+def test_product_owner_cannot_accept_mandatory_review_failure(
+        regie_home, fixture_repo, cfg, tmp_path, monkeypatch):
+    accept = {
+        "action": "accept",
+        "summary": "Ignore a missing required behavior.",
+        "directives": [],
+        "accepted_findings": [],
+        "rejected_findings": ["A requested error path is missing."],
+        "human_question": None,
+    }
+    rd, run = _seed(regie_home, fixture_repo, PLAN)
+    (fixture_repo / ".fake_agent.json").unlink()
+    _add_product_owner(cfg, tmp_path)
+    monkeypatch.setattr(
+        "regie.pipeline._run_plan_reviews",
+        lambda *_args, **_kwargs: ["plan-completeness: required error path missing"],
+    )
+    _queue(fixture_repo, [
+        {"result": {"outcome": "done", "structured": PLAN}},
+        {"result": {"outcome": "done", "structured": PLAN}},
+        {"result": {"outcome": "done", "structured": PLAN}},
+        {"result": {"outcome": "done", "structured": accept}},
+    ])
+
+    plan_stage(rd, run, cfg, fixture_repo)
+
+    assert run.stage == "halted"
+    assert "cannot accept mandatory" in (run.halt_reason or "")
 
 
 def test_ac14_planner_quota_halts_naming_exhausted_binding(regie_home, fixture_repo, tmp_path):
@@ -157,3 +351,23 @@ def test_reconcile_marks_orphaned_plan_intent_failed(regie_home, fixture_repo):
     assert count == 1
     assert len(run.planner_attempts) == 1
     assert run.planner_attempts[0].outcome == "failed"
+
+
+def test_reconcile_marks_orphaned_product_owner_intent_failed(
+        regie_home, fixture_repo):
+    rd = RunDir.create(regie_home, "r1")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   stage="plan", worktree_path=str(fixture_repo))
+    rd.write_state(run)
+    rd.append_intent({
+        "task": "PRODUCT-OWNER",
+        "stage": "product-owner",
+        "attempt": 1,
+        "binding": {"cli": "fake", "model": "po"},
+    })
+
+    count = reconcile(rd, run, fixture_repo)
+
+    assert count == 1
+    assert len(run.product_owner_attempts) == 1
+    assert run.product_owner_attempts[0].outcome == "failed"

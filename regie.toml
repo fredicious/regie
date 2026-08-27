@@ -2,6 +2,7 @@ test_globs = ["tests/**"]
 
 [workflow]
 default_tier = "auto"
+direct_execution = true
 max_parallel_tasks = 3
 plan_reviews = true
 design_reviews = true
@@ -10,5 +11,6 @@ knowledge = true
 reflection = true
 
 [commands]
+setup = "uv sync --frozen"
 test = "uv run pytest -q"
 lint = "uvx ruff check src tests"

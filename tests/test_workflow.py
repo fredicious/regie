@@ -7,6 +7,7 @@ from regie.workflow import (
     infer_risks,
     plan_preflight,
     resolve_tier,
+    route_brief,
     scopes_overlap,
 )
 
@@ -36,6 +37,27 @@ def test_auto_tier_keeps_one_low_risk_task_fast():
     run = RunState(id="r", target_repo="x", branch="regie/r",
                    tasks={task.id: TaskState(spec=task)})
     assert resolve_tier(run, SimpleNamespace(workflow=WorkflowConfig())) == "fast"
+
+
+def test_brief_router_defaults_to_direct_and_respects_risk_and_policy():
+    cfg = SimpleNamespace(workflow=WorkflowConfig())
+    assert route_brief("Fix multi-row selection in the checklist", "auto", cfg) == (
+        "direct", "no material risk signal requires an upfront plan")
+
+    route, reason = route_brief(
+        "Migrate the database schema and backfill existing rows", "auto", cfg)
+    assert route == "planned"
+    assert "migration" in reason
+
+    assert route_brief("Tiny change", "critical", cfg)[0] == "planned"
+    assert route_brief("Database migration", "fast", cfg)[0] == "direct"
+
+
+def test_brief_router_can_disable_direct_execution():
+    cfg = SimpleNamespace(workflow=WorkflowConfig(direct_execution=False))
+    route, reason = route_brief("Rename one local variable", "auto", cfg)
+    assert route == "planned"
+    assert "disabled" in reason
 
 
 def test_plan_preflight_requires_checkpoint_for_external_dependency():

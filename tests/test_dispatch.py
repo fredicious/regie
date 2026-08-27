@@ -21,6 +21,9 @@ def test_intent_written_before_result_and_event_after(regie_home, tmp_path):
     intents = rd.read_intents()
     assert intents[0]["task"] == "T1" and intents[0]["attempt"] == 1
     assert (rd.path / "tasks" / "T1" / "attempt-1.out").exists()
+    event = json.loads((rd.path / "events.jsonl").read_text().splitlines()[-1])
+    assert event["binding"] == {"cli": "fake", "model": "m1", "auth": "subscription"}
+    assert event["duration_seconds"] >= 0
 
 
 def test_wall_budget_kills_hung_agent(regie_home, tmp_path):
