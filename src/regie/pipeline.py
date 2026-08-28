@@ -314,11 +314,14 @@ def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
               ctx: PipelineContext, extra: str) -> tuple[Attempt, AgentResult]:
     task = run.tasks[task_id]
     attempts = task.attempts[stage]
+    ladder_attempts = (
+        attempts[task.review_cycle_start:] if stage == "review" else attempts
+    )
     ladder_profile = _review_profile(run, task_id, cfg) if stage == "review" else profile
     ladder = _effective_bindings(ladder_profile, task.spec.complexity)
     binding = ladder[0]
-    if attempts:
-        _action, binding = next_action(attempts, ladder)
+    if ladder_attempts:
+        _action, binding = next_action(ladder_attempts, ladder)
         # caller already checked for halt; retry keeps binding, escalate upgrades
     packet = render_packet(
         task.spec, ctx.spec_excerpt, _decisions(ctx), ctx.conventions,
@@ -387,14 +390,23 @@ def _ladder_halt_reason(stage: str, last: Attempt, task_id: str) -> str:
 def _should_halt(rundir: RunDir, run: RunState, task_id: str, stage: str,
                  cfg: RegieConfig) -> bool:
     attempts = run.tasks[task_id].attempts[stage]
-    if not attempts:
+    ladder_attempts = (
+        attempts[run.tasks[task_id].review_cycle_start:]
+        if stage == "review" else attempts
+    )
+    if not ladder_attempts:
         return False
     ladder_profile = (_review_profile(run, task_id, cfg) if stage == "review" else
                       _stage_profile(run.tasks[task_id], stage, cfg))
     ladder = _effective_bindings(ladder_profile, run.tasks[task_id].spec.complexity)
-    action, _ = next_action(attempts, ladder)
+    action, _ = next_action(ladder_attempts, ladder)
     if action == "halt":
-        _halt(rundir, run, task_id, _ladder_halt_reason(stage, attempts[-1], task_id))
+        _halt(
+            rundir,
+            run,
+            task_id,
+            _ladder_halt_reason(stage, ladder_attempts[-1], task_id),
+        )
         return True
     return False
 
@@ -724,6 +736,7 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             def _pass_build(pre=pre_dispatch):
                 if set(changed_files(repo)) - pre:
                     commit_all(repo, f"feat({task_id}): {task.spec.title}")
+                task.review_cycle_start = len(task.attempts["review"])
                 task.stage = "review"
             _gate_and_advance(rundir, run, task_id, stage, gates, attempt,
                               _pass_build, repo)

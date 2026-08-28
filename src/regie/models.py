@@ -178,6 +178,10 @@ class TaskState(BaseModel):
     attempts: dict[str, list[Attempt]] = Field(default_factory=_empty_attempts)
     specialist_attempts: dict[str, list[Attempt]] = Field(default_factory=dict)
     criterion_evidence: list[CriterionEvidence] = Field(default_factory=list)
+    # Index of the first review attempt for the current post-build cycle.
+    # Findings send a task back through build; the repaired code needs a fresh
+    # verification ladder without discarding prior review telemetry.
+    review_cycle_start: int = 0
     escaped: bool = False
     start_sha: str = ""
 

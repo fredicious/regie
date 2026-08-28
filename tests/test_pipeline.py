@@ -243,6 +243,35 @@ def test_reviewer_blocker_routes_back_to_builder(regie_home, fixture_repo, cfg):
     assert findings[0]["title"] == "int division truncates"
 
 
+def test_repair_gets_fresh_review_ladder_without_losing_attempt_history(
+        regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "r1")
+    run, tid = _run_state(fixture_repo)
+    cfg.profiles["reviewer"] = cfg.profiles["reviewer"].model_copy(update={
+        "bindings": [Binding(cli="fake2", model="review")],
+        "hard_binding": None,
+    })
+    ctx = PipelineContext(
+        spec_excerpt="S", decisions_path=rd.path / "decisions.md", conventions="C")
+    repair = {"result": {"outcome": "done"}, "writes": {
+        "src/calc.py": (
+            "def add(a, b):\n    return a + b\n\n"
+            "def divide(a, b):\n    return a // b  # reviewed repair\n"),
+    }}
+    blocker = {"result": {"outcome": "done", "structured": {"findings": [{
+        "severity": "blocker", "title": "repair required", "detail": "fix it",
+    }]}}}
+
+    for step in (RED_TEST, GREEN_BUILD, blocker, repair, CLEAN_REVIEW):
+        _script(fixture_repo, [step])
+        run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+
+    task = run.tasks[tid]
+    assert task.status == "done"
+    assert len(task.attempts["review"]) == 2
+    assert task.review_cycle_start == 1
+
+
 def test_builder_editing_tests_fails_diff_gate(regie_home, fixture_repo, cfg):
     rd = RunDir.create(regie_home, "r1")
     run, tid = _run_state(fixture_repo)
