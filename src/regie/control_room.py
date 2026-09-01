@@ -981,6 +981,8 @@ def format_event(event: dict) -> Text:
     location = "/".join(
         str(value) for value in (event.get("task"), event.get("stage")) if value)
     outcome = event.get("outcome") or event.get("provider") or ""
+    if outcome == "error" and event.get("failure_kind"):
+        outcome = f"error:{event['failure_kind']}"
     rendered = Text(timestamp, style="dim")
     rendered.append("  ")
     rendered.append(kind, style="bold")

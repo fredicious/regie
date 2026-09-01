@@ -33,6 +33,7 @@ class AgentResult(BaseModel):
     quota_reset_at: str | None = None
     quota_reason: str | None = None
     quota_synthetic: bool = False
+    failure_kind: str | None = None
 
 
 class AgentAdapter(Protocol):
@@ -48,6 +49,28 @@ _NATURAL_CLARIFICATION = re.compile(
     r"these .* lead to .* different implementations)",
     re.IGNORECASE | re.DOTALL,
 )
+
+_INFRASTRUCTURE_ERROR = re.compile(
+    r"(?:stream disconnected|connection reset|can't assign requested address|"
+    r"idle timeout waiting for websocket|failed to refresh available models|"
+    r"failed to connect|network is unreachable|temporary failure in name resolution)",
+    re.IGNORECASE,
+)
+
+
+def classify_agent_failure(text: str) -> str:
+    low = text.lower()
+    if "turn budget" in low or "max-turns" in low or "tool-turn budget" in low:
+        return "budget"
+    if "stall budget" in low:
+        return "stall"
+    if "wall budget" in low:
+        return "wall"
+    if _INFRASTRUCTURE_ERROR.search(text):
+        return "infrastructure"
+    if "schema" in low or "json" in low:
+        return "contract"
+    return "dispatch"
 
 
 def blocked_question_from_text(text: str) -> str | None:

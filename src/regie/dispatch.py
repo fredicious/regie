@@ -1,15 +1,35 @@
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
 import time
 
-from regie.agents.base import AgentRequest, AgentResult, get_adapter
+from regie.agents.base import (
+    AgentRequest,
+    AgentResult,
+    classify_agent_failure,
+    get_adapter,
+)
 from regie.provider_health import ProviderHealthStore, binding_key, provider_key
 from regie.rundir import RunDir
 
 _POLL = 0.1
+
+
+def _codex_line_is_progress(line: str) -> bool:
+    """Reconnect/cache chatter is output, but it is not agent progress."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(event, dict) or event.get("type") in {"error", "turn.failed"}:
+        return False
+    item = event.get("item")
+    if isinstance(item, dict) and item.get("type") == "error":
+        return False
+    return bool(event.get("type"))
 
 
 def _kill_group(proc: subprocess.Popen) -> None:
@@ -32,7 +52,7 @@ def run_agent(rundir: RunDir, task_id: str, stage: str, attempt_no: int,
     _wall_seconds/_stall_seconds are test seams overriding budget-derived limits."""
     wall = _wall_seconds or req.budgets.wall_minutes * 60
     stall = _stall_seconds or req.budgets.stall_minutes * 60
-    attempt_started = time.monotonic()
+    attempt_started = time.time()
     rundir.append_intent({"task": task_id, "stage": stage, "attempt": attempt_no,
                           "binding": req.binding.model_dump()})
 
@@ -60,7 +80,7 @@ def run_agent(rundir: RunDir, task_id: str, stage: str, attempt_no: int,
                 "reset_at": result.quota_reset_at, "synthetic": True,
             },
             "binding": req.binding.model_dump(),
-            "duration_seconds": round(time.monotonic() - attempt_started, 3),
+            "duration_seconds": round(max(0.0, time.time() - attempt_started), 3),
         })
         return result
 
@@ -71,27 +91,45 @@ def run_agent(rundir: RunDir, task_id: str, stage: str, attempt_no: int,
                                 stdin=subprocess.DEVNULL,
                                 stdout=out, stderr=subprocess.STDOUT,
                                 start_new_session=True)
-        started = last_growth = time.monotonic()
+        started = last_progress = time.time()
+        pending_output = ""
         last_size = 0
         while proc.poll() is None:
             time.sleep(_POLL)
-            now = time.monotonic()
+            now = time.time()
             size = out_path.stat().st_size
             if size > last_size:
-                last_size, last_growth = size, now
+                if req.binding.cli == "codex":
+                    with out_path.open("rb") as current:
+                        current.seek(last_size)
+                        pending_output += current.read(size - last_size).decode(
+                            errors="replace")
+                    lines = pending_output.split("\n")
+                    pending_output = lines.pop()
+                    if any(_codex_line_is_progress(line) for line in lines):
+                        last_progress = now
+                else:
+                    last_progress = now
+                last_size = size
             if now - started > wall:
                 killed = "killed: wall budget"
                 break
-            if now - last_growth > stall:
+            if now - last_progress > stall:
                 killed = "killed: stall budget"
                 break
         if killed:
             _kill_group(proc)
 
     if killed:
-        result = AgentResult(outcome="error", text=killed)
+        result = AgentResult(
+            outcome="error",
+            text=killed,
+            failure_kind=classify_agent_failure(killed),
+        )
     else:
         result = adapter.parse(out_path.read_text(errors="replace"), proc.returncode)
+        if result.outcome == "error" and result.failure_kind is None:
+            result.failure_kind = classify_agent_failure(result.text)
     if result.outcome == "quota":
         entry = health.record_quota(req.binding, result)
         # Adapters cannot always recover a reset timestamp. Surface the
@@ -121,7 +159,8 @@ def run_agent(rundir: RunDir, task_id: str, stage: str, attempt_no: int,
                          "provider": provider_key(req.binding),
                          "binding": req.binding.model_dump(),
                          "duration_seconds": round(
-                             time.monotonic() - attempt_started, 3),
+                             max(0.0, time.time() - attempt_started), 3),
+                         "failure_kind": result.failure_kind,
                          "quota": ({"kind": result.quota_kind,
                                     "scope": result.quota_scope,
                                     "reset_at": result.quota_reset_at,

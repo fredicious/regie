@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from regie.agents.base import AgentRequest
+from regie.agents.base import AgentRequest, classify_agent_failure
 from regie.config import Profile, RegieConfig
 from regie.dispatch import run_agent
 from regie.gates import diff_gate, match_globs, red_test_gate, run_command_gate
@@ -274,19 +274,6 @@ def _failure_signature(kind: str, text: str) -> str:
     return f"{kind}:{hashlib.sha256(stable[:4000].encode()).hexdigest()[:16]}"
 
 
-def _classify_dispatch_failure(text: str) -> str:
-    low = text.lower()
-    if "turn budget" in low or "max-turns" in low:
-        return "budget"
-    if "stall budget" in low:
-        return "stall"
-    if "wall budget" in low:
-        return "wall"
-    if "schema" in low or "json" in low:
-        return "contract"
-    return "dispatch"
-
-
 def _budget_reason(run: RunState, cfg: RegieConfig, task_id: str | None = None) -> str | None:
     run_limit = cfg.workflow.max_run_usd
     if run_limit and total_cost(run) >= run_limit:
@@ -369,7 +356,7 @@ def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
     attempt.blocked_question = result.blocked_question
     attempt.usage, attempt.metrics, attempt.turns = result.usage, result.metrics, result.turns
     if attempt.outcome == "failed":
-        attempt.failure_kind = _classify_dispatch_failure(result.text)
+        attempt.failure_kind = result.failure_kind or classify_agent_failure(result.text)
         attempt.failure_signature = _failure_signature(attempt.failure_kind, result.text)
     attempts.append(attempt)
     return attempt, result
@@ -478,7 +465,9 @@ def _run_specialist_reviews(rundir: RunDir, run: RunState, task_id: str,
                 outcome={"done": "done", "quota": "quota",
                          "blocked": "blocked"}.get(result.outcome, "failed"))
             if attempt.outcome == "failed":
-                attempt.failure_kind = _classify_dispatch_failure(result.text)
+                attempt.failure_kind = (
+                    result.failure_kind or classify_agent_failure(result.text)
+                )
                 attempt.failure_signature = _failure_signature(attempt.failure_kind, result.text)
             attempts.append(attempt)
             _discard_worktree_scratch(repo)
@@ -1051,7 +1040,9 @@ def _run_product_owner(
             metrics=result.metrics,
         )
         if outcome == "failed":
-            attempt.failure_kind = _classify_dispatch_failure(result.text)
+            attempt.failure_kind = (
+                result.failure_kind or classify_agent_failure(result.text)
+            )
             attempt.failure_signature = _failure_signature(
                 attempt.failure_kind, result.text
             )
@@ -1215,7 +1206,9 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
         attempt.blocked_question = result.blocked_question
         attempt.usage, attempt.metrics, attempt.turns = result.usage, result.metrics, result.turns
         if attempt.outcome == "failed":
-            attempt.failure_kind = _classify_dispatch_failure(result.text)
+            attempt.failure_kind = (
+                result.failure_kind or classify_agent_failure(result.text)
+            )
             attempt.failure_signature = _failure_signature(attempt.failure_kind, result.text)
         attempts.append(attempt)
         rundir.write_state(run)

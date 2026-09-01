@@ -120,6 +120,16 @@ def test_event_rendering():
     assert "T1/review" in rendered.plain
     assert "done" in rendered.plain
 
+    failed = format_event({
+        "ts": "2026-08-17T10:00:00+00:00",
+        "kind": "attempt",
+        "task": "T1",
+        "stage": "review",
+        "outcome": "error",
+        "failure_kind": "infrastructure",
+    })
+    assert "error:infrastructure" in failed.plain
+
 
 def test_usage_totals_use_lifetime_event_ledger_after_state_reset(
         regie_home, fixture_repo):
