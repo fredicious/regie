@@ -861,11 +861,28 @@ _PLAN_LENSES = (
 
 
 def _plan_review_names(tasks: list[TaskSpec], cfg: RegieConfig,
-                       tier: str) -> list[str]:
+                       tier: str, requested_workflow: str = "auto") -> list[str]:
     if not cfg.workflow.plan_reviews or tier == "fast":
         return []
-    names = [name for name in _PLAN_LENSES if name in cfg.profiles]
     risks = {risk for task in tasks for risk in infer_risks(task)}
+    hard = any(task.complexity == "hard" for task in tasks)
+    external = any(task.external_dependencies for task in tasks)
+    names: list[str] = []
+
+    # Explicit critical mode is the operator asking for the full panel. Auto
+    # mode must earn each generic lens from plan evidence; otherwise a bounded
+    # one-task migration spends more time reviewing its plan than changing code.
+    if requested_workflow == "critical":
+        names.extend(_PLAN_LENSES)
+    else:
+        if len(tasks) > 1 or requested_workflow == "standard":
+            names.append("plan-completeness")
+        if hard or external or "security" in risks:
+            names.append("plan-feasibility")
+        if len(tasks) >= 3 or hard or "architecture" in risks:
+            names.append("plan-scope")
+
+    names = [name for name in names if name in cfg.profiles]
     design = {
         "security": "security-design-reviewer",
         "ui": "ux-design-reviewer",
@@ -887,7 +904,7 @@ def _run_plan_reviews(rundir: RunDir, run: RunState, cfg: RegieConfig,
     prospective = run.model_copy(deep=True)
     prospective.tasks = {task.id: TaskState(spec=task) for task in tasks}
     tier = resolve_tier(prospective, cfg)
-    names = _plan_review_names(tasks, cfg, tier)
+    names = _plan_review_names(tasks, cfg, tier, run.workflow)
     if not names:
         return []
     packet = "\n\n".join([

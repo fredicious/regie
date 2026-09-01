@@ -5,6 +5,7 @@ from regie.agents.base import AgentResult
 from regie.config import load_config
 from regie.models import CheckpointState, RunState, TaskSpec, TaskState
 from regie.pipeline import (
+    _plan_review_names,
     _run_final_review,
     _run_plan_reviews,
     run_tasks_stage,
@@ -30,7 +31,7 @@ def _cfg(fixture_repo):
     return load_config(fixture_repo, PROFILES)
 
 
-def test_plan_passes_three_independent_review_lenses(
+def test_standard_single_task_uses_one_generic_plan_lens(
         regie_home, fixture_repo, monkeypatch):
     rundir = RunDir.create(regie_home, "r1")
     run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
@@ -50,9 +51,25 @@ def test_plan_passes_three_independent_review_lenses(
 
     assert _run_plan_reviews(
         rundir, run, cfg, fixture_repo, "brief", structured) == []
-    assert {review.lens for review in run.plan_reviews} == {
-        "plan-feasibility", "plan-completeness", "plan-scope"}
-    assert len(calls) == 3
+    assert {review.lens for review in run.plan_reviews} == {"plan-completeness"}
+    assert len(calls) == 1
+
+
+def test_explicit_critical_workflow_keeps_full_plan_panel(fixture_repo):
+    cfg = _cfg(fixture_repo)
+
+    names = _plan_review_names([_task()], cfg, "critical", "critical")
+
+    assert names == ["plan-feasibility", "plan-completeness", "plan-scope"]
+
+
+def test_auto_single_migration_uses_only_risk_design_lens(fixture_repo):
+    cfg = _cfg(fixture_repo)
+    task = _task(risk_tags=["migration"])
+
+    names = _plan_review_names([task], cfg, "critical", "auto")
+
+    assert names == ["architecture-design-reviewer"]
 
 
 def test_plan_review_fails_over_when_primary_provider_has_quota(
@@ -65,7 +82,7 @@ def test_plan_review_fails_over_when_primary_provider_has_quota(
 
     monkeypatch.setattr(
         "regie.pipeline._plan_review_names",
-        lambda _tasks, _cfg, _tier: ["plan-completeness"],
+        lambda _tasks, _cfg, _tier, _requested: ["plan-completeness"],
     )
 
     def quota_then_pass(_rd, _task_id, _stage, attempt_no, request):
