@@ -69,6 +69,11 @@ def commit_all(repo: Path, message: str) -> str:
     return git(repo, "rev-parse", "--short", "HEAD").strip()
 
 
+def cherry_pick(repo: Path, commit: str) -> None:
+    """Integrate a commit with the same hermetic identity fallback as commits."""
+    git(repo, *_identity_args(repo), "cherry-pick", commit)
+
+
 def head_sha(repo: Path, ref: str = "HEAD") -> str:
     return git(repo, "rev-parse", ref).strip()
 

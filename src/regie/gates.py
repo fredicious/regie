@@ -14,7 +14,7 @@ from regie.models import GateResult
 _TAIL = 4000
 _INFRASTRUCTURE_FAILURE = re.compile(
     r"(?:"
-    r"(?:command not found|executable .*not found|executable doesn't exist)|"
+    r"(?:command not found|:\s*not found|executable .*not found|executable doesn't exist)|"
     r"(?:\bENOENT\b|\bENOTFOUND\b|\bECONNREFUSED\b|\bETIMEDOUT\b)|"
     r"(?:ERR_PNPM_(?:META_FETCH|FETCH)|unable to resolve package registry)|"
     r"(?:chromium|chrome|firefox|webkit).*(?:not found|isn't installed)|"

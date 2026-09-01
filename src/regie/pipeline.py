@@ -17,6 +17,7 @@ from regie.gates import diff_gate, match_globs, red_test_gate, run_command_gate
 from regie.gitops import (
     GitError,
     changed_files,
+    cherry_pick,
     ci_failures,
     ci_status,
     commit_all,
@@ -1415,7 +1416,7 @@ def _run_parallel_batch(rundir: RunDir, run: RunState, cfg: RegieConfig,
             commits = git(path, "rev-list", "--reverse", f"{base}..HEAD").splitlines()
             try:
                 for commit in commits:
-                    git(repo, "cherry-pick", commit)
+                    cherry_pick(repo, commit)
             except GitError as exc:
                 try:
                     git(repo, "cherry-pick", "--abort")
