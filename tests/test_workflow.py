@@ -67,6 +67,23 @@ def test_plan_preflight_requires_checkpoint_for_external_dependency():
     assert plan_preflight([task]) == []
 
 
+def test_plan_preflight_rejects_unnecessary_checkpoint():
+    task = _task(
+        title="Migrate local persistence to a versioned envelope",
+        risk_tags=["migration"],
+        checkpoint="Acknowledge the local schema change",
+    )
+
+    assert "no external, destructive, or irreversible authority" in " ".join(
+        plan_preflight([task])
+    )
+
+    task.criteria.append(
+        "Given production data When the irreversible migration runs Then it is updated"
+    )
+    assert plan_preflight([task]) == []
+
+
 def test_scope_overlap_blocks_parallel_globs_and_parent_paths():
     one = _task("T1", file_scope=["src/api/**"])
     two = _task("T2", file_scope=["src/api/routes.py"])

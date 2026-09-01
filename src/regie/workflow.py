@@ -14,6 +14,9 @@ RISK_LENSES = {
     "architecture": "architecture-reviewer",
 }
 
+VALID_RISK_TAGS = frozenset({*RISK_LENSES, "external"})
+TASK_REVIEW_PROFILES = frozenset(RISK_LENSES.values())
+
 
 _PLANNING_SIGNALS = {
     "security": ("authentication", "authorization", "permission", "password",
@@ -101,6 +104,20 @@ def plan_preflight(tasks: list[TaskSpec]) -> list[str]:
         if task.external_dependencies and not task.checkpoint:
             errors.append(
                 f"task {task.id}: external dependencies require a checkpoint")
+        checkpoint_evidence = " ".join([
+            task.title, *task.criteria, *task.checklist,
+            *task.external_dependencies,
+        ]).lower()
+        authority_signals = (
+            "production", "credential", "destructive", "irreversible",
+            "delete data", "drop table", "billing", "publish", "deploy",
+        )
+        if (task.checkpoint and not task.external_dependencies
+                and not any(signal in checkpoint_evidence
+                            for signal in authority_signals)):
+            errors.append(
+                f"task {task.id}: checkpoint has no external, destructive, "
+                "or irreversible authority boundary")
         if len(task.file_scope) > 12 and task.complexity != "hard":
             errors.append(
                 f"task {task.id}: scope spans {len(task.file_scope)} paths; split or mark hard")
@@ -110,12 +127,14 @@ def plan_preflight(tasks: list[TaskSpec]) -> list[str]:
 
 
 def review_profiles(task: TaskSpec, cfg: RegieConfig) -> list[str]:
-    requested = list(task.review_lenses)
-    for risk in infer_risks(task):
-        profile = RISK_LENSES.get(risk)
-        if profile and profile not in requested:
-            requested.append(profile)
-    return [name for name in requested if name in cfg.profiles]
+    """Return explicitly requested, task-scoped specialist profiles.
+
+    Risk tags inform routing and plan design review. They are not themselves
+    evidence that an additional post-build agent will add value; the pipeline
+    activates those reviewers from the actual task and changed files.
+    """
+    return [name for name in task.review_lenses
+            if name in TASK_REVIEW_PROFILES and name in cfg.profiles]
 
 
 def scopes_overlap(tasks: list[TaskSpec]) -> bool:

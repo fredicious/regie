@@ -131,7 +131,12 @@ def test_final_integration_review_is_persisted(
     (rundir.path / "spec").mkdir()
     (rundir.path / "spec" / "spec.md").write_text("# Spec")
     run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
-                   base_sha="HEAD", workflow="standard")
+                   base_sha="HEAD", workflow="standard",
+                   tasks={"T1": TaskState(spec=_task()),
+                          "T2": TaskState(spec=TaskSpec(
+                              id="T2", title="Wire calculation", profile="builder",
+                              criteria=["Given input When wired Then output"],
+                              file_scope=["src/wire.py"], checklist=["wiring works"]))})
     cfg = _cfg(fixture_repo)
     monkeypatch.setattr("regie.pipeline.run_agent", lambda *_args, **_kwargs: AgentResult(
         outcome="done", structured={"findings": []}))
@@ -147,7 +152,12 @@ def test_final_integration_review_fails_over_after_quota(
     (rundir.path / "spec").mkdir()
     (rundir.path / "spec" / "spec.md").write_text("# Spec")
     run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
-                   base_sha="HEAD", workflow="standard")
+                   base_sha="HEAD", workflow="standard",
+                   tasks={"T1": TaskState(spec=_task()),
+                          "T2": TaskState(spec=TaskSpec(
+                              id="T2", title="Wire calculation", profile="builder",
+                              criteria=["Given input When wired Then output"],
+                              file_scope=["src/wire.py"], checklist=["wiring works"]))})
     cfg = _cfg(fixture_repo)
     calls = []
 
@@ -162,3 +172,21 @@ def test_final_integration_review_fails_over_after_quota(
     assert _run_final_review(rundir, run, cfg, fixture_repo) is None
     assert calls == ["claude", "codex"]
     assert [attempt.outcome for attempt in run.final_review_attempts] == ["quota", "done"]
+
+
+def test_final_integration_review_skips_single_task(
+        regie_home, fixture_repo, monkeypatch):
+    rundir = RunDir.create(regie_home, "single")
+    run = RunState(
+        id="single", target_repo=str(fixture_repo), branch="regie/single",
+        base_sha="HEAD", workflow="standard",
+        tasks={"T1": TaskState(spec=_task(risk_tags=["migration"]))},
+    )
+    cfg = _cfg(fixture_repo)
+    calls = []
+    monkeypatch.setattr(
+        "regie.pipeline.run_agent", lambda *_args, **_kwargs: calls.append(True)
+    )
+
+    assert _run_final_review(rundir, run, cfg, fixture_repo) is None
+    assert calls == []

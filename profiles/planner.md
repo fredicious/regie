@@ -31,9 +31,20 @@ order of magnitude more later.
   reviewer should attack), dependencies.
 - Every task also declares `risk_tags`, `review_lenses`,
   `external_dependencies`, an optional human `checkpoint` reason, and
-  `parallel_safe`. Use risk tags such as security, migration, api, ui,
-  architecture, and external. Set a checkpoint before credential-dependent,
-  destructive, schema-changing, or security-sensitive boundaries.
+  `parallel_safe`. Risk tags are limited to security, migration, api, ui,
+  architecture, and external. `api` means a public/network contract—not an
+  internal function or persistence helper. Review lenses are limited to task
+  specialists: security-reviewer, migration-reviewer, api-reviewer,
+  ui-reviewer, and architecture-reviewer. Never request system roles such as
+  integration-reviewer; Régie owns cross-task integration review separately.
+  Set a checkpoint only when continuing needs human authority or input: for
+  example production credentials, a destructive or irreversible operation,
+  billing, publishing, or deployment. Reversible code changes,
+  backwards-compatible local data-format migrations, and ordinary
+  security-sensitive implementation do not need checkpoints. A task's
+  checkpoint is reached after that task finishes and before its dependents
+  start; if implementation cannot safely begin without an answer, return a
+  blocked question instead.
 - Independent tasks should be parallel-safe only when their predicted file
   scopes do not overlap. Integration/wiring tasks must be explicit; components
   that are merely created but never connected do not satisfy the plan.

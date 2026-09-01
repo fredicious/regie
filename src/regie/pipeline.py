@@ -56,6 +56,8 @@ from regie.providers import task_cost, total_cost
 from regie.research import research_repository
 from regie.rundir import RunDir
 from regie.workflow import (
+    TASK_REVIEW_PROFILES,
+    VALID_RISK_TAGS,
     active_gate_plugins,
     checkpoint_report,
     infer_risks,
@@ -182,6 +184,11 @@ def _plan_schema(cfg: RegieConfig) -> dict:
     schema = json.loads(json.dumps(PLAN_SCHEMA))
     profile = schema["properties"]["tasks"]["items"]["properties"]["profile"]
     profile["enum"] = sorted(cfg.profiles)
+    task_properties = schema["properties"]["tasks"]["items"]["properties"]
+    task_properties["risk_tags"]["items"]["enum"] = sorted(VALID_RISK_TAGS)
+    task_properties["review_lenses"]["items"]["enum"] = sorted(
+        TASK_REVIEW_PROFILES & cfg.profiles.keys()
+    )
     return schema
 
 
@@ -408,7 +415,6 @@ def _specialist_profiles(task: TaskSpec, repo: Path, start_sha: str,
     except GitError:
         files = []
     evidence = " ".join([task.title, *task.criteria, *task.checklist,
-                         *task.risk_tags, *task.review_lenses,
                          *task.external_dependencies, *files]).lower()
     selected: list[str] = review_profiles(task, cfg)
     triggers = {
@@ -831,6 +837,15 @@ def _validate_plan(structured: dict | None, cfg: RegieConfig) -> list[str]:
                 errors.append(f"task {spec.id}: criterion not Given/When/Then: {criterion}")
         if spec.profile not in cfg.profiles:
             errors.append(f"task {spec.id}: unknown profile '{spec.profile}'")
+        unknown_risks = sorted(set(spec.risk_tags) - VALID_RISK_TAGS)
+        if unknown_risks:
+            errors.append(
+                f"task {spec.id}: unknown risk tags: {', '.join(unknown_risks)}")
+        invalid_lenses = sorted(set(spec.review_lenses) - TASK_REVIEW_PROFILES)
+        if invalid_lenses:
+            errors.append(
+                f"task {spec.id}: non-task review lenses: "
+                f"{', '.join(invalid_lenses)}")
         specs.append(spec)
 
     all_ids = {s.id for s in specs}
@@ -1554,6 +1569,7 @@ def finalize_stage(rundir: RunDir, run: RunState, cfg: RegieConfig,
 def _run_final_review(rundir: RunDir, run: RunState, cfg: RegieConfig,
                       worktree: Path) -> str | None:
     if (not cfg.workflow.final_review or resolve_tier(run, cfg) == "fast"
+            or len(run.tasks) <= 1
             or "integration-reviewer" not in cfg.profiles):
         return None
     if run.final_review_attempts and run.final_review_attempts[-1].outcome == "done":

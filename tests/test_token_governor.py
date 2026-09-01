@@ -46,6 +46,21 @@ def test_hard_task_activates_architecture_review_without_keyword(fixture_repo):
         "architecture-reviewer"]
 
 
+def test_risk_labels_do_not_manufacture_specialist_evidence(fixture_repo):
+    base = head_sha(fixture_repo)
+    cfg = SimpleNamespace(profiles={name: object() for name in (
+        "api-reviewer", "migration-reviewer", "integration-reviewer")})
+    task = TaskSpec(
+        id="T1", title="Version local persistence", profile="builder",
+        criteria=["Given stored tasks When loaded Then they are preserved"],
+        risk_tags=["api"],
+        review_lenses=["migration-reviewer", "integration-reviewer"],
+    )
+
+    assert _specialist_profiles(task, fixture_repo, base, cfg) == [
+        "migration-reviewer"]
+
+
 def test_triggered_specialist_records_evidence_and_findings(
         fixture_repo, regie_home, tmp_path):
     base = head_sha(fixture_repo)

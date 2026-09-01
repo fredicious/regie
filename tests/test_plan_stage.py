@@ -78,6 +78,16 @@ def test_plan_schema_constrains_profile_to_loaded_configuration(cfg):
     assert profile_schema["enum"] == sorted(cfg.profiles)
 
 
+def test_plan_schema_constrains_risks_and_task_reviewers(cfg):
+    properties = _plan_schema(cfg)["properties"]["tasks"]["items"]["properties"]
+
+    assert set(properties["risk_tags"]["items"]["enum"]) == {
+        "security", "migration", "api", "ui", "architecture", "external",
+    }
+    assert "integration-reviewer" not in properties["review_lenses"]["items"]["enum"]
+    assert set(properties["review_lenses"]["items"]["enum"]) <= set(cfg.profiles)
+
+
 def test_plan_stage_rejects_dangling_depends_on(regie_home, fixture_repo, cfg):
     bad = {"spec_markdown": "s", "tasks": [{"id": "T1", "title": "t",
            "profile": "builder", "criteria": ["Given a When b Then c"],
