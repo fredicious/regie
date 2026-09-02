@@ -182,6 +182,11 @@ class TaskState(BaseModel):
     # Findings send a task back through build; the repaired code needs a fresh
     # verification ladder without discarding prior review telemetry.
     review_cycle_start: int = 0
+    # A passed stage followed by a downstream revision request starts a new
+    # provider ladder. Historical attempts remain telemetry, but must not make
+    # a successful second/third revision look like provider exhaustion.
+    test_cycle_start: int = 0
+    build_cycle_start: int = 0
     escaped: bool = False
     start_sha: str = ""
 

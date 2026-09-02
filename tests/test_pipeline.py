@@ -272,6 +272,39 @@ def test_repair_gets_fresh_review_ladder_without_losing_attempt_history(
     assert task.review_cycle_start == 1
 
 
+def test_each_review_revision_gets_a_fresh_build_ladder(
+        regie_home, fixture_repo, cfg):
+    rd = RunDir.create(regie_home, "revisions")
+    run, tid = _run_state(fixture_repo)
+    ctx = PipelineContext(
+        spec_excerpt="S", decisions_path=rd.path / "decisions.md", conventions="C")
+
+    def finding(title):
+        return {"result": {"outcome": "done", "structured": {"findings": [{
+            "severity": "blocker", "title": title, "detail": "fix it",
+        }]}}}
+
+    repair_one = {"result": {"outcome": "done"}, "writes": {
+        "src/calc.py": "def add(a, b):\n    return a + b  # repair one\n",
+    }}
+    repair_two = {"result": {"outcome": "done"}, "writes": {
+        "src/calc.py": "def add(a, b):\n    return a + b  # repair two\n",
+    }}
+
+    for step in (
+        RED_TEST, GREEN_BUILD, finding("first repair"), repair_one,
+        finding("second repair"), repair_two, CLEAN_REVIEW,
+    ):
+        _script(fixture_repo, [step])
+        run_task(rd, run, tid, cfg, fixture_repo, ctx, max_dispatches=1)
+
+    task = run.tasks[tid]
+    assert run.stage != "halted"
+    assert task.status == "done"
+    assert len(task.attempts["build"]) == 3
+    assert task.build_cycle_start >= 1
+
+
 def test_builder_editing_tests_fails_diff_gate(regie_home, fixture_repo, cfg):
     rd = RunDir.create(regie_home, "r1")
     run, tid = _run_state(fixture_repo)

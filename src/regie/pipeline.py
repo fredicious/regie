@@ -309,9 +309,7 @@ def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
               ctx: PipelineContext, extra: str) -> tuple[Attempt, AgentResult]:
     task = run.tasks[task_id]
     attempts = task.attempts[stage]
-    ladder_attempts = (
-        attempts[task.review_cycle_start:] if stage == "review" else attempts
-    )
+    ladder_attempts = _cycle_attempts(task, stage)
     ladder_profile = _review_profile(run, task_id, cfg) if stage == "review" else profile
     ladder = _effective_bindings(ladder_profile, task.spec.complexity)
     binding = ladder[0]
@@ -382,13 +380,20 @@ def _ladder_halt_reason(stage: str, last: Attempt, task_id: str) -> str:
     return f"{stage} ladder exhausted on {task_id}"
 
 
+def _cycle_attempts(task: TaskState, stage: str) -> list[Attempt]:
+    """Attempts that belong to the current provider-failover cycle."""
+    start = {
+        "test": task.test_cycle_start,
+        "build": task.build_cycle_start,
+        "review": task.review_cycle_start,
+    }[stage]
+    return task.attempts[stage][start:]
+
+
 def _should_halt(rundir: RunDir, run: RunState, task_id: str, stage: str,
                  cfg: RegieConfig) -> bool:
-    attempts = run.tasks[task_id].attempts[stage]
-    ladder_attempts = (
-        attempts[run.tasks[task_id].review_cycle_start:]
-        if stage == "review" else attempts
-    )
+    task = run.tasks[task_id]
+    ladder_attempts = _cycle_attempts(task, stage)
     if not ladder_attempts:
         return False
     ladder_profile = (_review_profile(run, task_id, cfg) if stage == "review" else
@@ -681,6 +686,7 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             if stage == "build" and question.startswith("bad-test:"):
                 if not task.escaped:
                     task.escaped = True
+                    task.test_cycle_start = len(task.attempts["test"])
                     task.stage = "test"
                     _write_note(rundir, task_id, "test", f"Builder claims: {question}")
                     rundir.write_state(run)
@@ -713,6 +719,7 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
                 # burned ladders on legitimate re-entries).
                 if set(changed_files(repo)) - pre:
                     commit_all(repo, f"test({task_id}): red tests for {task.spec.title}")
+                task.build_cycle_start = len(task.attempts["build"])
                 task.stage = "build"
             _gate_and_advance(rundir, run, task_id, stage, gates, attempt,
                               _pass_test, repo)
@@ -773,6 +780,7 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
                 _write_note(rundir, task_id, "build",
                             "Review findings to fix:\n" + "\n".join(
                                 f"- [{f.severity}] {f.title}: {f.detail}" for f in serious))
+                task.build_cycle_start = len(task.attempts["build"])
                 task.stage = "build"
             else:
                 task.status = "done"
