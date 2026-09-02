@@ -493,6 +493,45 @@ def _run_specialist_reviews(rundir: RunDir, run: RunState, task_id: str,
     return findings, None
 
 
+_FINDING_STOP_WORDS = frozenset({
+    "a", "an", "and", "at", "by", "for", "from", "in", "is", "of", "on",
+    "the", "to", "with", "immediately", "startup", "unknown",
+})
+_FINDING_TERM_ALIASES = {
+    "destroyed": "destroy",
+    "destroys": "destroy",
+    "destructive": "destroy",
+    "newer": "future",
+    "versions": "version",
+}
+
+
+def _finding_terms(finding: Finding) -> frozenset[str]:
+    words = re.findall(r"[a-z0-9]+", finding.title.lower())
+    return frozenset(
+        _FINDING_TERM_ALIASES.get(word, word)
+        for word in words
+        if word not in _FINDING_STOP_WORDS
+    )
+
+
+def _finding_signature(finding: Finding) -> str:
+    """Audit-friendly normalized signature; similarity remains deterministic."""
+    path = (finding.file or "?").strip().lower()
+    return path + "|" + ",".join(sorted(_finding_terms(finding)))
+
+
+def _same_finding(left: Finding, right: Finding) -> bool:
+    if (left.file and right.file
+            and left.file.strip().lower() != right.file.strip().lower()):
+        return False
+    left_terms, right_terms = _finding_terms(left), _finding_terms(right)
+    if not left_terms or not right_terms:
+        return left.title.strip().lower() == right.title.strip().lower()
+    overlap = len(left_terms & right_terms) / len(left_terms | right_terms)
+    return overlap >= 0.6
+
+
 def _handle_serious_findings(
     rundir: RunDir,
     run: RunState,
@@ -505,16 +544,25 @@ def _handle_serious_findings(
     task = run.tasks[task_id]
     findings_path = rundir.task_dir(task_id) / "findings.json"
     prior = json.loads(findings_path.read_text()) if findings_path.exists() else []
-    prior_titles = {
-        str(item.get("title", "")).strip().lower() for item in prior
-    }
+    prior_findings = [Finding(**item) for item in prior]
     repeated = any(
-        finding.title.strip().lower() in prior_titles for finding in serious
+        _same_finding(finding, earlier)
+        for finding in serious for earlier in prior_findings
     )
     _append_json(findings_path, serious)
     task.review_revisions += 1
+    signatures = [_finding_signature(item) for item in serious]
+    rundir.append_event({
+        "kind": "review_findings",
+        "task": task_id,
+        "stage": "review",
+        "revision": task.review_revisions,
+        "signatures": signatures,
+        "semantic_repeat": repeated,
+        "recovery": repeated or task.review_revisions >= _MAX_REVIEW_REVISIONS,
+    })
 
-    if not (repeated or task.review_revisions > _MAX_REVIEW_REVISIONS):
+    if not (repeated or task.review_revisions >= _MAX_REVIEW_REVISIONS):
         _write_note(rundir, task_id, "build",
                     "Review findings to fix:\n" + "\n".join(
                         f"- [{item.severity}] {item.title}: {item.detail}"
@@ -531,7 +579,7 @@ def _handle_serious_findings(
         return
     task.execution_recovery_used = True
     decision, po_error = _run_execution_product_owner(
-        rundir, run, task_id, cfg, repo, serious
+        rundir, run, task_id, cfg, repo, serious, prior_findings=prior
     )
     task.product_owner_decision = decision
     if decision is None:
@@ -878,7 +926,10 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
 
 def _append_json(path: Path, findings: list[Finding]) -> None:
     existing = json.loads(path.read_text()) if path.exists() else []
-    existing.extend(f.model_dump() for f in findings)
+    for finding in findings:
+        payload = finding.model_dump()
+        payload["signature"] = _finding_signature(finding)
+        existing.append(payload)
     path.write_text(json.dumps(existing, indent=2))
 
 
@@ -1223,11 +1274,17 @@ def _run_execution_product_owner(
     cfg: RegieConfig,
     worktree: Path,
     findings: list[Finding],
+    *,
+    prior_findings: list[dict] | None = None,
 ) -> tuple[ProductOwnerDecision | None, str | None]:
     """Resolve repeated or conflicting review findings without taking control."""
     task = run.tasks[task_id]
     brief_path = rundir.path / "brief.md"
     history_path = rundir.task_dir(task_id) / "findings.json"
+    if prior_findings is None:
+        prior_findings = (
+            json.loads(history_path.read_text()) if history_path.exists() else []
+        )
     packet = "\n\n".join([
         ("# Recovery boundary\nImplementation review did not converge after "
          f"{task.review_revisions} revision requests. The deterministic engine "
@@ -1240,9 +1297,8 @@ def _run_execution_product_owner(
             f"- [{item.severity}] {item.title}: {item.detail}"
             for item in findings
         ),
-        "## Prior review findings\n" + (
-            history_path.read_text() if history_path.exists() else "[]"
-        ),
+        "## Prior review findings\n```json\n"
+        + json.dumps(prior_findings, indent=2) + "\n```",
         "## Acceptance evidence\n```json\n" + json.dumps(
             [item.model_dump() for item in task.criterion_evidence], indent=2
         ) + "\n```",

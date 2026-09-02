@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,10 +13,13 @@ from regie.models import (
     TaskState,
 )
 from regie.pipeline import (
+    _finding_signature,
     _handle_serious_findings,
     _plan_review_names,
+    _run_execution_product_owner,
     _run_final_review,
     _run_plan_reviews,
+    _same_finding,
     run_tasks_stage,
 )
 from regie.rundir import RunDir
@@ -200,7 +204,7 @@ def test_final_integration_review_skips_single_task(
     assert calls == []
 
 
-def test_product_owner_arbitrates_third_execution_revision(
+def test_product_owner_arbitrates_second_execution_revision(
         regie_home, fixture_repo, monkeypatch):
     rundir = RunDir.create(regie_home, "execution-po")
     run = RunState(
@@ -216,13 +220,13 @@ def test_product_owner_arbitrates_third_execution_revision(
         rejected_findings=["Supporting rollback to an old bundle is outside the brief."],
     )
 
-    def advise(*args):
+    def advise(*args, **_kwargs):
         calls.append(args[-1])
         return decision, None
 
     monkeypatch.setattr("regie.pipeline._run_execution_product_owner", advise)
 
-    for number in range(1, 4):
+    for number in range(1, 3):
         _handle_serious_findings(
             rundir, run, "T1", cfg, fixture_repo,
             [Finding(severity="major", title=f"finding {number}", detail="fix it")],
@@ -230,7 +234,7 @@ def test_product_owner_arbitrates_third_execution_revision(
 
     task = run.tasks["T1"]
     assert len(calls) == 1
-    assert task.review_revisions == 3
+    assert task.review_revisions == 2
     assert task.execution_recovery_used
     assert task.product_owner_decision == decision
     assert task.stage == "build"
@@ -254,7 +258,7 @@ def test_repeated_execution_finding_invokes_product_owner_early(
     calls = []
     monkeypatch.setattr(
         "regie.pipeline._run_execution_product_owner",
-        lambda *args: (calls.append(args[-1]) or decision, None),
+        lambda *args, **_kwargs: (calls.append(args[-1]) or decision, None),
     )
     finding = Finding(severity="major", title="rollback compatibility", detail="scope")
 
@@ -263,3 +267,87 @@ def test_repeated_execution_finding_invokes_product_owner_early(
 
     assert len(calls) == 1
     assert run.tasks["T1"].status == "done"
+
+
+def test_finding_signatures_detect_semantic_repeat_without_collapsing_rollback():
+    startup_loss = Finding(
+        severity="major", file="src/app.js",
+        title="Startup destroys data from newer storage versions",
+    )
+    future_loss = Finding(
+        severity="major", file="src/app.js",
+        title="Unknown future-version data is immediately destroyed",
+    )
+    rollback = Finding(
+        severity="major", file="src/app.js",
+        title="The in-place rewrite makes rollback data-destructive",
+    )
+
+    assert _same_finding(startup_loss, future_loss)
+    assert not _same_finding(startup_loss, rollback)
+    assert _finding_signature(startup_loss) == (
+        "src/app.js|data,destroy,future,storage,version"
+    )
+
+
+def test_findings_persist_signatures_and_recovery_telemetry(
+        regie_home, fixture_repo):
+    rundir = RunDir.create(regie_home, "finding-signature")
+    run = RunState(
+        id="finding-signature", target_repo=str(fixture_repo),
+        branch="regie/finding-signature", stage="tasks",
+        tasks={"T1": TaskState(spec=_task())},
+    )
+    cfg = _cfg(fixture_repo)
+    finding = Finding(
+        severity="major", file="src/calc.py",
+        title="Division silently truncates decimal results", detail="fix it",
+    )
+
+    _handle_serious_findings(rundir, run, "T1", cfg, fixture_repo, [finding])
+
+    recorded = json.loads((rundir.task_dir("T1") / "findings.json").read_text())
+    event = json.loads((rundir.path / "events.jsonl").read_text().splitlines()[-1])
+    assert recorded[0]["signature"] == _finding_signature(finding)
+    assert event["kind"] == "review_findings"
+    assert event["semantic_repeat"] is False
+    assert event["recovery"] is False
+
+
+def test_execution_product_owner_packet_does_not_duplicate_current_findings(
+        regie_home, fixture_repo, monkeypatch):
+    rundir = RunDir.create(regie_home, "po-packet")
+    (rundir.path / "brief.md").write_text("# Keep the requested behavior bounded")
+    (rundir.path / "spec").mkdir()
+    (rundir.path / "spec" / "spec.md").write_text("# Accepted spec")
+    run = RunState(
+        id="po-packet", target_repo=str(fixture_repo), branch="regie/po-packet",
+        stage="tasks", tasks={"T1": TaskState(spec=_task(), review_revisions=2)},
+    )
+    cfg = _cfg(fixture_repo)
+    prompts = []
+    decision = ProductOwnerDecision(
+        action="revise", summary="Apply one coherent repair.",
+        directives=["Keep current behavior while fixing the required boundary."],
+    )
+
+    def capture(_rd, _task_id, _stage, _attempt, request):
+        prompts.append(request.prompt)
+        return AgentResult(outcome="done", structured=decision.model_dump())
+
+    monkeypatch.setattr("regie.pipeline.run_agent", capture)
+    current = Finding(
+        severity="major", title="CURRENT-UNIQUE", detail="current detail",
+    )
+    prior = [{
+        "severity": "major", "title": "PRIOR-UNIQUE", "detail": "prior detail",
+        "file": None,
+    }]
+
+    actual, error = _run_execution_product_owner(
+        rundir, run, "T1", cfg, fixture_repo, [current], prior_findings=prior
+    )
+
+    assert error is None and actual == decision
+    assert prompts[0].count("CURRENT-UNIQUE") == 1
+    assert prompts[0].count("PRIOR-UNIQUE") == 1

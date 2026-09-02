@@ -37,8 +37,8 @@ invoking more management agents.
 Execution review uses the same bounded pattern without turning the Product
 Owner into an orchestrator. Successful test/build/review revisions each receive
 a fresh provider-failover ladder while their history remains in telemetry. If
-the same serious finding repeats, or more than two distinct revision requests
-accumulate, the Product Owner receives the brief, accepted spec, task contract,
+the same serious finding repeats, or two serious revision requests accumulate,
+the Product Owner receives the brief, accepted spec, task contract,
 acceptance evidence, complete finding history, and current diff. It may reject
 out-of-contract feedback, direct exactly one final implementation revision, ask
 one human question, or halt. Any further serious finding after that recovery is
