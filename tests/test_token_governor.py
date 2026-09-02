@@ -61,6 +61,32 @@ def test_risk_labels_do_not_manufacture_specialist_evidence(fixture_repo):
         "migration-reviewer"]
 
 
+def test_internal_routing_language_does_not_trigger_api_review(fixture_repo):
+    base = head_sha(fixture_repo)
+    cfg = SimpleNamespace(profiles={"api-reviewer": object()})
+    task = TaskSpec(
+        id="T1", title="Persist loaded tasks", profile="builder",
+        criteria=["Given tasks When loaded Then the app routes them through saveTasks"],
+    )
+
+    assert _specialist_profiles(task, fixture_repo, base, cfg) == []
+
+
+def test_post_recovery_specialists_are_limited_to_explicit_lenses(fixture_repo):
+    base = head_sha(fixture_repo)
+    cfg = SimpleNamespace(profiles={name: object() for name in (
+        "migration-reviewer", "api-reviewer")})
+    task = TaskSpec(
+        id="T1", title="Migrate API endpoint storage", profile="builder",
+        criteria=["Given an endpoint When migrated Then storage remains valid"],
+        review_lenses=["migration-reviewer"],
+    )
+
+    assert _specialist_profiles(
+        task, fixture_repo, base, cfg, explicit_only=True
+    ) == ["migration-reviewer"]
+
+
 def test_triggered_specialist_records_evidence_and_findings(
         fixture_repo, regie_home, tmp_path):
     base = head_sha(fixture_repo)

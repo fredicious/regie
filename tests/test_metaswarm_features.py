@@ -241,6 +241,9 @@ def test_product_owner_arbitrates_second_execution_revision(
     assert "Separate the startup rewrite" in (
         rundir.task_dir("T1") / "note-build.md"
     ).read_text()
+    assert "do not re-open explicitly rejected scope" in (
+        rundir.task_dir("T1") / "note-review.md"
+    ).read_text()
 
 
 def test_repeated_execution_finding_invokes_product_owner_early(

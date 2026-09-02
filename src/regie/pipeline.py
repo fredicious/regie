@@ -413,7 +413,7 @@ def _should_halt(rundir: RunDir, run: RunState, task_id: str, stage: str,
 
 
 def _specialist_profiles(task: TaskSpec, repo: Path, start_sha: str,
-                         cfg: RegieConfig) -> list[str]:
+                         cfg: RegieConfig, *, explicit_only: bool = False) -> list[str]:
     """Deterministically activate expensive review expertise only on risk."""
     try:
         files = [p for p in git(repo, "diff", "--name-only", f"{start_sha}..HEAD").splitlines()
@@ -423,11 +423,13 @@ def _specialist_profiles(task: TaskSpec, repo: Path, start_sha: str,
     evidence = " ".join([task.title, *task.criteria, *task.checklist,
                          *task.external_dependencies, *files]).lower()
     selected: list[str] = review_profiles(task, cfg)
+    if explicit_only:
+        return selected
     triggers = {
         "security-reviewer": ("auth", "permission", "secret", "token", "crypto",
                               "sanitize", "injection", "password"),
         "migration-reviewer": ("migration", "schema", ".sql", "database", "alembic"),
-        "api-reviewer": ("/api/", "endpoint", "route", "public api", "openapi", "graphql"),
+        "api-reviewer": ("/api/", "endpoint", "public api", "openapi", "graphql"),
         "ui-reviewer": (".tsx", ".jsx", ".css", ".html", "accessibility", "frontend", " ui "),
     }
     for profile_name, needles in triggers.items():
@@ -448,7 +450,13 @@ def _run_specialist_reviews(rundir: RunDir, run: RunState, task_id: str,
     task = run.tasks[task_id]
     if not cfg.workflow.design_reviews or resolve_tier(run, cfg) == "fast":
         return [], None
-    selected = _specialist_profiles(task.spec, repo, task.start_sha, cfg)
+    selected = _specialist_profiles(
+        task.spec,
+        repo,
+        task.start_sha,
+        cfg,
+        explicit_only=task.execution_recovery_used,
+    )
     findings: list[Finding] = []
     manifest = _change_manifest(repo, task.start_sha)
     for name in selected:
@@ -459,6 +467,7 @@ def _run_specialist_reviews(rundir: RunDir, run: RunState, task_id: str,
             packet = render_packet(
                 task.spec, ctx.spec_excerpt, _decisions(ctx), ctx.conventions,
                 stage="specialist-review", context_budget=profile.token_policy.context_chars,
+                extra=_notes_for(rundir, task_id, "review"),
                 artifacts=_artifacts(ctx), change_manifest=manifest)
             write_packet(rundir.task_dir(f"{task_id}-{name.upper()}"), packet)
             schema = json.loads(json.dumps(SPECIALIST_SCHEMA))
@@ -615,6 +624,14 @@ def _handle_serious_findings(
                 f"- {item}" for item in decision.rejected_findings
             )
         _write_note(rundir, task_id, "build", note)
+        review_note = (
+            "Product Owner bounded recovery is in effect. Verify the final "
+            "implementation against the accepted brief and these directives; "
+            "do not re-open explicitly rejected scope without materially new "
+            "repository evidence.\n\n"
+            + note
+        )
+        _write_note(rundir, task_id, "review", review_note)
         task.build_cycle_start = len(task.attempts["build"])
         task.stage = "build"
         return
