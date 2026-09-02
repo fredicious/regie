@@ -7,6 +7,7 @@ from regie.config import load_config
 from regie.models import (
     CheckpointState,
     Finding,
+    PlanReview,
     ProductOwnerDecision,
     RunState,
     TaskSpec,
@@ -115,6 +116,42 @@ def test_plan_review_fails_over_when_primary_provider_has_quota(
     assert [cli for _, cli, _ in calls] == ["claude", "codex"]
     assert [number for number, _, _ in calls] == [1, 2]
     assert run.plan_reviews[-1].lens == "plan-completeness"
+
+
+def test_post_product_owner_plan_review_does_not_expand_panel(
+        regie_home, fixture_repo, monkeypatch):
+    rundir = RunDir.create(regie_home, "r1")
+    run = RunState(
+        id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+        workflow="critical",
+        plan_reviews=[PlanReview(
+            lens="plan-completeness", verdict="fail",
+            evidence=["missing contract"], findings=[],
+        )],
+        product_owner_decision=ProductOwnerDecision(
+            action="revise", summary="Repair the bounded contract.",
+            directives=["Name the missing test."],
+        ),
+    )
+    cfg = _cfg(fixture_repo)
+    calls = []
+
+    def pass_review(_rd, task_id, stage, _attempt, request):
+        calls.append((task_id, stage, request.prompt))
+        return AgentResult(outcome="done", structured={
+            "verdict": "pass", "evidence": ["directive verified"],
+            "findings": [],
+        })
+
+    monkeypatch.setattr("regie.pipeline.run_agent", pass_review)
+    structured = {"spec_markdown": "# Spec", "tasks": [_task().model_dump()]}
+
+    assert _run_plan_reviews(
+        rundir, run, cfg, fixture_repo, "brief", structured
+    ) == []
+    assert len(calls) == 1
+    assert calls[0][1] == "plan-review:plan-completeness"
+    assert "Do not re-open explicitly rejected scope" in calls[0][2]
 
 
 def test_checkpoint_is_a_blocking_state_transition(

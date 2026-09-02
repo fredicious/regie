@@ -132,13 +132,14 @@ Materially inspired by [MetaSwarm](https://github.com/dsifry/metaswarm); see
 
 ## Done 2026-08-17 — bounded Product Owner recovery
 
-- Three rejected reviewed plan drafts invoke one read-only Product Owner agent
-  before Régie halts.
+- Deterministic plan-contract defects retain a three-attempt repair budget;
+  advisory plan-review disputes invoke one read-only Product Owner agent after
+  the first reviewed draft.
 - Structured `revise`, `accept`, `ask_human`, and `halt` decisions are persisted
   as run evidence and projected in Agent Activity and the artifact browser.
-- `revise` grants exactly one additional planner contract attempt; `accept` is
-  limited to scope/alignment findings and cannot waive deterministic checks or
-  mandatory technical reviews.
+- `revise` grants exactly one additional planner contract attempt; `accept`
+  requires explicit rejection of advisory findings and cannot waive
+  deterministic checks or configured reviewer availability.
 - The state machine remains the sole orchestration authority and provider
   failover remains deterministic.
 - In-app Markdown/JSON artifact reader for briefs, specs, research, checkpoints,

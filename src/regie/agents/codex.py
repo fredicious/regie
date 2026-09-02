@@ -18,7 +18,8 @@ from regie.quota import quota_metadata
 
 _QUOTA = re.compile(
     r"(?:usage|rate|weekly|(?:5|five)[ -]?hour).?limit|quota|"
-    r"limit\s+reached.*reset",
+    r"limit\s+reached.*reset|(?:out of|insufficient|exhausted)\s+credits?|"
+    r"credits?\s+(?:are\s+)?(?:exhausted|unavailable)",
     re.IGNORECASE,
 )
 

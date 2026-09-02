@@ -46,6 +46,23 @@ def test_parse_quota_from_error_event():
     assert get_adapter("codex").parse(out, 1).outcome == "quota"
 
 
+def test_parse_workspace_credit_exhaustion_as_quota():
+    out = _lines({
+        "type": "turn.failed",
+        "error": {
+            "message": (
+                "Your workspace is out of credits. Ask your workspace owner "
+                "to refill in order to continue."
+            ),
+        },
+    })
+
+    result = get_adapter("codex").parse(out, 1)
+
+    assert result.outcome == "quota"
+    assert result.quota_kind == "unknown"
+
+
 def test_parse_quota_reads_structured_reset_time():
     out = _lines({"type": "turn.failed", "error": {
         "message": "weekly usage limit reached",

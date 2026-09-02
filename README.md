@@ -45,7 +45,8 @@ valid patch. Build-dependent suites run only after the build gate.
 
 When reviewed plans or implementation feedback fail to converge, Régie invokes
 a bounded, read-only Product Owner advisor. It may consolidate feedback into
-one final revision, reject scope/alignment expansion, or ask for human
+one final revision, reject advisory findings that do not follow from the brief,
+or ask for human
 authority. The state machine still owns transitions and never lets that
 decision waive mechanical validation, tests, security gates, provider policy,
 or budgets.

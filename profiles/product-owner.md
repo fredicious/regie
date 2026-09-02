@@ -12,11 +12,11 @@ Choose exactly one action:
 
 - `revise`: provide concrete, non-conflicting directives for one final planner
   or implementation revision, according to the supplied recovery boundary.
-- `accept`: only when all remaining failures are scope/alignment opinions that
-  can safely be rejected. Name and justify every rejected serious finding.
-  Failed acceptance criteria, feasibility, completeness, design, and
-  reviewer-availability failures require revision or escalation and cannot be
-  accepted.
+- `accept`: only when all remaining failures are advisory review findings that
+  you can reject against the original brief and repository evidence. Name and
+  justify every rejected serious finding. Deterministic validation and
+  mechanical failures, including configured reviewer unavailability, require
+  revision or escalation and cannot be accepted.
 - `ask_human`: only when product intent, credentials, destructive effects,
   security posture, provider policy, or budget authority genuinely requires
   the operator. Ask one concise question.

@@ -132,11 +132,13 @@ Failover applies to the entire workflow, including planning panels, specialist
 reviews, and final integration review—not only the main planner/build stages.
 When a provider circuit is already open, Agent Activity records the bypass as
 `skipped`; this is an audit entry and does not launch another provider process.
-Planner drafts receive up to three contract-validation attempts independently of
-provider failover. If those reviewed drafts still do not converge, the shipped
-`product-owner` profile receives the brief, latest plan, validation failures,
-review findings, and attempt evidence. It can issue one binding set of planner
-directives, accept only scope/alignment review findings, or escalate to the operator.
+Planner drafts receive up to three deterministic contract-validation attempts
+independently of provider failover. Advisory review disputes are sent to the
+shipped `product-owner` profile after the first reviewed draft instead of being
+blindly accumulated as mandatory planner scope. The advisor receives the brief,
+latest plan, validation failures, review findings, and attempt evidence. It can
+issue one binding set of planner directives, explicitly reject advisory findings
+that do not follow from the product contract, or escalate to the operator.
 Its decision is retained as `product-owner-decision.json` and `.md` and appears
 in the control room. A final failed revision halts; deterministic validation,
 tests, security/destructive checkpoints, provider configuration, and budgets

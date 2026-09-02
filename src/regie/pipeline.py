@@ -1085,16 +1085,35 @@ def _run_plan_reviews(rundir: RunDir, run: RunState, cfg: RegieConfig,
     prospective.tasks = {task.id: TaskState(spec=task) for task in tasks}
     tier = resolve_tier(prospective, cfg)
     names = _plan_review_names(tasks, cfg, tier, run.workflow)
+    if run.product_owner_decision is not None:
+        # A recovery revision answers the disputed lenses that reached the PO.
+        # Do not let changes made to satisfy those directives dynamically grow
+        # a brand-new committee and restart the scope ratchet.
+        disputed = {
+            review.lens for review in run.plan_reviews if review.verdict == "fail"
+        }
+        names = [name for name in names if name in disputed]
     if not names:
         return []
-    packet = "\n\n".join([
+    sections = [
         "# Original brief\n" + brief,
         "## Proposed spec\n" + structured["spec_markdown"],
         "## Proposed task plan\n```json\n"
         + json.dumps(structured["tasks"], indent=2) + "\n```",
-        ("## Rules\nReturn PASS only when this plan is executable against the "
-         "repository and complete for your lens. Cite concrete evidence."),
-    ]) + "\n"
+    ]
+    if run.product_owner_decision is not None:
+        sections.append(
+            "## Product Owner recovery boundary\n```json\n"
+            + json.dumps(run.product_owner_decision.model_dump(), indent=2)
+            + "\n```\nVerify the revised plan against these directives. Do not "
+            "re-open explicitly rejected scope without materially new repository "
+            "evidence."
+        )
+    sections.append(
+        "## Rules\nReturn PASS only when this plan is executable against the "
+        "repository and complete for your lens. Cite concrete evidence."
+    )
+    packet = "\n\n".join(sections) + "\n"
     failures: list[str] = []
     for name in names:
         profile = cfg.profiles[name]
@@ -1176,7 +1195,8 @@ def _run_product_owner(
     schema/preflight failures.
     """
     packet = "\n\n".join([
-        "# Recovery boundary\nThe plan did not converge after three reviewed drafts.",
+        ("# Recovery boundary\nThe reviewed plan has disputed findings that need "
+         "product-scope arbitration before another planner revision."),
         "## Original brief\n" + brief,
         "## Latest proposed spec\n" + str(structured.get("spec_markdown", "")),
         "## Latest proposed task plan\n```json\n"
@@ -1196,8 +1216,8 @@ def _run_product_owner(
             }
             for attempt in run.planner_attempts
         ], indent=2),
-        ("## Authority boundary\nYou may consolidate findings, reject advisory "
-         "scope suggestions, or direct one final planner revision. You may not "
+        ("## Authority boundary\nYou may consolidate or reject advisory findings "
+         "from any review lens, or direct one final planner revision. You may not "
          "waive deterministic validation, tests, security gates, destructive "
          "approval, credentials, provider policy, or budgets. Ask the human "
          "when their authority is required."),
@@ -1500,14 +1520,21 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
             contract_attempts = sum(
                 item.failure_kind == "contract" for item in run.planner_attempts
             )
-            if contract_attempts >= _MAX_PLAN_CONTRACT_ATTEMPTS:
-                if run.product_owner_decision is not None:
-                    _halt_run(
-                        rundir,
-                        run,
-                        "plan validation did not converge after Product Owner recovery",
-                    )
-                    return
+            if run.product_owner_decision is not None:
+                _halt_run(
+                    rundir,
+                    run,
+                    "plan validation did not converge after Product Owner recovery",
+                )
+                return
+            # Deterministic schema/preflight defects can be repaired directly by
+            # the planner. Advisory review failures are judgment calls: send
+            # those to the PO after the first reviewed draft instead of blindly
+            # turning every critique into mandatory scope for several rounds.
+            needs_product_owner = (
+                bool(review_errors) and not deterministic_errors
+            ) or contract_attempts >= _MAX_PLAN_CONTRACT_ATTEMPTS
+            if needs_product_owner:
                 decision, po_error = _run_product_owner(
                     rundir,
                     run,
@@ -1553,14 +1580,19 @@ def plan_stage(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: Path) 
                             "validation failures",
                         )
                         return
-                    if any(
-                        not item.startswith("plan-scope:") for item in review_errors
-                    ):
+                    if review_errors and not decision.rejected_findings:
                         _halt_run(
                             rundir,
                             run,
-                            "Product Owner cannot accept mandatory feasibility, "
-                            "completeness, design, or reviewer-availability failures",
+                            "Product Owner cannot accept advisory plan findings "
+                            "without explicitly rejecting them",
+                        )
+                        return
+                    if any("reviewer unavailable" in item for item in review_errors):
+                        _halt_run(
+                            rundir,
+                            run,
+                            "Product Owner cannot waive configured reviewer availability",
                         )
                         return
                     _apply_plan(rundir, run, result.structured)

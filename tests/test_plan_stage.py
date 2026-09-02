@@ -288,8 +288,6 @@ def test_product_owner_may_accept_scope_review_findings(
     )
     _queue(fixture_repo, [
         {"result": {"outcome": "done", "structured": PLAN}},
-        {"result": {"outcome": "done", "structured": PLAN}},
-        {"result": {"outcome": "done", "structured": PLAN}},
         {"result": {"outcome": "done", "structured": accept}},
     ])
 
@@ -298,10 +296,12 @@ def test_product_owner_may_accept_scope_review_findings(
     assert run.stage == "approve"
     assert run.product_owner_decision is not None
     assert run.product_owner_decision.action == "accept"
+    assert len(run.planner_attempts) == 1
+    assert len(run.product_owner_attempts) == 1
     assert (rd.path / "spec" / "spec.md").is_file()
 
 
-def test_product_owner_cannot_accept_mandatory_review_failure(
+def test_product_owner_may_reject_advisory_completeness_finding(
         regie_home, fixture_repo, cfg, tmp_path, monkeypatch):
     accept = {
         "action": "accept",
@@ -320,7 +320,64 @@ def test_product_owner_cannot_accept_mandatory_review_failure(
     )
     _queue(fixture_repo, [
         {"result": {"outcome": "done", "structured": PLAN}},
+        {"result": {"outcome": "done", "structured": accept}},
+    ])
+
+    plan_stage(rd, run, cfg, fixture_repo)
+
+    assert run.stage == "approve"
+    assert run.product_owner_decision is not None
+    assert run.product_owner_decision.rejected_findings
+
+
+def test_product_owner_accept_requires_explicit_advisory_rejections(
+        regie_home, fixture_repo, cfg, tmp_path, monkeypatch):
+    incomplete_accept = {
+        "action": "accept",
+        "summary": "Proceed without recording why the finding is optional.",
+        "directives": [],
+        "accepted_findings": [],
+        "rejected_findings": [],
+        "human_question": None,
+    }
+    rd, run = _seed(regie_home, fixture_repo, PLAN)
+    (fixture_repo / ".fake_agent.json").unlink()
+    _add_product_owner(cfg, tmp_path)
+    monkeypatch.setattr(
+        "regie.pipeline._run_plan_reviews",
+        lambda *_args, **_kwargs: ["plan-completeness: required error path missing"],
+    )
+    _queue(fixture_repo, [
         {"result": {"outcome": "done", "structured": PLAN}},
+        {"result": {"outcome": "done", "structured": incomplete_accept}},
+    ])
+
+    plan_stage(rd, run, cfg, fixture_repo)
+
+    assert run.stage == "halted"
+    assert "without explicitly rejecting" in (run.halt_reason or "")
+
+
+def test_product_owner_cannot_waive_reviewer_unavailability(
+        regie_home, fixture_repo, cfg, tmp_path, monkeypatch):
+    accept = {
+        "action": "accept",
+        "summary": "Proceed without the configured review.",
+        "directives": [],
+        "accepted_findings": [],
+        "rejected_findings": ["The reviewer was unavailable."],
+        "human_question": None,
+    }
+    rd, run = _seed(regie_home, fixture_repo, PLAN)
+    (fixture_repo / ".fake_agent.json").unlink()
+    _add_product_owner(cfg, tmp_path)
+    monkeypatch.setattr(
+        "regie.pipeline._run_plan_reviews",
+        lambda *_args, **_kwargs: [
+            "architecture-design-reviewer: reviewer unavailable (quota)"
+        ],
+    )
+    _queue(fixture_repo, [
         {"result": {"outcome": "done", "structured": PLAN}},
         {"result": {"outcome": "done", "structured": accept}},
     ])
@@ -328,7 +385,7 @@ def test_product_owner_cannot_accept_mandatory_review_failure(
     plan_stage(rd, run, cfg, fixture_repo)
 
     assert run.stage == "halted"
-    assert "cannot accept mandatory" in (run.halt_reason or "")
+    assert "cannot waive configured reviewer" in (run.halt_reason or "")
 
 
 def test_ac14_planner_quota_halts_naming_exhausted_binding(regie_home, fixture_repo, tmp_path):

@@ -55,7 +55,7 @@ brief → deterministic route
   → mechanical plan preflight
   → feasibility / completeness / scope reviews
   → risk-selected design reviews
-  → on non-convergence: bounded Product Owner decision → one final revision
+  → on first advisory dispute: bounded Product Owner decision → one final revision
   → human spec approval
   → dependency layers
       → test author → red gate → builder → deterministic gates
