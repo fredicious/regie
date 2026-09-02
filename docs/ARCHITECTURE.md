@@ -34,6 +34,16 @@ agents, waive deterministic validation or gates, change provider policy, or
 increase budgets. A failed recovery reaches a real halt instead of recursively
 invoking more management agents.
 
+Execution review uses the same bounded pattern without turning the Product
+Owner into an orchestrator. Successful test/build/review revisions each receive
+a fresh provider-failover ladder while their history remains in telemetry. If
+the same serious finding repeats, or more than two distinct revision requests
+accumulate, the Product Owner receives the brief, accepted spec, task contract,
+acceptance evidence, complete finding history, and current diff. It may reject
+out-of-contract feedback, direct exactly one final implementation revision, ask
+one human question, or halt. Any further serious finding after that recovery is
+a deterministic halt.
+
 ```text
 brief → deterministic route
   ├─ direct: one owner (implementation + focused tests)
@@ -50,8 +60,9 @@ brief → deterministic route
   → dependency layers
       → test author → red gate → builder → deterministic gates
       → fresh reviewer evidence matrix → selected specialists
+      → on review non-convergence: bounded Product Owner decision
       → optional planned checkpoint
-  → full mechanical gates + final integration review
+  → full mechanical gates + cross-task integration review when tasks interact
   → safe history rewrite + PR
   → CI/review shepherd
   → learning candidates → explicit knowledge promotion
@@ -63,9 +74,11 @@ brief → deterministic route
   review, and skips upfront planning, a separate test-writer, review panels,
   coverage expansion, and final integration review.
 - `standard`: multi-task work; adds plan reviews, coverage, selective specialists,
-  final integration review, and safe parallel DAG layers.
+  cross-task integration review, and safe parallel DAG layers.
 - `critical`: security, migrations, credentials/external services, or explicitly
-  hard tasks; activates the relevant design specialists and planned checkpoints.
+  hard tasks; activates the relevant design specialists. Planned checkpoints
+  are reserved for actual human-authority boundaries such as credentials,
+  destructive operations, billing, publishing, or deployment.
 - `auto`: starts direct when the brief contains no material risk signal. Security,
   migration, public-API, architectural, destructive-data, and external-dependency
   evidence routes to planning before implementation. A direct owner can upgrade

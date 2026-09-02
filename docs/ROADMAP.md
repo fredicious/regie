@@ -146,6 +146,31 @@ Materially inspired by [MetaSwarm](https://github.com/dsifry/metaswarm); see
 - Managed background engine processes keep the interface responsive and retain
   a diagnostic log under `$REGIE_HOME`.
 
+## Done 2026-09-02 — lean routing and bounded execution recovery
+
+- Plan-review panels now earn their cost: explicit critical workflows retain
+  the full panel, while automatic single-task plans select only evidence-backed
+  generic and risk-design lenses.
+- Task review lenses are constrained to task specialists. Risk labels no longer
+  manufacture post-build reviewer evidence, and single-task runs skip the
+  cross-task integration reviewer.
+- Checkpoints are reserved for real human-authority boundaries; reversible
+  local migrations no longer stop autonomous runs for ceremonial approval.
+- Test, build, and review provider ladders reset between successful revision
+  cycles without losing historical attempts or telemetry.
+- Repeated or conflicting implementation findings invoke the bounded Product
+  Owner once. A final revision or explicit scope rejection is persisted; a
+  subsequent serious finding reaches a deterministic halt.
+- Wall/stall enforcement uses elapsed wall time, reconnect chatter cannot fake
+  progress, and infrastructure/network/budget/contract causes remain distinct
+  in state, events, and the control room.
+- CI now exercises Linux and macOS, including a real bare-`regie` PTY launch
+  outside the source checkout.
+- Live benchmark shakedowns passed both a direct bug-fix route and a planned
+  migration route with hidden acceptance evaluators. The planned conflict run
+  also established the next optimization target: reduce reviewer latency and
+  prevent avoidable finding oscillation without weakening defect discovery.
+
 ## v2
 
 - **Local / OSS models** — third binding target via opencode/Ollama; slot exists

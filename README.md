@@ -43,11 +43,12 @@ Unavailable tools, registries, browsers, or build artifacts halt as
 infrastructure problems without consuming another model attempt or discarding a
 valid patch. Build-dependent suites run only after the build gate.
 
-When three reviewed plan drafts fail to converge, Régie invokes a bounded,
-read-only Product Owner advisor. It may consolidate feedback into one final
-planner revision, reject scope/alignment expansion, or ask for human authority.
-The state machine still owns transitions and never lets that decision waive
-mechanical validation, tests, security gates, provider policy, or budgets.
+When reviewed plans or implementation feedback fail to converge, Régie invokes
+a bounded, read-only Product Owner advisor. It may consolidate feedback into
+one final revision, reject scope/alignment expansion, or ask for human
+authority. The state machine still owns transitions and never lets that
+decision waive mechanical validation, tests, security gates, provider policy,
+or budgets.
 
 - `docs/superpowers/specs/2026-07-29-regie-v1-design.md` — v1 design
 - `docs/USAGE.md` — install (via `uv tool install`) and usage
