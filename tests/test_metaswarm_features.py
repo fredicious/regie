@@ -3,8 +3,16 @@ from types import SimpleNamespace
 
 from regie.agents.base import AgentResult
 from regie.config import load_config
-from regie.models import CheckpointState, RunState, TaskSpec, TaskState
+from regie.models import (
+    CheckpointState,
+    Finding,
+    ProductOwnerDecision,
+    RunState,
+    TaskSpec,
+    TaskState,
+)
 from regie.pipeline import (
+    _handle_serious_findings,
     _plan_review_names,
     _run_final_review,
     _run_plan_reviews,
@@ -190,3 +198,68 @@ def test_final_integration_review_skips_single_task(
 
     assert _run_final_review(rundir, run, cfg, fixture_repo) is None
     assert calls == []
+
+
+def test_product_owner_arbitrates_third_execution_revision(
+        regie_home, fixture_repo, monkeypatch):
+    rundir = RunDir.create(regie_home, "execution-po")
+    run = RunState(
+        id="execution-po", target_repo=str(fixture_repo), branch="regie/execution-po",
+        stage="tasks", tasks={"T1": TaskState(spec=_task())},
+    )
+    cfg = _cfg(fixture_repo)
+    calls = []
+    decision = ProductOwnerDecision(
+        action="revise",
+        summary="Preserve future data without disabling later user saves.",
+        directives=["Separate the startup rewrite decision from later user edits."],
+        rejected_findings=["Supporting rollback to an old bundle is outside the brief."],
+    )
+
+    def advise(*args):
+        calls.append(args[-1])
+        return decision, None
+
+    monkeypatch.setattr("regie.pipeline._run_execution_product_owner", advise)
+
+    for number in range(1, 4):
+        _handle_serious_findings(
+            rundir, run, "T1", cfg, fixture_repo,
+            [Finding(severity="major", title=f"finding {number}", detail="fix it")],
+        )
+
+    task = run.tasks["T1"]
+    assert len(calls) == 1
+    assert task.review_revisions == 3
+    assert task.execution_recovery_used
+    assert task.product_owner_decision == decision
+    assert task.stage == "build"
+    assert "Separate the startup rewrite" in (
+        rundir.task_dir("T1") / "note-build.md"
+    ).read_text()
+
+
+def test_repeated_execution_finding_invokes_product_owner_early(
+        regie_home, fixture_repo, monkeypatch):
+    rundir = RunDir.create(regie_home, "repeat-po")
+    run = RunState(
+        id="repeat-po", target_repo=str(fixture_repo), branch="regie/repeat-po",
+        stage="tasks", tasks={"T1": TaskState(spec=_task())},
+    )
+    cfg = _cfg(fixture_repo)
+    decision = ProductOwnerDecision(
+        action="accept", summary="The repeated finding is outside the contract.",
+        rejected_findings=["Rollback compatibility was not requested."],
+    )
+    calls = []
+    monkeypatch.setattr(
+        "regie.pipeline._run_execution_product_owner",
+        lambda *args: (calls.append(args[-1]) or decision, None),
+    )
+    finding = Finding(severity="major", title="rollback compatibility", detail="scope")
+
+    _handle_serious_findings(rundir, run, "T1", cfg, fixture_repo, [finding])
+    _handle_serious_findings(rundir, run, "T1", cfg, fixture_repo, [finding])
+
+    assert len(calls) == 1
+    assert run.tasks["T1"].status == "done"

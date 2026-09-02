@@ -206,6 +206,7 @@ _PLAN_TASK_ID = "PLAN"
 _MAX_PLAN_CONTRACT_ATTEMPTS = 3
 _PRODUCT_OWNER_TASK_ID = "PRODUCT-OWNER"
 _MAX_PRODUCT_OWNER_REVISIONS = 1
+_MAX_REVIEW_REVISIONS = 2
 _SCRIBE_TASK_ID = "SCRIBE"
 
 _DEBUGGER_PROMPT_FALLBACK = Path(__file__).parent.parent.parent / "profiles" / "debugger.md"
@@ -492,6 +493,97 @@ def _run_specialist_reviews(rundir: RunDir, run: RunState, task_id: str,
     return findings, None
 
 
+def _handle_serious_findings(
+    rundir: RunDir,
+    run: RunState,
+    task_id: str,
+    cfg: RegieConfig,
+    repo: Path,
+    serious: list[Finding],
+) -> None:
+    """Route review findings to a builder or one bounded PO recovery."""
+    task = run.tasks[task_id]
+    findings_path = rundir.task_dir(task_id) / "findings.json"
+    prior = json.loads(findings_path.read_text()) if findings_path.exists() else []
+    prior_titles = {
+        str(item.get("title", "")).strip().lower() for item in prior
+    }
+    repeated = any(
+        finding.title.strip().lower() in prior_titles for finding in serious
+    )
+    _append_json(findings_path, serious)
+    task.review_revisions += 1
+
+    if not (repeated or task.review_revisions > _MAX_REVIEW_REVISIONS):
+        _write_note(rundir, task_id, "build",
+                    "Review findings to fix:\n" + "\n".join(
+                        f"- [{item.severity}] {item.title}: {item.detail}"
+                        for item in serious))
+        task.build_cycle_start = len(task.attempts["build"])
+        task.stage = "build"
+        return
+
+    if task.execution_recovery_used:
+        _halt(
+            rundir, run, task_id,
+            "execution review did not converge after Product Owner recovery",
+        )
+        return
+    task.execution_recovery_used = True
+    decision, po_error = _run_execution_product_owner(
+        rundir, run, task_id, cfg, repo, serious
+    )
+    task.product_owner_decision = decision
+    if decision is None:
+        _halt(rundir, run, task_id, po_error or "Product Owner unavailable")
+        return
+
+    if decision.action == "accept":
+        failed_criteria = [item for item in task.criterion_evidence if not item.passed]
+        if (failed_criteria or "security" in infer_risks(task.spec)
+                or not decision.rejected_findings):
+            _halt(
+                rundir, run, task_id,
+                "Product Owner cannot accept execution with failed criteria, "
+                "security risk, or no rejected finding",
+            )
+            return
+        task.status = "done"
+        return
+
+    if decision.action == "revise":
+        if not decision.directives:
+            _halt(
+                rundir, run, task_id,
+                "Product Owner requested execution revision without directives",
+            )
+            return
+        note = (
+            "Product Owner recovery directives (one final revision):\n"
+            + "\n".join(f"- {item}" for item in decision.directives)
+        )
+        if decision.rejected_findings:
+            note += "\n\nRejected review findings:\n" + "\n".join(
+                f"- {item}" for item in decision.rejected_findings
+            )
+        _write_note(rundir, task_id, "build", note)
+        task.build_cycle_start = len(task.attempts["build"])
+        task.stage = "build"
+        return
+
+    if decision.action == "ask_human":
+        _halt(
+            rundir, run, task_id,
+            "blocked: Product Owner requests human decision: "
+            + (decision.human_question or decision.summary),
+        )
+        return
+    _halt(
+        rundir, run, task_id,
+        f"Product Owner halted recovery: {decision.summary}",
+    )
+
+
 def _gate_and_advance(rundir: RunDir, run: RunState, task_id: str, stage: str,
                       gates: list[GateResult], attempt: Attempt, on_pass,
                       repo: Path) -> None:
@@ -776,12 +868,9 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             if minors:
                 _append_json(tdir / "minor-findings.json", minors)
             if serious:
-                _append_json(tdir / "findings.json", serious)
-                _write_note(rundir, task_id, "build",
-                            "Review findings to fix:\n" + "\n".join(
-                                f"- [{f.severity}] {f.title}: {f.detail}" for f in serious))
-                task.build_cycle_start = len(task.attempts["build"])
-                task.stage = "build"
+                _handle_serious_findings(
+                    rundir, run, task_id, cfg, repo, serious
+                )
             else:
                 task.status = "done"
             rundir.write_state(run)
@@ -1018,9 +1107,6 @@ def _run_product_owner(
     its authority before changing state; notably, ``accept`` cannot waive
     schema/preflight failures.
     """
-    profile = cfg.profiles.get("product-owner")
-    if profile is None:
-        return None, "product-owner profile is not configured"
     packet = "\n\n".join([
         "# Recovery boundary\nThe plan did not converge after three reviewed drafts.",
         "## Original brief\n" + brief,
@@ -1048,6 +1134,20 @@ def _run_product_owner(
          "approval, credentials, provider policy, or budgets. Ask the human "
          "when their authority is required."),
     ]) + "\n"
+    return _ask_product_owner(rundir, run, cfg, worktree, packet)
+
+
+def _ask_product_owner(
+    rundir: RunDir,
+    run: RunState,
+    cfg: RegieConfig,
+    worktree: Path,
+    packet: str,
+) -> tuple[ProductOwnerDecision | None, str | None]:
+    """Dispatch the shared bounded advisor for plan or execution recovery."""
+    profile = cfg.profiles.get("product-owner")
+    if profile is None:
+        return None, "product-owner profile is not configured"
     write_packet(rundir.task_dir(_PRODUCT_OWNER_TASK_ID), packet)
     first_attempt = len(run.product_owner_attempts) + 1
     last_outcome = "unavailable"
@@ -1114,6 +1214,50 @@ def _run_product_owner(
         rundir.write_state(run)
         return decision, None
     return None, f"product owner unavailable ({last_outcome})"
+
+
+def _run_execution_product_owner(
+    rundir: RunDir,
+    run: RunState,
+    task_id: str,
+    cfg: RegieConfig,
+    worktree: Path,
+    findings: list[Finding],
+) -> tuple[ProductOwnerDecision | None, str | None]:
+    """Resolve repeated or conflicting review findings without taking control."""
+    task = run.tasks[task_id]
+    brief_path = rundir.path / "brief.md"
+    history_path = rundir.task_dir(task_id) / "findings.json"
+    packet = "\n\n".join([
+        ("# Recovery boundary\nImplementation review did not converge after "
+         f"{task.review_revisions} revision requests. The deterministic engine "
+         "remains the orchestrator."),
+        "## Original brief\n" + (brief_path.read_text() if brief_path.exists() else ""),
+        "## Accepted spec\n" + _spec_text(rundir),
+        "## Current task\n```json\n" + json.dumps(
+            task.spec.model_dump(), indent=2) + "\n```",
+        "## Current review findings\n" + "\n".join(
+            f"- [{item.severity}] {item.title}: {item.detail}"
+            for item in findings
+        ),
+        "## Prior review findings\n" + (
+            history_path.read_text() if history_path.exists() else "[]"
+        ),
+        "## Acceptance evidence\n```json\n" + json.dumps(
+            [item.model_dump() for item in task.criterion_evidence], indent=2
+        ) + "\n```",
+        "## Current change\n" + _change_manifest(worktree, task.start_sha),
+        ("## Authority boundary\nDecide whether the current findings are required "
+         "by the brief, contradictory, duplicates, or optional scope. `revise` "
+         "means one final implementation revision with concrete non-conflicting "
+         "directives. `accept` means the implementation is complete and every "
+         "remaining serious finding is explicitly rejected as false, duplicate, "
+         "or outside the product contract. You may not waive failed acceptance "
+         "criteria, tests, gates, security requirements, destructive approval, "
+         "credentials, provider policy, or budgets. Ask the human only when their "
+         "product or operational authority is genuinely required."),
+    ]) + "\n"
+    return _ask_product_owner(rundir, run, cfg, worktree, packet)
 
 
 def _apply_plan(rundir: RunDir, run: RunState, structured: dict) -> None:

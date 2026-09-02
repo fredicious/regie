@@ -187,6 +187,9 @@ class TaskState(BaseModel):
     # a successful second/third revision look like provider exhaustion.
     test_cycle_start: int = 0
     build_cycle_start: int = 0
+    review_revisions: int = 0
+    execution_recovery_used: bool = False
+    product_owner_decision: ProductOwnerDecision | None = None
     escaped: bool = False
     start_sha: str = ""
 
