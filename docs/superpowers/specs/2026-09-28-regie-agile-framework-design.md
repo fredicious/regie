@@ -371,15 +371,18 @@ implementation plan and ends with a working Régie, a green test suite, Taskboar
 3/3 over three repeats, (from Phase 1) no regression on the feature ladder, and the
 README, `docs/ARCHITECTURE.md`, and `docs/USAGE.md` updated for what changed.
 
-- **Phase 0 — bench foundations** (regie-bench, plus Régie's baseline mode):
-  measurement fixes, stakeholder simulator, the feature ladder with validated
-  reference solutions, and the ladder's empirical difficulty.
+- **Phase 0 — bench foundations** (regie-bench, plus Régie's baseline mode), in two
+  plans. **0a:** baseline mode, evaluator fingerprints, hidden-test evaluators, the
+  acceptance trajectory, reference-solution validation, and the difficulty report.
+  **0b:** the feature ladder with intent documents and validated reference
+  solutions, and the ladder's empirical difficulty.
 - **Phase 1 — framework core and Product Owner intake:** state model v2 with
   transition tables and property tests; the Product Owner interview, spec Definition
   of Ready, and the tiny-request fast path; single-increment requests only, executed
   by the existing direct-owner loop adapted to the new model; the Inbox tab for
-  questions and spec approval. Deletes tiers, keyword routing, the plan stage, and
-  plan-review panels.
+  questions and spec approval; the bench's stakeholder simulator and its recording of
+  questions, defaults, and decisions (they need the Product Owner to exist). Deletes
+  tiers, keyword routing, the plan stage, and plan-review panels.
 - **Phase 2 — working agreements:** developer role, tests-prove-change check, review
   contract with follow-ups and open blockers, the shared ladder helper. Deletes the
   Product Owner arbiter, similarity matching, recovery flags, specialists, the
