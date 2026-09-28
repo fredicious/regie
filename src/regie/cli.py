@@ -281,24 +281,20 @@ def resume(run_id: str, repo: Annotated[Path, typer.Option()],
             state.stage = "pr"
         elif state.tasks:
             state.stage = "tasks"
-            for _tid, t in state.tasks.items():
+            for t in state.tasks.values():
                 if t.status in ("failed", "blocked", "running"):
-                    t.status = "pending"
                     # A human-mediated resume deserves a fresh ladder: recorded
                     # attempts would otherwise re-trigger _should_halt instantly.
-                    # The audit trail survives in events.jsonl and task_dir
-                    # transcripts, so nothing is lost by clearing them here.
-                    t.attempts = {"test": [], "build": [], "review": []}
-                    rundir.append_intent({"task": _tid, "reset": True})
-                    # ...and a fresh bad-test escape: a spent escape from a
-                    # previous cycle otherwise dooms refactor tasks whose
-                    # builder must route existing-test adaptations to the
-                    # test-writer (first dogfood run finding).
-                    t.escaped = False
+                    # Attempts are kept (no WAL reset marker), so budgets and
+                    # crash reconciliation still count them.
+                    t.reset_for_resume()
         else:
             # Halted before any tasks existed: the halt happened during
-            # planning. A fresh ladder means clearing planner_attempts too.
+            # planning. A fresh ladder means clearing planner_attempts too;
+            # retiring them keeps their spend inside the run budget.
             state.stage = "plan"
+            state.retired_attempts += [*state.planner_attempts,
+                                       *state.product_owner_attempts]
             state.planner_attempts = []
             state.product_owner_attempts = []
             state.product_owner_decision = None

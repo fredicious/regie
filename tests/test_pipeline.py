@@ -15,9 +15,11 @@ from regie.models import (
 from regie.pipeline import (
     PipelineContext,
     apply_direct_brief,
+    reconcile,
     run_task,
     run_tasks_stage,
 )
+from regie.providers import total_cost
 from regie.rundir import RunDir
 
 PROFILES_FAKE = None  # built by fixture below
@@ -134,6 +136,43 @@ def test_direct_owner_escalates_to_plan_only_with_repository_evidence(
     assert run.execution_route == "planned"
     assert run.tasks == {}
     assert "schema migration" in run.route_reason
+
+
+def _escalate_direct_owner(regie_home, fixture_repo, cfg) -> tuple[RunDir, RunState]:
+    rd = RunDir.create(regie_home, "r1")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   stage="tasks", execution_route="direct")
+    spec = TaskSpec(id="T1", title="change", profile="implementer",
+                    criteria=["change it"], execution="direct")
+    run.tasks["T1"] = TaskState(spec=spec, stage="build")
+    ctx = PipelineContext(decisions_path=rd.path / "decisions.md")
+    _script(fixture_repo, [{"result": {
+        "outcome": "blocked", "metrics": {"cost_usd": 0.25},
+        "blocked_question": "needs-planning: requires coordinated schema migration",
+    }}])
+    run_task(rd, run, "T1", cfg, fixture_repo, ctx, max_dispatches=1)
+    assert run.stage == "plan"
+    return rd, run
+
+
+def test_direct_owner_escalation_keeps_its_spend_in_run_cost(
+        regie_home, fixture_repo, cfg):
+    _rd, run = _escalate_direct_owner(regie_home, fixture_repo, cfg)
+
+    assert total_cost(run) == 0.25
+
+
+def test_direct_owner_escalation_retires_its_dispatch_log(
+        regie_home, fixture_repo, cfg):
+    rd, run = _escalate_direct_owner(regie_home, fixture_repo, cfg)
+    # The planner commonly reuses the id T1 for its first task.
+    run.tasks["T1"] = TaskState(spec=TaskSpec(
+        id="T1", title="planned", profile="builder",
+        criteria=["Given a When b Then c"]))
+
+    # The direct owner's build intent must not resurface as a phantom
+    # orphan against the planned task (which would also discard its edits).
+    assert reconcile(rd, run, fixture_repo) == 0
 
 
 def test_direct_owner_structured_clarification_halts_before_gates(

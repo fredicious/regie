@@ -5,6 +5,7 @@ import pytest
 from regie.config import Profile, WorkflowConfig, load_config
 from regie.models import Binding, Budgets, RunState
 from regie.pipeline import _plan_schema, plan_stage, reconcile
+from regie.providers import total_cost
 from regie.rundir import RunDir
 
 PLAN = {"spec_markdown": "# Spec\n...", "tasks": [
@@ -446,3 +447,28 @@ def test_reconcile_marks_orphaned_product_owner_intent_failed(
     assert count == 1
     assert len(run.product_owner_attempts) == 1
     assert run.product_owner_attempts[0].outcome == "failed"
+
+
+def test_plan_review_spend_counts_toward_run_cost(regie_home, fixture_repo, cfg, tmp_path):
+    prompt = tmp_path / "plan-completeness.md"
+    prompt.write_text("Review the plan for completeness.")
+    cfg.profiles["plan-completeness"] = Profile(
+        name="plan-completeness", bindings=[Binding(cli="fake", model="pc")],
+        prompt_path=prompt, budgets=Budgets(turns=5, wall_minutes=1, stall_minutes=1))
+    plan = {**PLAN, "tasks": [{**PLAN["tasks"][0], "file_scope": ["src/calc.py"],
+                               "checklist": ["divide returns exact quotients"]}]}
+    rd, run = _seed(regie_home, fixture_repo, plan)
+    run.workflow = "standard"  # earns the completeness lens for one task
+    (fixture_repo / ".fake_agent.json").unlink()
+    _queue(fixture_repo, [
+        {"result": {"outcome": "done", "structured": plan,
+                    "metrics": {"cost_usd": 0.25}}},
+        {"result": {"outcome": "done", "metrics": {"cost_usd": 0.5},
+                    "structured": {"verdict": "pass", "evidence": ["complete"],
+                                   "findings": []}}},
+    ])
+
+    plan_stage(rd, run, cfg, fixture_repo)
+
+    assert run.stage == "approve"
+    assert total_cost(run) == 0.75

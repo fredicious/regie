@@ -193,6 +193,22 @@ class TaskState(BaseModel):
     escaped: bool = False
     start_sha: str = ""
 
+    def reset_for_resume(self) -> None:
+        """A human-mediated resume: fresh provider ladders and a fresh bounded
+        recovery budget. Attempts stay recorded for cost budgets, telemetry,
+        and WAL reconciliation; each ladder's cycle simply starts after them."""
+        self.status = "pending"
+        self.test_cycle_start = len(self.attempts["test"])
+        self.build_cycle_start = len(self.attempts["build"])
+        self.review_cycle_start = len(self.attempts["review"])
+        self.review_revisions = 0
+        self.execution_recovery_used = False
+        self.product_owner_decision = None
+        # A spent bad-test escape from a previous cycle otherwise dooms
+        # refactor tasks whose builder must route existing-test adaptations
+        # to the test-writer (first dogfood run finding).
+        self.escaped = False
+
 
 RunStage = Literal[
     "intake", "research", "plan", "approve", "tasks", "checkpoint",
@@ -223,6 +239,11 @@ class RunState(BaseModel):
     product_owner_attempts: list[Attempt] = Field(default_factory=list)
     product_owner_decision: ProductOwnerDecision | None = None
     final_review_attempts: list[Attempt] = Field(default_factory=list)
+    plan_review_attempts: list[Attempt] = Field(default_factory=list)
+    debug_attempts: list[Attempt] = Field(default_factory=list)
+    # Attempts dropped from live ladders (plan resets, route escalation).
+    # Kept so cost budgets and telemetry still see what was spent.
+    retired_attempts: list[Attempt] = Field(default_factory=list)
     checkpoints: list[CheckpointState] = Field(default_factory=list)
     research_path: str = ""
     knowledge_snapshot: list[str] = Field(default_factory=list)

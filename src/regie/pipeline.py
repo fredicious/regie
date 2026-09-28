@@ -282,6 +282,20 @@ def _failure_signature(kind: str, text: str) -> str:
     return f"{kind}:{hashlib.sha256(stable[:4000].encode()).hexdigest()[:16]}"
 
 
+def _attempt_from(result: AgentResult, binding: Binding, profile: Profile) -> Attempt:
+    """The recorded Attempt for one dispatch, so its spend reaches budgets."""
+    attempt = Attempt(
+        binding=binding, prompt_hash=profile.prompt_hash(),
+        outcome={"done": "done", "blocked": "blocked",
+                 "quota": "quota"}.get(result.outcome, "failed"),
+        blocked_question=result.blocked_question, turns=result.turns,
+        usage=result.usage, metrics=result.metrics)
+    if attempt.outcome == "failed":
+        attempt.failure_kind = result.failure_kind or classify_agent_failure(result.text)
+        attempt.failure_signature = _failure_signature(attempt.failure_kind, result.text)
+    return attempt
+
+
 def _budget_reason(run: RunState, cfg: RegieConfig, task_id: str | None = None) -> str | None:
     run_limit = cfg.workflow.max_run_usd
     if run_limit and total_cost(run) >= run_limit:
@@ -823,6 +837,14 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             question = attempt.blocked_question or ""
             if (stage == "build" and task.spec.execution == "direct"
                     and question.startswith("needs-planning:")):
+                # The planner may reuse these task ids: retire the dropped
+                # tasks' spend and WAL history so neither is lost nor
+                # resurrected as phantom orphans against the planned tasks.
+                for dropped_id, dropped in run.tasks.items():
+                    for attempts in (*dropped.attempts.values(),
+                                     *dropped.specialist_attempts.values()):
+                        run.retired_attempts.extend(attempts)
+                    rundir.append_intent({"task": dropped_id, "reset": True})
                 run.tasks = {}
                 run.checkpoints = []
                 run.execution_route = "planned"
@@ -1132,6 +1154,7 @@ def _run_plan_reviews(rundir: RunDir, run: RunState, cfg: RegieConfig,
                     output_schema=PLAN_REVIEW_SCHEMA,
                 ),
             )
+            run.plan_review_attempts.append(_attempt_from(candidate, binding, profile))
             last_outcome = candidate.outcome
             if candidate.outcome == "done" and candidate.structured:
                 result = candidate
@@ -1690,12 +1713,16 @@ def _run_parallel_batch(rundir: RunDir, run: RunState, cfg: RegieConfig,
                 except Exception as exc:  # noqa: BLE001 - convert worker crash to run halt
                     _halt_run(rundir, run, f"parallel task {task_id} crashed: {exc}")
 
-        if run.stage == "halted" or any(
-                run.tasks[task_id].status != "done" for task_id in task_ids):
-            return
+        # Integrate every finished task even when a sibling halted: resume
+        # never re-runs a done task, so work left on a task branch (deleted
+        # below) would silently vanish from the PR.
+        conflict = None
         for task_id in sorted(task_ids):
+            if run.tasks[task_id].status != "done":
+                continue
             path, _branch = task_worktrees[task_id]
             commits = git(path, "rev-list", "--reverse", f"{base}..HEAD").splitlines()
+            before = head_sha(repo)
             try:
                 for commit in commits:
                     cherry_pick(repo, commit)
@@ -1704,9 +1731,14 @@ def _run_parallel_batch(rundir: RunDir, run: RunState, cfg: RegieConfig,
                     git(repo, "cherry-pick", "--abort")
                 except GitError:
                     pass
-                _halt_run(rundir, run,
-                          f"parallel integration conflict for {task_id}: {exc}")
-                return
+                git(repo, "reset", "--hard", before)
+                run.tasks[task_id].status = "blocked"
+                conflict = conflict or f"parallel integration conflict for {task_id}: {exc}"
+        for task_id in task_ids:
+            if run.tasks[task_id].status != "done":
+                _restart_task(run.tasks[task_id])
+        if conflict and run.stage != "halted":
+            _halt_run(rundir, run, conflict)
         rundir.write_state(run)
     finally:
         for path, branch in task_worktrees.values():
@@ -1718,6 +1750,13 @@ def _run_parallel_batch(rundir: RunDir, run: RunState, cfg: RegieConfig,
                 delete_branch(repo, branch)
             except GitError:
                 pass
+
+
+def _restart_task(task: TaskState) -> None:
+    """The task's commits lived only in a discarded task worktree, so its
+    stage progress no longer describes anything on the run branch."""
+    task.stage = "build" if task.spec.execution == "direct" else "test"
+    task.start_sha = ""
 
 
 def _is_ancestor(worktree: Path, maybe_ancestor: str, ref: str) -> bool:
@@ -2036,6 +2075,7 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
             binding=binding, budgets=profile.budgets,
             token_policy=profile.token_policy, allowed_commands=cfg.commands)
         candidate = run_agent(rundir, task_id, "debug", attempt_no, req)
+        run.debug_attempts.append(_attempt_from(candidate, binding, profile))
         if candidate.outcome == "quota":
             _discard_worktree_scratch(worktree)
             continue
@@ -2069,6 +2109,7 @@ def _debugger_round(rundir: RunDir, run: RunState, cfg: RegieConfig, worktree: P
             token_policy=reviewer.token_policy, output_schema=FINDINGS_SCHEMA)
         candidate = run_agent(
             rundir, task_id, "review", first_review_attempt + offset, review_req)
+        run.debug_attempts.append(_attempt_from(candidate, binding, reviewer))
         if candidate.outcome == "quota":
             continue
         review_result = candidate

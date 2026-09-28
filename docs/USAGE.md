@@ -100,7 +100,7 @@ knowledge = true
 reflection = true
 submit_pr = true           # false keeps the completed run local (benchmarks/evals)
 max_task_usd = 0             # 0 disables this cost circuit
-max_run_usd = 0
+max_run_usd = 0              # spend is cumulative across resumes; raise to continue
 
 [commands]
 setup = "pnpm install --frozen-lockfile"  # before the first agent in each worktree

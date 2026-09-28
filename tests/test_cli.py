@@ -6,8 +6,17 @@ from typer.testing import CliRunner
 
 from regie.cli import app
 from regie.gitops import commit_all, create_run_worktree, head_sha
-from regie.models import Attempt, Binding, GateResult, RunState, TaskSpec, TaskState
+from regie.models import (
+    Attempt,
+    Binding,
+    GateResult,
+    RunState,
+    TaskSpec,
+    TaskState,
+    UsageMetrics,
+)
 from regie.pipeline import reconcile
+from regie.providers import total_cost
 from regie.rundir import RunDir
 
 runner = CliRunner()
@@ -72,8 +81,8 @@ def test_reconcile_marks_orphaned_intent_failed_and_cleans_worktree(
     assert not (fixture_repo / "src" / "orphan.py").exists()
 
 
-def test_resume_after_halt_clears_attempts_and_redispatches(regie_home, fixture_repo,
-                                                             fake_profiles):
+def test_resume_after_halt_redispatches_despite_exhausted_history(regie_home, fixture_repo,
+                                                                  fake_profiles):
     _toml(fixture_repo)
     base = head_sha(fixture_repo)
     # The worktree is created directly here (rather than via `regie run`) so the
@@ -93,8 +102,9 @@ def test_resume_after_halt_clears_attempts_and_redispatches(regie_home, fixture_
     rd.write_state(run)
 
     # a fresh ladder should dispatch once and halt again on this single
-    # "blocked" response, proving the 3 stale attempts were cleared rather
-    # than immediately re-tripping _should_halt. The fake agent reads
+    # "blocked" response, proving the 3 stale attempts no longer count toward
+    # the ladder rather than immediately re-tripping _should_halt. They stay
+    # recorded as history. The fake agent reads
     # .fake_agent.json from ITS cwd, which is the worktree.
     (wt / ".fake_agent.json").write_text(json.dumps(
         {"result": {"outcome": "blocked", "blocked_question": "?"}}))
@@ -103,7 +113,8 @@ def test_resume_after_halt_clears_attempts_and_redispatches(regie_home, fixture_
     assert result.exit_code == 1
 
     final = RunDir.open(regie_home, "r1").read_state()
-    assert len(final.tasks["T1"].attempts["build"]) == 1
+    outcomes = [a.outcome for a in final.tasks["T1"].attempts["build"]]
+    assert outcomes == ["failed", "failed", "failed", "blocked"]
 
 
 def test_run_command_executes_tasks_from_tasks_json(regie_home, fixture_repo,
@@ -291,6 +302,138 @@ def test_resume_after_halt_resets_escape_hatch(regie_home, fixture_repo, fake_pr
                         "--profiles", str(fake_profiles)])
     state = rd.read_state()
     assert state.tasks["T1"].escaped is False
+
+
+def _seed_halted_task(regie_home, fixture_repo, task: TaskState,
+                      agent_result: dict) -> tuple[RunDir, Path]:
+    """A halted single-task run in a real worktree whose fake agent always
+    returns `agent_result`."""
+    _toml(fixture_repo)
+    base = head_sha(fixture_repo)
+    wt = create_run_worktree(fixture_repo, "regie/r1", base,
+                             regie_home / "worktrees" / "r1")
+    rd = RunDir.create(regie_home, "r1")
+    (rd.path / "brief.md").write_text("# brief")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   base_sha=base, worktree_path=str(wt), stage="halted",
+                   halt_reason="halted for the test")
+    run.tasks["T1"] = task
+    rd.write_state(run)
+    (wt / ".fake_agent.json").write_text(json.dumps({"result": agent_result}))
+    return rd, wt
+
+
+def _resume(fixture_repo, fake_profiles) -> None:
+    runner.invoke(app, ["resume", "r1", "--repo", str(fixture_repo),
+                        "--profiles", str(fake_profiles)])
+
+
+def test_resume_after_halt_walks_a_fresh_build_ladder(
+        regie_home, fixture_repo, fake_profiles):
+    m1, m2 = Binding(cli="fake", model="m1"), Binding(cli="fake", model="m2")
+    # One passing build, then a review revision cycle that exhausted m1, m1, m2.
+    task = TaskState(spec=TaskSpec(id="T1", title="t", profile="builder",
+                                   criteria=["c"]),
+                     stage="build", status="failed", build_cycle_start=1)
+    task.attempts["build"] = [Attempt(binding=m1, outcome="done"),
+                              *[Attempt(binding=b, outcome="failed")
+                                for b in (m1, m1, m2)]]
+    rd, _wt = _seed_halted_task(regie_home, fixture_repo, task,
+                                {"outcome": "error", "text": "boom"})
+
+    _resume(fixture_repo, fake_profiles)
+
+    # The fake profile's two-rung ladder: retry m1 once, escalate to m2, halt.
+    dispatched = [i["binding"]["model"] for i in rd.read_intents()
+                  if i.get("stage") == "build"]
+    assert dispatched == ["m1", "m1", "m2"]
+
+
+def test_resume_after_halt_grants_a_fresh_review_recovery_budget(
+        regie_home, fixture_repo, fake_profiles):
+    task = TaskState(spec=TaskSpec(id="T1", title="t", profile="builder",
+                                   criteria=["c"]),
+                     stage="review", status="failed", review_revisions=2,
+                     execution_recovery_used=True)
+    rd, _wt = _seed_halted_task(regie_home, fixture_repo, task, {
+        "outcome": "done",
+        "structured": {"findings": [{"severity": "major", "title": "missing guard",
+                                     "detail": "d", "file": None}],
+                       "criterion_results": []}})
+
+    _resume(fixture_repo, fake_profiles)
+
+    # A human resume restarts bounded recovery, as it already does for the
+    # plan stage: the first new finding is an ordinary revision request.
+    final = rd.read_state()
+    assert final.tasks["T1"].stage == "build"
+    assert final.tasks["T1"].review_revisions == 1
+
+
+def test_resume_after_halt_keeps_prior_task_spend(
+        regie_home, fixture_repo, fake_profiles):
+    task = TaskState(spec=TaskSpec(id="T1", title="t", profile="builder",
+                                   criteria=["c"]),
+                     stage="build", status="failed")
+    task.attempts["build"] = [
+        Attempt(binding=Binding(cli="fake", model=model), outcome="failed",
+                metrics=UsageMetrics(cost_usd=0.5))
+        for model in ("m1", "m1", "m2")]
+    rd, _wt = _seed_halted_task(regie_home, fixture_repo, task,
+                                {"outcome": "blocked", "blocked_question": "?"})
+
+    _resume(fixture_repo, fake_profiles)
+
+    assert total_cost(rd.read_state()) == 1.5
+
+
+def test_resume_after_plan_halt_keeps_prior_planner_spend(
+        regie_home, fixture_repo, fake_profiles):
+    _toml(fixture_repo)
+    base = head_sha(fixture_repo)
+    wt = create_run_worktree(fixture_repo, "regie/r1", base,
+                             regie_home / "worktrees" / "r1")
+    rd = RunDir.create(regie_home, "r1")
+    (rd.path / "brief.md").write_text("# brief")
+    spent = Attempt(binding=Binding(cli="fake", model="m1"), outcome="failed",
+                    failure_kind="contract", metrics=UsageMetrics(cost_usd=0.25))
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   base_sha=base, worktree_path=str(wt), stage="halted",
+                   halt_reason="plan validation did not converge",
+                   planner_attempts=[spent, spent],
+                   product_owner_attempts=[spent.model_copy(
+                       update={"metrics": UsageMetrics(cost_usd=0.5)})])
+    rd.write_state(run)
+    (wt / ".fake_agent.json").write_text(json.dumps(
+        {"result": {"outcome": "blocked", "blocked_question": "?"}}))
+
+    _resume(fixture_repo, fake_profiles)
+
+    assert total_cost(rd.read_state()) == 1.0
+
+
+def test_resume_keeps_crash_reconciliation_aligned_with_history(
+        regie_home, fixture_repo, fake_profiles):
+    task = TaskState(spec=TaskSpec(id="T1", title="t", profile="builder",
+                                   criteria=["c"]),
+                     stage="build", status="failed")
+    rd, wt = _seed_halted_task(regie_home, fixture_repo, task,
+                               {"outcome": "blocked", "blocked_question": "?"})
+    for n in (1, 2, 3):
+        task.attempts["build"].append(
+            Attempt(binding=Binding(cli="fake", model="m1"), outcome="failed"))
+        rd.append_intent({"task": "T1", "stage": "build", "attempt": n,
+                          "binding": {"cli": "fake", "model": "m1"}})
+    run = rd.read_state()
+    run.tasks["T1"] = task
+    rd.write_state(run)
+
+    _resume(fixture_repo, fake_profiles)
+    # A later crash leaves one dispatch intent without a recorded attempt.
+    rd.append_intent({"task": "T1", "stage": "build", "attempt": 5,
+                      "binding": {"cli": "fake", "model": "m1"}})
+
+    assert reconcile(rd, rd.read_state(), wt) == 1
 
 
 def test_reconcile_respects_reset_marker(regie_home, fixture_repo):

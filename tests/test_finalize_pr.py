@@ -12,6 +12,7 @@ from regie.config import load_config
 from regie.gitops import commit_all, create_run_worktree, fetch_base_sha, git
 from regie.models import RunState
 from regie.pipeline import finalize_stage, pr_stage
+from regie.providers import total_cost
 from regie.rundir import RunDir
 
 
@@ -320,6 +321,23 @@ def test_debugger_quota_fails_over_to_next_binding(
 
     assert ok is True
     assert git(wt, "show", "HEAD:src/a.py").strip() == "A = 2"
+
+
+def test_debugger_round_spend_counts_toward_run_cost(
+        regie_home, fixture_repo, remote_repo, tmp_path, fake_profiles, monkeypatch):
+    rd, run, wt = _pr_wt_run(regie_home, fixture_repo, tmp_path)
+    _agent_queue(monkeypatch, wt, [
+        {"result": {"outcome": "done", "metrics": {"cost_usd": 0.25}},
+         "writes": {"src/a.py": "A = 2\n"}},
+        {"result": {"outcome": "done", "metrics": {"cost_usd": 0.5},
+                    "structured": {"findings": []}}},
+    ])
+    cfg = load_config(fixture_repo, fake_profiles)
+
+    ok = pipeline._debugger_round(rd, run, cfg, wt, 1, "failure detail")
+
+    assert ok is True
+    assert total_cost(run) == 0.75
 
 
 def test_pr_stage_no_groups_halts(regie_home, fixture_repo, remote_repo, tmp_path,
