@@ -62,6 +62,7 @@ regie                             # control room scoped to the current folder
 regie run brief.md --repo <path>   # start a run: brief → spec → tasks → build → PR
 regie watch <run>                  # open the control room focused on one run
 regie run brief.md --repo <path> --workflow critical  # force full-risk workflow
+regie run brief.md --repo <path> --baseline     # measurement: one developer, gates, no review
 regie init --repo <path>            # detect tooling and create regie.toml
 regie approve <run>                 # release a spec or planned risk checkpoint
 regie answer <run> "decision"       # answer a material clarification

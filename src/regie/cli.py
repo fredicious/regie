@@ -189,9 +189,17 @@ def run(brief: Path, repo: Annotated[Path, typer.Option()],
         autonomous: Annotated[bool, typer.Option("--autonomous")] = False,
         tasks_file: Annotated[Path | None, typer.Option("--tasks-file")] = None,
         workflow: Annotated[str, typer.Option("--workflow")] = "auto",
-        parent: Annotated[str | None, typer.Option("--parent")] = None):
+        parent: Annotated[str | None, typer.Option("--parent")] = None,
+        baseline: Annotated[bool, typer.Option(
+            "--baseline",
+            help="Measurement only: one developer and the configured gates, "
+                 "no planning and no review.")] = False):
     if not brief.exists():
         typer.echo(f"brief not found: {brief}", err=True)
+        raise typer.Exit(2)
+    if baseline and (workflow != "auto" or tasks_file is not None):
+        typer.echo("--baseline cannot be combined with --workflow or --tasks-file",
+                   err=True)
         raise typer.Exit(2)
     cfg = load_config(repo, profiles)
     home = _home()
@@ -213,7 +221,8 @@ def run(brief: Path, repo: Annotated[Path, typer.Option()],
 
     state = RunState(id=run_id, target_repo=str(repo), branch=f"regie/{run_id}",
                      base_sha=base, base_branch=cfg.base_branch, worktree_path=str(wt),
-                     autonomous=autonomous, stage="intake", workflow=workflow,
+                     autonomous=autonomous, stage="intake",
+                     workflow="fast" if baseline else workflow, baseline=baseline,
                      parent_id=parent)
     if parent:
         parent_dir = _open_rundir(home, parent)
@@ -228,7 +237,10 @@ def run(brief: Path, repo: Annotated[Path, typer.Option()],
         state.stage = "tasks"
         rundir.write_state(state)
     else:
-        route, reason = route_brief(brief_text, workflow, cfg)
+        if baseline:
+            route, reason = "direct", "baseline mode: one developer, gates only"
+        else:
+            route, reason = route_brief(brief_text, workflow, cfg)
         state.execution_route = route
         state.route_reason = reason
         if route == "direct":

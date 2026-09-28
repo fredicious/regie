@@ -228,6 +228,8 @@ class RunState(BaseModel):
     pr_url: str = ""
     pushed: bool = False
     autonomous: bool = False
+    # Measurement-only mode: one developer, configured gates, no review.
+    baseline: bool = False
     workflow: WorkflowTier = "auto"
     execution_route: ExecutionRoute = "planned"
     route_reason: str = ""

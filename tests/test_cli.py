@@ -5,7 +5,7 @@ import pytest
 from typer.testing import CliRunner
 
 from regie.cli import app
-from regie.gitops import commit_all, create_run_worktree, head_sha
+from regie.gitops import commit_all, create_run_worktree, git, head_sha
 from regie.models import (
     Attempt,
     Binding,
@@ -529,3 +529,52 @@ def test_preflight_command_fails_on_exit_code(regie_home, fixture_repo, fake_pro
     result = runner.invoke(app, ["preflight", "--repo", str(fixture_repo),
                                  "--profiles", str(fake_profiles)])
     assert result.exit_code == 1 and "FAILED" in result.output
+
+
+def _baseline_repo(fixture_repo) -> None:
+    (fixture_repo / "regie.toml").write_text(
+        'test_globs = ["tests/**"]\n'
+        "[workflow]\nsubmit_pr = false\nreflection = false\nknowledge = false\n"
+        '[commands]\ntest = "true"\nlint = "true"\n')
+    (fixture_repo / ".fake_agent.json").write_text(json.dumps({
+        "writes": {"src/extra.py": "EXTRA = 1\n"},
+        "result": {"outcome": "done"}}))
+    commit_all(fixture_repo, "chore: configure fake agent")
+    git(fixture_repo, "push", "-q", "origin", "main")
+
+
+def test_baseline_run_finishes_after_gates_without_review(
+        regie_home, fixture_repo, remote_repo, fake_profiles, tmp_path):
+    _baseline_repo(fixture_repo)
+    brief = tmp_path / "schema-migration.md"
+    # Auto-routing would send this brief to planning; baseline must not.
+    brief.write_text("Add a database schema migration for extra values")
+
+    result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
+                                 "--profiles", str(fake_profiles), "--baseline"])
+
+    assert result.exit_code == 0, result.output
+    state = RunDir.open(regie_home, _last_run_id(regie_home)).read_state()
+    assert state.stage == "done"
+    assert state.baseline is True
+    assert state.execution_route == "direct"
+    assert state.planner_attempts == []
+    assert [a.outcome for a in state.tasks["T1"].attempts["build"]] == ["done"]
+    assert state.tasks["T1"].attempts["review"] == []
+
+
+@pytest.mark.parametrize("extra", [["--workflow", "critical"], ["--tasks-file", "tasks.json"]])
+def test_baseline_rejects_other_routing_options(regie_home, fixture_repo, fake_profiles,
+                                                tmp_path, extra):
+    _toml(fixture_repo)
+    brief = tmp_path / "brief.md"
+    brief.write_text("# Do the thing")
+    (tmp_path / "tasks.json").write_text("[]")
+    extra = [str(tmp_path / item) if item == "tasks.json" else item for item in extra]
+
+    result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
+                                 "--profiles", str(fake_profiles), "--baseline", *extra])
+
+    assert result.exit_code == 2
+    assert "--baseline cannot be combined" in result.output
+    assert not (regie_home / "runs").exists()

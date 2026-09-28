@@ -918,6 +918,11 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             def _pass_build(pre=pre_dispatch):
                 if set(changed_files(repo)) - pre:
                     commit_all(repo, f"feat({task_id}): {task.spec.title}")
+                if run.baseline:
+                    # Baseline measures what one developer achieves with the
+                    # mechanical gates alone: no review stage.
+                    task.status = "done"
+                    return
                 task.review_cycle_start = len(task.attempts["review"])
                 task.stage = "review"
             _gate_and_advance(rundir, run, task_id, stage, gates, attempt,
