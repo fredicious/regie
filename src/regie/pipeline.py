@@ -835,6 +835,11 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
             git(repo, "checkout", "--", ".")
             git(repo, "clean", "-fd")
             question = attempt.blocked_question or ""
+            if run.baseline:
+                # Baseline measures one developer alone: its blocked answer
+                # is the datum, never a hand-off to the planner or test-writer.
+                _halt(rundir, run, task_id, f"blocked: {question}")
+                return
             if (stage == "build" and task.spec.execution == "direct"
                     and question.startswith("needs-planning:")):
                 # The planner may reuse these task ids: retire the dropped

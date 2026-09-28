@@ -578,3 +578,31 @@ def test_baseline_rejects_other_routing_options(regie_home, fixture_repo, fake_p
     assert result.exit_code == 2
     assert "--baseline cannot be combined" in result.output
     assert not (regie_home / "runs").exists()
+
+
+@pytest.mark.parametrize("question", [
+    "needs-planning: requires a coordinated schema migration",
+    "bad-test: the existing test asserts the old behavior",
+])
+def test_baseline_halts_instead_of_escalating(regie_home, fixture_repo, remote_repo,
+                                             fake_profiles, tmp_path, question):
+    _baseline_repo(fixture_repo)
+    (fixture_repo / ".fake_agent.json").write_text(json.dumps(
+        {"result": {"outcome": "blocked", "blocked_question": question}}))
+    commit_all(fixture_repo, "chore: agent asks to escalate")
+    git(fixture_repo, "push", "-q", "origin", "main")
+    brief = tmp_path / "brief.md"
+    brief.write_text("Add extra values")
+
+    result = runner.invoke(app, ["run", str(brief), "--repo", str(fixture_repo),
+                                 "--profiles", str(fake_profiles), "--baseline"])
+
+    # One developer alone is the measurement: its blocked answer is the datum,
+    # never a hand-off to the planner or the test-writer.
+    assert result.exit_code == 1
+    state = RunDir.open(regie_home, _last_run_id(regie_home)).read_state()
+    assert state.stage == "halted"
+    assert state.execution_route == "direct"
+    assert state.planner_attempts == []
+    assert state.tasks["T1"].attempts["test"] == []
+    assert state.halt_reason == f"blocked: {question}"
