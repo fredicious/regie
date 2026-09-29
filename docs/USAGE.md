@@ -222,6 +222,8 @@ $EDITOR feature.md
 #    (regie/<run-id>), and dispatches the planner
 regie run feature.md --repo ~/Code/ai-search-platform
 regie run feature.md --repo ... --workflow critical  # explicit rigor tier
+regie run feature.md --repo ... --baseline  # measurement only: one developer,
+                                             # configured gates, no planning or review
 
 # 3. It stops at the approval checkpoint: read the spec it printed, then
 regie approve 2026-07-30-feature
