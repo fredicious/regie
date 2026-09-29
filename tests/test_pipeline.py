@@ -724,3 +724,29 @@ def test_all_output_schemas_are_strict_for_codex():
     for name, schema in (("plan", PLAN_SCHEMA), ("findings", FINDINGS_SCHEMA),
                          ("scribe", SCRIBE_SCHEMA)):
         assert_strict(schema, name)
+
+
+def test_baseline_developer_cannot_hand_the_work_to_planning(
+        regie_home, fixture_repo, cfg, monkeypatch):
+    rd = RunDir.create(regie_home, "r1")
+    run = RunState(id="r1", target_repo=str(fixture_repo), branch="regie/r1",
+                   stage="tasks", execution_route="direct", baseline=True)
+    spec = TaskSpec(id="T1", title="add a column", profile="implementer",
+                    criteria=["store a runtime"], execution="direct")
+    run.tasks["T1"] = TaskState(spec=spec, stage="build")
+    ctx = PipelineContext(decisions_path=rd.path / "decisions.md")
+    seen = {}
+
+    def capture(_rundir, _task_id, _stage, _attempt, req):
+        seen["req"] = req
+        from regie.agents.base import AgentResult
+        return AgentResult(outcome="blocked", blocked_question="clarify: ?")
+
+    monkeypatch.setattr("regie.pipeline.run_agent", capture)
+
+    run_task(rd, run, "T1", cfg, fixture_repo, ctx, max_dispatches=1)
+
+    # Baseline measures one developer doing the whole job, migrations included.
+    statuses = seen["req"].output_schema["properties"]["status"]["enum"]
+    assert statuses == ["completed", "clarify"]
+    assert "planning is not available" in seen["req"].prompt

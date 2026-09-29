@@ -115,6 +115,15 @@ DIRECT_OWNER_SCHEMA = {
     },
 }
 
+# Baseline measures one developer doing the whole job: no hand-off to planning.
+BASELINE_OWNER_SCHEMA = json.loads(json.dumps(DIRECT_OWNER_SCHEMA))
+BASELINE_OWNER_SCHEMA["properties"]["status"]["enum"] = ["completed", "clarify"]
+BASELINE_NOTE = (
+    "Baseline measurement: you are the only developer and planning is not available. "
+    "Implement the complete change yourself, including any migration; requesting "
+    "planning is not an option."
+)
+
 PLAN_REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["verdict", "evidence", "findings"],
@@ -337,8 +346,9 @@ def _dispatch(rundir: RunDir, run: RunState, task_id: str, stage: str,
         artifacts=_artifacts(ctx),
         change_manifest=_change_manifest(repo, task.start_sha) if stage == "review" else "")
     write_packet(rundir.task_dir(task_id), packet)
-    schema = DIRECT_OWNER_SCHEMA if (
-        stage == "build" and task.spec.execution == "direct") else None
+    schema = None
+    if stage == "build" and task.spec.execution == "direct":
+        schema = BASELINE_OWNER_SCHEMA if run.baseline else DIRECT_OWNER_SCHEMA
     if stage == "review":
         schema = json.loads(json.dumps(FINDINGS_SCHEMA))
         schema["properties"]["findings"]["maxItems"] = profile.token_policy.max_findings
@@ -812,6 +822,8 @@ def run_task(rundir: RunDir, run: RunState, task_id: str, cfg: RegieConfig,
         if _should_halt(rundir, run, task_id, stage, cfg):
             return
         extra = _notes_for(rundir, task_id, stage)
+        if run.baseline:
+            extra = f"{BASELINE_NOTE}\n\n{extra}".strip()
         if primed:
             extra += "\n\nRelevant project knowledge:\n" + "\n".join(
                 f"- {entry.fact}" for entry in primed)
