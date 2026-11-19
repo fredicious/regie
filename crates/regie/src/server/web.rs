@@ -9,7 +9,7 @@ use rust_embed::RustEmbed;
 #[allow_missing = true]
 struct Assets;
 
-const MISSING: &str = "Régie's web page is not built into this binary. Run `make web`, then rebuild.\n";
+const MISSING: &str = "Régie's web page is not built into this binary. Run `make web`, then `make build`.\n";
 
 pub async fn asset(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
