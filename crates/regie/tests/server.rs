@@ -288,3 +288,33 @@ async fn serve_writes_server_json_with_mode_0600() {
     assert_eq!(info.pid, std::process::id());
     assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
 }
+
+#[tokio::test]
+async fn sse_uses_the_larger_of_after_and_last_event_id() {
+    let (h, app) = app().await;
+    let s = h.create_session(ProjectFacts::default()).await;
+    h.create_task(s, "a", vec![]).await;
+    let all = h.events();
+    assert!(all.len() >= 4, "{} events", all.len());
+    let req = get("/api/events?after=1").header("Last-Event-ID", "3").body(Body::empty()).unwrap();
+    let got = frames(app.oneshot(req).await.unwrap(), all.len() - 3).await;
+    assert_eq!(got.len(), all.len() - 3);
+    for (frame, e) in got.iter().zip(&all[3..]) {
+        assert!(frame.contains(&format!("id: {}", e.id.0)), "{frame}");
+    }
+}
+
+#[tokio::test]
+async fn sse_ends_when_the_store_cannot_be_read() {
+    use tokio_stream::StreamExt;
+    let (h, app) = app().await;
+    h.create_session(ProjectFacts::default()).await;
+    for ext in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{ext}", h.data.db().display()));
+    }
+    let r = app.oneshot(get("/api/events?after=0").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let mut stream = r.into_body().into_data_stream();
+    let next = tokio::time::timeout(Duration::from_secs(5), stream.next()).await.expect("stream should end, not hang");
+    assert!(next.is_none(), "a failed replay must not look like an empty one: {next:?}");
+}
