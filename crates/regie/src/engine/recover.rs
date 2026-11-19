@@ -21,7 +21,11 @@ const DAY_MS: i64 = 86_400_000;
 /// process group (SIGTERM, then SIGKILL after 5 seconds), then end the run
 /// `Interrupted`. Returns the events to append.
 pub async fn recover(state: &State, now: Millis) -> Vec<NewEvent> {
-    let open: Vec<_> = state.runs.values().filter(|r| r.outcome.is_none()).collect();
+    let open: Vec<_> = state
+        .runs
+        .values()
+        .filter(|r| r.outcome.is_none())
+        .collect();
     let mut groups = Vec::new();
     for r in &open {
         if let Some(pid) = r.pid.and_then(|p| i32::try_from(p).ok()) {
@@ -37,7 +41,11 @@ pub async fn recover(state: &State, now: Millis) -> Vec<NewEvent> {
             session: state.tasks.get(&r.task).map(|t| t.session),
             task: Some(r.task),
             actor: Actor::Regie,
-            kind: EventKind::RunFinished { run: r.id, outcome: RunOutcome::Interrupted, final_message: None },
+            kind: EventKind::RunFinished {
+                run: r.id,
+                outcome: RunOutcome::Interrupted,
+                final_message: None,
+            },
         })
         .collect()
 }
@@ -48,7 +56,9 @@ pub async fn recover(state: &State, now: Millis) -> Vec<NewEvent> {
 /// `pid` leads, so a pid reused by any other process gets nothing.)
 async fn is_agent(pid: i32, started_at: Millis, now: Millis) -> bool {
     // SAFETY: signal 0, getpid and getpgrp only read the process table.
-    let alive = unsafe { pid > 1 && pid != libc::getpid() && pid != libc::getpgrp() && libc::kill(pid, 0) == 0 };
+    let alive = unsafe {
+        pid > 1 && pid != libc::getpid() && pid != libc::getpgrp() && libc::kill(pid, 0) == 0
+    };
     if !alive {
         return false;
     }
@@ -76,7 +86,10 @@ fn parse_etime(s: &str) -> Option<i64> {
         Some((d, rest)) => (d.parse::<i64>().ok()?, rest),
         None => (0, s),
     };
-    let parts: Vec<i64> = rest.split(':').map(|p| p.parse().ok()).collect::<Option<_>>()?;
+    let parts: Vec<i64> = rest
+        .split(':')
+        .map(|p| p.parse().ok())
+        .collect::<Option<_>>()?;
     let (h, m, sec) = match parts[..] {
         [m, s] => (0, m, s),
         [h, m, s] => (h, m, s),
@@ -112,13 +125,19 @@ async fn stop_groups(groups: &[i32]) {
 /// Deletes run files (`<run id>.jsonl`) last written more than `days` days before `now`.
 pub fn prune_run_files(dir: &Path, days: u32, now: Millis) {
     let cutoff = now.0 - i64::from(days) * DAY_MS;
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().is_none_or(|x| x != "jsonl") {
             continue;
         }
-        let written = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok());
+        let written = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok());
         if written.is_some_and(|w| (w.as_millis() as i64) < cutoff) {
             if let Err(e) = std::fs::remove_file(&path) {
                 eprintln!("regie: removing {}: {e}", path.display());

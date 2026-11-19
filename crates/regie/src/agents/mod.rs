@@ -30,14 +30,28 @@ pub struct RunSpec {
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentEvent {
     /// The agent's process started; comes before `Attached`.
-    Spawned { pid: u32 },
-    Attached { native_session: String, pid: Option<u32> },
+    Spawned {
+        pid: u32,
+    },
+    Attached {
+        native_session: String,
+        pid: Option<u32>,
+    },
     /// A line for people to read: text, a tool call, or an error line.
     Output(String),
     Reading(Reading),
-    Usage { input_tokens: u64, output_tokens: u64, cache_read_tokens: u64, duration_ms: u64 },
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        duration_ms: u64,
+    },
     /// Always the last event of a run.
-    Finished { final_message: Option<String>, outcome: RunOutcome, limit_resets_at: Option<Millis> },
+    Finished {
+        final_message: Option<String>,
+        outcome: RunOutcome,
+        limit_resets_at: Option<Millis>,
+    },
 }
 
 /// What Régie can ask of a running agent.

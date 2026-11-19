@@ -18,7 +18,8 @@ pub struct Guard {
 
 impl Guard {
     fn allowed(&self, value: &str, scheme: &str) -> bool {
-        value == format!("{scheme}127.0.0.1:{}", self.port) || value == format!("{scheme}localhost:{}", self.port)
+        value == format!("{scheme}127.0.0.1:{}", self.port)
+            || value == format!("{scheme}localhost:{}", self.port)
     }
 
     fn token_ok(&self, given: &str) -> bool {
@@ -45,16 +46,25 @@ fn header_str(headers: &HeaderMap, name: header::HeaderName) -> Option<&str> {
 }
 
 fn presented_token(headers: &HeaderMap) -> Option<String> {
-    if let Some(t) = header_str(headers, header::AUTHORIZATION).and_then(|v| v.strip_prefix("Bearer ")) {
+    if let Some(t) =
+        header_str(headers, header::AUTHORIZATION).and_then(|v| v.strip_prefix("Bearer "))
+    {
         return Some(t.trim().to_string());
     }
     header_str(headers, header::COOKIE)?
         .split(';')
-        .find_map(|c| c.trim().strip_prefix(&format!("{COOKIE}=")).map(str::to_string))
+        .find_map(|c| {
+            c.trim()
+                .strip_prefix(&format!("{COOKIE}="))
+                .map(str::to_string)
+        })
 }
 
 fn query_token(req: &Request) -> Option<String> {
-    req.uri().query()?.split('&').find_map(|kv| kv.strip_prefix("token=").map(str::to_string))
+    req.uri()
+        .query()?
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("token=").map(str::to_string))
 }
 
 pub async fn guard(State(g): State<Arc<Guard>>, req: Request, next: Next) -> Response {

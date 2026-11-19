@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use regie_core::{
-    allocate_port_base, needs_probe, pick, Actor, Candidate, Capacity, EventKind, NextStep, Openness, Provider,
-    PrLifecycle, Purpose, Reading, Role, RunOutcome, TaskId, Worktree,
+    allocate_port_base, needs_probe, pick, Actor, Candidate, Capacity, EventKind, NextStep,
+    Openness, PrLifecycle, Provider, Purpose, Reading, Role, RunOutcome, TaskId, Worktree,
 };
 use tokio::sync::mpsc;
 
@@ -23,7 +23,10 @@ const PROBE_RETRY_MS: i64 = 60_000;
 impl Engine {
     /// Picks which waiting runs start now. If the Claude reading is stale and
     /// something would start, the probe runs first and the pick waits for it.
-    pub(super) fn schedule(&mut self, mut waiting: BTreeMap<TaskId, NextStep>) -> anyhow::Result<()> {
+    pub(super) fn schedule(
+        &mut self,
+        mut waiting: BTreeMap<TaskId, NextStep>,
+    ) -> anyhow::Result<()> {
         let now = self.now();
         let cands: Vec<Candidate> = waiting.keys().map(|id| self.candidate(*id)).collect();
         let cap = self.capacity();
@@ -69,7 +72,11 @@ impl Engine {
     /// Running agents, plus tasks getting ready to run one.
     fn capacity(&self) -> Capacity {
         let mut by_session = BTreeMap::new();
-        let busy = self.state.tasks.values().filter(|t| self.prep.contains_key(&t.id) || self.state.active_run(t.id).is_some());
+        let busy = self
+            .state
+            .tasks
+            .values()
+            .filter(|t| self.prep.contains_key(&t.id) || self.state.active_run(t.id).is_some());
         let mut total = 0;
         for t in busy {
             total += 1;
@@ -83,7 +90,13 @@ impl Engine {
             running_total: total,
             running_by_session: by_session,
             openness,
-            paused_sessions: self.state.sessions.values().filter(|s| s.paused).map(|s| s.id).collect(),
+            paused_sessions: self
+                .state
+                .sessions
+                .values()
+                .filter(|s| s.paused)
+                .map(|s| s.id)
+                .collect(),
             paused_all: self.state.paused_all,
         }
     }
@@ -101,7 +114,10 @@ impl Engine {
         self.probing = false;
         match result {
             Ok(reading) => {
-                let kind = EventKind::UsageReading { provider: Provider::Claude, reading };
+                let kind = EventKind::UsageReading {
+                    provider: Provider::Claude,
+                    reading,
+                };
                 self.emit(None, None, Actor::Regie, kind)?;
             }
             Err(e) => {
@@ -116,7 +132,12 @@ impl Engine {
     /// A picked task: get its worktree and setup first if needed, else start the run.
     fn begin(&mut self, id: TaskId, step: NextStep) -> anyhow::Result<()> {
         let task = &self.state.tasks[&id];
-        let facts = self.state.project_facts.get(&task.repo).cloned().unwrap_or_default();
+        let facts = self
+            .state
+            .project_facts
+            .get(&task.repo)
+            .cloned()
+            .unwrap_or_default();
         match &task.worktree {
             None => {
                 let in_use: BTreeSet<u16> = self
@@ -128,16 +149,29 @@ impl Engine {
                     .chain(self.prep.values().copied())
                     .collect();
                 let Some(port) = allocate_port_base(&in_use, &self.settings) else {
-                    let output_tail = "no free port block: every block is taken by another task".into();
-                    return self.emit_task(id, Actor::Regie, EventKind::SetupFinished { ok: false, output_tail });
+                    let output_tail =
+                        "no free port block: every block is taken by another task".into();
+                    return self.emit_task(
+                        id,
+                        Actor::Regie,
+                        EventKind::SetupFinished {
+                            ok: false,
+                            output_tail,
+                        },
+                    );
                 };
                 self.prep.insert(id, port);
                 let (locks, tx) = (self.locks.clone(), self.tx.clone());
-                let (repo, root, title) = (PathBuf::from(&task.repo), self.data.worktrees(), task.title.clone());
+                let (repo, root, title) = (
+                    PathBuf::from(&task.repo),
+                    self.data.worktrees(),
+                    task.title.clone(),
+                );
                 tokio::spawn(async move {
-                    let result = create_worktree(&locks, &repo, &root, id, &title, &facts.copy_files, port)
-                        .await
-                        .map_err(|e| format!("could not create the worktree: {e:#}"));
+                    let result =
+                        create_worktree(&locks, &repo, &root, id, &title, &facts.copy_files, port)
+                            .await
+                            .map_err(|e| format!("could not create the worktree: {e:#}"));
                     let _ = tx.send(Input::WorktreeReady { task: id, result }).await;
                 });
             }
@@ -146,7 +180,12 @@ impl Engine {
                 self.setup(id, wt, setup);
             }
             Some(_) => {
-                if let NextStep::StartRun { role, purpose, input } = step {
+                if let NextStep::StartRun {
+                    role,
+                    purpose,
+                    input,
+                } = step
+                {
                     self.start_run(id, role, purpose, input)?;
                 }
             }
@@ -154,13 +193,24 @@ impl Engine {
         Ok(())
     }
 
-    pub(super) fn on_worktree(&mut self, id: TaskId, result: Result<Worktree, String>) -> anyhow::Result<()> {
+    pub(super) fn on_worktree(
+        &mut self,
+        id: TaskId,
+        result: Result<Worktree, String>,
+    ) -> anyhow::Result<()> {
         let wt = match result {
             Ok(wt) => wt,
             Err(output_tail) => {
                 // R10: the task waits for Frédéric with the error as its setup output.
                 self.prep.remove(&id);
-                return self.emit_task(id, Actor::Regie, EventKind::SetupFinished { ok: false, output_tail });
+                return self.emit_task(
+                    id,
+                    Actor::Regie,
+                    EventKind::SetupFinished {
+                        ok: false,
+                        output_tail,
+                    },
+                );
             }
         };
         let kind = EventKind::WorktreeCreated {
@@ -171,7 +221,12 @@ impl Engine {
         };
         self.emit_task(id, Actor::Regie, kind)?;
         let repo = &self.state.tasks[&id].repo;
-        match self.state.project_facts.get(repo).and_then(|f| f.setup.clone()) {
+        match self
+            .state
+            .project_facts
+            .get(repo)
+            .and_then(|f| f.setup.clone())
+        {
             Some(setup) => self.setup(id, wt, setup),
             None => {
                 self.prep.remove(&id);
@@ -185,18 +240,42 @@ impl Engine {
         self.prep.insert(id, wt.port_base);
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let (ok, output) = run_setup(PathBuf::from(&wt.path).as_path(), &cmd, &task_env(id, wt.port_base)).await;
-            let _ = tx.send(Input::SetupDone { task: id, ok, output }).await;
+            let (ok, output) = run_setup(
+                PathBuf::from(&wt.path).as_path(),
+                &cmd,
+                &task_env(id, wt.port_base),
+            )
+            .await;
+            let _ = tx
+                .send(Input::SetupDone {
+                    task: id,
+                    ok,
+                    output,
+                })
+                .await;
         });
     }
 
     /// Appends `RunStarted`, then starts the agent in a spawned task that forwards
     /// its events to the loop. A builder continues its own session except on its
     /// first run; reviewer and verify runs are always fresh agents.
-    fn start_run(&mut self, id: TaskId, role: Role, purpose: Purpose, input: regie_core::PromptInput) -> anyhow::Result<()> {
+    fn start_run(
+        &mut self,
+        id: TaskId,
+        role: Role,
+        purpose: Purpose,
+        input: regie_core::PromptInput,
+    ) -> anyhow::Result<()> {
         let task = &self.state.tasks[&id];
-        let Some(wt) = task.worktree.clone() else { return Ok(()) };
-        let facts = self.state.project_facts.get(&task.repo).cloned().unwrap_or_default();
+        let Some(wt) = task.worktree.clone() else {
+            return Ok(());
+        };
+        let facts = self
+            .state
+            .project_facts
+            .get(&task.repo)
+            .cloned()
+            .unwrap_or_default();
         let model = self.settings.model_for(Provider::Claude, task.level);
         let prompt = prompt_for(task, &facts, &input, &model, wt.port_base);
         let resume = match (role, purpose) {
@@ -218,7 +297,11 @@ impl Engine {
             Ok(p) => p,
             Err(e) => {
                 let final_message = Some(format!("could not build the prompt: {e:#}"));
-                let kind = EventKind::RunFinished { run, outcome: RunOutcome::Crashed, final_message };
+                let kind = EventKind::RunFinished {
+                    run,
+                    outcome: RunOutcome::Crashed,
+                    final_message,
+                };
                 return self.emit_task(id, Actor::Regie, kind);
             }
         };
@@ -234,9 +317,23 @@ impl Engine {
             env: task_env(id, wt.port_base),
         };
         let (control, control_rx) = mpsc::channel(16);
-        self.runs.insert(run, RunCtl { task: id, role, input, control, awaiting: 0 });
+        self.runs.insert(
+            run,
+            RunCtl {
+                task: id,
+                role,
+                input,
+                control,
+                awaiting: 0,
+            },
+        );
         self.live.active.insert(id, (run, role));
-        tokio::spawn(drive(self.deps.runner.clone(), spec, control_rx, self.tx.clone()));
+        tokio::spawn(drive(
+            self.deps.runner.clone(),
+            spec,
+            control_rx,
+            self.tx.clone(),
+        ));
         Ok(())
     }
 }
@@ -250,11 +347,20 @@ async fn drive(
     tx: mpsc::Sender<Input>,
 ) {
     let run = spec.run;
-    let crashed = AgentEvent::Finished { final_message: None, outcome: RunOutcome::Crashed, limit_resets_at: None };
+    let crashed = AgentEvent::Finished {
+        final_message: None,
+        outcome: RunOutcome::Crashed,
+        limit_resets_at: None,
+    };
     let mut handle = match runner.start(spec).await {
         Ok(h) => h,
         Err(e) => {
-            let _ = tx.send(Input::Agent(run, AgentEvent::Output(format!("could not start the agent: {e:#}")))).await;
+            let _ = tx
+                .send(Input::Agent(
+                    run,
+                    AgentEvent::Output(format!("could not start the agent: {e:#}")),
+                ))
+                .await;
             let _ = tx.send(Input::Agent(run, crashed)).await;
             return;
         }

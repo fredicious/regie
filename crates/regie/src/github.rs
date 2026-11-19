@@ -54,10 +54,13 @@ struct RawPr {
 /// The PRs `gh pr list` gave, newest first.
 pub fn parse_pr_list(json: &str) -> anyhow::Result<Vec<BranchPr>> {
     let raw: Vec<RawPr> = serde_json::from_str(json).context("parsing `gh pr list` output")?;
-    let mut prs: Vec<BranchPr> = raw.into_iter().map(|r| BranchPr {
-        created_at: Millis(r.created_at.as_deref().and_then(parse_rfc3339).unwrap_or(0)),
-        pr: raw_pr(r),
-    }).collect();
+    let mut prs: Vec<BranchPr> = raw
+        .into_iter()
+        .map(|r| BranchPr {
+            created_at: Millis(r.created_at.as_deref().and_then(parse_rfc3339).unwrap_or(0)),
+            pr: raw_pr(r),
+        })
+        .collect();
     prs.sort_by_key(|p| std::cmp::Reverse(p.created_at));
     Ok(prs)
 }
@@ -192,7 +195,10 @@ pub fn aggregate_checks(rollup: &[serde_json::Value]) -> Checks {
             }
         } else if text(c, "status") != "COMPLETED" {
             pending = true;
-        } else if !matches!(text(c, "conclusion").as_str(), "SUCCESS" | "NEUTRAL" | "SKIPPED") {
+        } else if !matches!(
+            text(c, "conclusion").as_str(),
+            "SUCCESS" | "NEUTRAL" | "SKIPPED"
+        ) {
             failed.push(text(c, "name"));
         }
     }
@@ -214,14 +220,19 @@ pub struct GhCli {
 
 impl Default for GhCli {
     fn default() -> Self {
-        GhCli { bin: PathBuf::from("gh"), timeout: crate::proc::DEFAULT_TIMEOUT }
+        GhCli {
+            bin: PathBuf::from("gh"),
+            timeout: crate::proc::DEFAULT_TIMEOUT,
+        }
     }
 }
 
 impl GhCli {
     async fn gh(&self, repo: &Path, args: &[&str]) -> anyhow::Result<String> {
         let mut cmd = tokio::process::Command::new(&self.bin);
-        cmd.args(args).current_dir(repo).env("GH_PROMPT_DISABLED", "1");
+        cmd.args(args)
+            .current_dir(repo)
+            .env("GH_PROMPT_DISABLED", "1");
         let out = crate::proc::output(cmd, self.timeout)
             .await
             .with_context(|| format!("running gh {}", args.join(" ")))?;
@@ -238,7 +249,10 @@ impl GhCli {
 
 /// `--repo owner/name` when the repo is on GitHub.
 fn repo_args(repo: &GhRepo) -> Vec<&str> {
-    repo.github.as_deref().map(|g| vec!["--repo", g]).unwrap_or_default()
+    repo.github
+        .as_deref()
+        .map(|g| vec!["--repo", g])
+        .unwrap_or_default()
 }
 
 #[async_trait::async_trait]
@@ -364,19 +378,47 @@ mod tests {
     #[test]
     fn check_conclusions_table() {
         use serde_json::json;
-        let run = |status: &str, conclusion: &str| {
-            json!({"__typename":"CheckRun","name":conclusion.to_lowercase(),"status":status,"conclusion":conclusion})
-        };
+        let run = |status: &str, conclusion: &str| json!({"__typename":"CheckRun","name":conclusion.to_lowercase(),"status":status,"conclusion":conclusion});
         let ctx = |state: &str| json!({"__typename":"StatusContext","context":state.to_lowercase(),"state":state});
-        let failed = |n: &str| Checks::Failure { failed: vec![n.into()] };
+        let failed = |n: &str| Checks::Failure {
+            failed: vec![n.into()],
+        };
         let rows: Vec<(&str, Vec<serde_json::Value>, Checks)> = vec![
-            ("success", vec![run("COMPLETED", "SUCCESS")], Checks::Success),
-            ("neutral", vec![run("COMPLETED", "NEUTRAL")], Checks::Success),
-            ("skipped", vec![run("COMPLETED", "SKIPPED")], Checks::Success),
-            ("timed out", vec![run("COMPLETED", "TIMED_OUT")], failed("timed_out")),
-            ("cancelled", vec![run("COMPLETED", "CANCELLED")], failed("cancelled")),
-            ("action required", vec![run("COMPLETED", "ACTION_REQUIRED")], failed("action_required")),
-            ("startup failure", vec![run("COMPLETED", "STARTUP_FAILURE")], failed("startup_failure")),
+            (
+                "success",
+                vec![run("COMPLETED", "SUCCESS")],
+                Checks::Success,
+            ),
+            (
+                "neutral",
+                vec![run("COMPLETED", "NEUTRAL")],
+                Checks::Success,
+            ),
+            (
+                "skipped",
+                vec![run("COMPLETED", "SKIPPED")],
+                Checks::Success,
+            ),
+            (
+                "timed out",
+                vec![run("COMPLETED", "TIMED_OUT")],
+                failed("timed_out"),
+            ),
+            (
+                "cancelled",
+                vec![run("COMPLETED", "CANCELLED")],
+                failed("cancelled"),
+            ),
+            (
+                "action required",
+                vec![run("COMPLETED", "ACTION_REQUIRED")],
+                failed("action_required"),
+            ),
+            (
+                "startup failure",
+                vec![run("COMPLETED", "STARTUP_FAILURE")],
+                failed("startup_failure"),
+            ),
             ("stale", vec![run("COMPLETED", "STALE")], failed("stale")),
             ("in progress", vec![run("IN_PROGRESS", "")], Checks::Pending),
             ("status success", vec![ctx("SUCCESS")], Checks::Success),
@@ -384,10 +426,18 @@ mod tests {
             ("status failure", vec![ctx("FAILURE")], failed("failure")),
             ("status pending", vec![ctx("PENDING")], Checks::Pending),
             ("status expected", vec![ctx("EXPECTED")], Checks::Pending),
-            ("status unknown", vec![ctx("SOMETHING_NEW")], Checks::Pending),
+            (
+                "status unknown",
+                vec![ctx("SOMETHING_NEW")],
+                Checks::Pending,
+            ),
             (
                 "failure beats pending",
-                vec![run("IN_PROGRESS", ""), ctx("PENDING"), run("COMPLETED", "STARTUP_FAILURE")],
+                vec![
+                    run("IN_PROGRESS", ""),
+                    ctx("PENDING"),
+                    run("COMPLETED", "STARTUP_FAILURE"),
+                ],
                 failed("startup_failure"),
             ),
             ("empty", vec![], Checks::None),
@@ -411,10 +461,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let gh = fake_gh(&dir, "sleep 30", std::time::Duration::from_millis(300));
         let t = std::time::Instant::now();
-        let repo = GhRepo { path: dir.path().into(), github: None };
+        let repo = GhRepo {
+            path: dir.path().into(),
+            github: None,
+        };
         let err = gh.pr_activity(&repo, 3).await.unwrap_err();
         assert!(format!("{err:#}").contains("timed out"), "{err:#}");
-        assert!(t.elapsed() < std::time::Duration::from_secs(5), "took {:?}", t.elapsed());
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(5),
+            "took {:?}",
+            t.elapsed()
+        );
     }
 
     #[test]
@@ -425,7 +482,13 @@ mod tests {
         ]"#;
         let prs = parse_pr_list(json).unwrap();
         let got: Vec<(u64, Millis)> = prs.iter().map(|p| (p.pr.number, p.created_at)).collect();
-        assert_eq!(got, [(9, Millis(1_795_082_400_000)), (3, Millis(1_767_312_000_000))]);
+        assert_eq!(
+            got,
+            [
+                (9, Millis(1_795_082_400_000)),
+                (3, Millis(1_767_312_000_000))
+            ]
+        );
     }
 
     #[tokio::test]
@@ -434,7 +497,10 @@ mod tests {
         let args = dir.path().join("args.txt");
         let body = format!("printf '%s\\n' \"$@\" >> '{}'\necho '[]'", args.display());
         let gh = fake_gh(&dir, &body, std::time::Duration::from_secs(10));
-        let repo = GhRepo { path: dir.path().into(), github: Some("o/r".into()) };
+        let repo = GhRepo {
+            path: dir.path().into(),
+            github: Some("o/r".into()),
+        };
         gh.prs_for_branch(&repo, "regie/t1-x").await.unwrap();
         let seen = std::fs::read_to_string(&args).unwrap();
         let seen: Vec<&str> = seen.lines().collect();

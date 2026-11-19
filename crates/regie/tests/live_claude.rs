@@ -19,8 +19,15 @@ struct Live {
 impl Live {
     fn new() -> Live {
         let runs = tempfile::tempdir().unwrap();
-        let cli = ClaudeCli { bin: PathBuf::from("claude"), runs_dir: runs.path().to_path_buf() };
-        Live { repo: TempRepo::new(), cli, _runs: runs }
+        let cli = ClaudeCli {
+            bin: PathBuf::from("claude"),
+            runs_dir: runs.path().to_path_buf(),
+        };
+        Live {
+            repo: TempRepo::new(),
+            cli,
+            _runs: runs,
+        }
     }
 
     fn spec(&self, run: i64, prompt: &str) -> RunSpec {
@@ -39,7 +46,10 @@ impl Live {
 }
 
 /// Collects events until `Finished`; `on` may send controls as events arrive.
-async fn collect(h: &mut RunHandle, mut on: impl FnMut(&AgentEvent) -> Option<AgentControl>) -> Vec<AgentEvent> {
+async fn collect(
+    h: &mut RunHandle,
+    mut on: impl FnMut(&AgentEvent) -> Option<AgentControl>,
+) -> Vec<AgentEvent> {
     let mut events = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(240);
     loop {
@@ -62,7 +72,11 @@ async fn collect(h: &mut RunHandle, mut on: impl FnMut(&AgentEvent) -> Option<Ag
 
 fn short(e: &AgentEvent) -> String {
     let s = format!("{e:?}");
-    if s.chars().count() > 200 { format!("{}…", s.chars().take(200).collect::<String>()) } else { s }
+    if s.chars().count() > 200 {
+        format!("{}…", s.chars().take(200).collect::<String>())
+    } else {
+        s
+    }
 }
 
 fn is_tool_use(e: &AgentEvent) -> bool {
@@ -71,7 +85,11 @@ fn is_tool_use(e: &AgentEvent) -> bool {
 
 fn finished(events: &[AgentEvent]) -> (Option<String>, RunOutcome) {
     match events.last() {
-        Some(AgentEvent::Finished { final_message, outcome, .. }) => (final_message.clone(), *outcome),
+        Some(AgentEvent::Finished {
+            final_message,
+            outcome,
+            ..
+        }) => (final_message.clone(), *outcome),
         other => panic!("expected Finished, got {other:?}"),
     }
 }
@@ -92,14 +110,31 @@ const SLEEP_PROMPT: &str = "Run the shell command `sleep 30` with the Bash tool 
 #[ignore]
 async fn live_final_message_and_reading() {
     let live = Live::new();
-    let mut h = live.cli.start(live.spec(1, "Reply with the word ok.")).await.unwrap();
+    let mut h = live
+        .cli
+        .start(live.spec(1, "Reply with the word ok."))
+        .await
+        .unwrap();
     let events = collect(&mut h, |_| None).await;
     let (msg, outcome) = finished(&events);
     assert_eq!(outcome, RunOutcome::Finished);
-    assert!(msg.as_deref().is_some_and(|m| m.to_lowercase().contains("ok")), "{msg:?}");
-    assert!(events.iter().any(|e| matches!(e, AgentEvent::Reading(_))), "no reading");
-    assert!(events.iter().any(|e| matches!(e, AgentEvent::Usage { .. })), "no usage");
-    let lines = std::fs::read_to_string(live.cli.runs_dir.join("1.jsonl")).unwrap().lines().count();
+    assert!(
+        msg.as_deref()
+            .is_some_and(|m| m.to_lowercase().contains("ok")),
+        "{msg:?}"
+    );
+    assert!(
+        events.iter().any(|e| matches!(e, AgentEvent::Reading(_))),
+        "no reading"
+    );
+    assert!(
+        events.iter().any(|e| matches!(e, AgentEvent::Usage { .. })),
+        "no usage"
+    );
+    let lines = std::fs::read_to_string(live.cli.runs_dir.join("1.jsonl"))
+        .unwrap()
+        .lines()
+        .count();
     println!("final message {msg:?}; run file has {lines} lines");
 }
 
@@ -107,7 +142,8 @@ async fn live_final_message_and_reading() {
 #[ignore]
 async fn live_resume_after_kill() {
     let live = Live::new();
-    let prompt = format!("Remember this code word: PELICAN-42. Do not write it to any file. {SLEEP_PROMPT}");
+    let prompt =
+        format!("Remember this code word: PELICAN-42. Do not write it to any file. {SLEEP_PROMPT}");
     let mut h = live.cli.start(live.spec(1, &prompt)).await.unwrap();
     let mut sent = false;
     let events = collect(&mut h, |e| {
@@ -117,13 +153,19 @@ async fn live_resume_after_kill() {
     assert_eq!(finished(&events).1, RunOutcome::Stopped);
     let native = session(&events);
 
-    let mut spec = live.spec(2, "What was the code word I asked you to remember? Reply with just the word.");
+    let mut spec = live.spec(
+        2,
+        "What was the code word I asked you to remember? Reply with just the word.",
+    );
     spec.resume = Some(native.clone());
     let mut h = live.cli.start(spec).await.unwrap();
     let events = collect(&mut h, |_| None).await;
     let (msg, outcome) = finished(&events);
     assert_eq!(outcome, RunOutcome::Finished);
-    assert!(msg.as_deref().is_some_and(|m| m.contains("PELICAN-42")), "{msg:?}");
+    assert!(
+        msg.as_deref().is_some_and(|m| m.contains("PELICAN-42")),
+        "{msg:?}"
+    );
     println!("resumed {native} as {}: {msg:?}", session(&events));
 }
 
@@ -159,11 +201,18 @@ async fn live_message_mid_turn() {
     })
     .await;
     let (msg, outcome) = finished(&events);
-    let results = events.iter().filter(|e| matches!(e, AgentEvent::Usage { .. })).count();
+    let results = events
+        .iter()
+        .filter(|e| matches!(e, AgentEvent::Usage { .. }))
+        .count();
     let kiwi = msg.as_deref().is_some_and(|m| m.contains("KIWI"));
     println!(
         "message delivery: {} ({results} result(s); final {msg:?})",
-        if results == 1 && kiwi { "mid-turn, folded into the running turn" } else { "follow-up turn or lost" }
+        if results == 1 && kiwi {
+            "mid-turn, folded into the running turn"
+        } else {
+            "follow-up turn or lost"
+        }
     );
     assert_eq!(outcome, RunOutcome::Finished);
     assert!(kiwi, "{msg:?}");

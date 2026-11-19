@@ -10,7 +10,9 @@ pub enum Provider {
     Codex,
 }
 
-#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Serialize, Deserialize, TS, Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
 #[ts(export)]
 pub enum Level {
     Light,
@@ -53,7 +55,11 @@ pub struct Thresholds {
 
 impl Default for Thresholds {
     fn default() -> Self {
-        Thresholds { five_hour_max: 0.75, weekly_floor: 0.20, weekly_ahead_max: 0.10 }
+        Thresholds {
+            five_hour_max: 0.75,
+            weekly_floor: 0.20,
+            weekly_ahead_max: 0.10,
+        }
     }
 }
 
@@ -82,9 +88,17 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            caps: Caps { overall: 4, per_session: 2 },
+            caps: Caps {
+                overall: 4,
+                per_session: 2,
+            },
             thresholds: Thresholds::default(),
-            loops: LoopCaps { review_rounds: 2, ci: 3, conflict: 3, pr_feedback: 3 },
+            loops: LoopCaps {
+                review_rounds: 2,
+                ci: 3,
+                conflict: 3,
+                pr_feedback: 3,
+            },
             probe_after_ms: 600_000,
             output_retention_days: 14,
             port_base: 41000,
@@ -104,6 +118,9 @@ impl Settings {
             (Provider::Codex, Level::Standard) => ("gpt-6.1-sol", Effort::Medium),
             (Provider::Codex, Level::Hard) => ("gpt-6.1-sol", Effort::High),
         };
-        ModelChoice { model: model.into(), effort }
+        ModelChoice {
+            model: model.into(),
+            effort,
+        }
     }
 }

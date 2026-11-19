@@ -31,7 +31,11 @@ pub struct ServerInfo {
 
 impl std::fmt::Debug for ServerInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ServerInfo").field("port", &self.port).field("token", &"<redacted>").field("pid", &self.pid).finish()
+        f.debug_struct("ServerInfo")
+            .field("port", &self.port)
+            .field("token", &"<redacted>")
+            .field("pid", &self.pid)
+            .finish()
     }
 }
 
@@ -42,7 +46,10 @@ pub(crate) struct AppState {
 }
 
 pub fn router(engine: EngineHandle, data: DataDir, info: ServerInfo) -> Router {
-    let guard = Arc::new(auth::Guard { port: info.port, token: info.token });
+    let guard = Arc::new(auth::Guard {
+        port: info.port,
+        token: info.token,
+    });
     Router::new()
         .route("/api/health", get(api::health))
         .route("/api/commands", post(api::command))
@@ -62,7 +69,11 @@ pub async fn serve(engine: EngineHandle, data: DataDir, port: u16) -> anyhow::Re
         .await
         .with_context(|| format!("binding 127.0.0.1:{port} (is Régie already running?)"))?;
     let port = listener.local_addr()?.port();
-    let info = ServerInfo { port, token: auth::new_token(), pid: std::process::id() };
+    let info = ServerInfo {
+        port,
+        token: auth::new_token(),
+        pid: std::process::id(),
+    };
     write_server_json(&data, &info)?;
     axum::serve(listener, router(engine, data, info)).await?;
     Ok(())

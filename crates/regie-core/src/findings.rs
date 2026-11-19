@@ -98,7 +98,10 @@ pub struct Ruling {
 
 /// A builder is done only if its last non-empty line is `Status: done`.
 pub fn parse_builder_status(final_message: &str) -> BuilderStatus {
-    let last = final_message.lines().map(str::trim).rfind(|l| !l.is_empty());
+    let last = final_message
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty());
     match last.map(unwrap_emphasis) {
         Some(l) if l.eq_ignore_ascii_case("Status: done") => BuilderStatus::Done,
         _ => BuilderStatus::Question,
@@ -132,13 +135,19 @@ fn last_json_block(msg: &str) -> Option<String> {
                 }
             }
             None => {
-                if t.strip_prefix("```json").is_some_and(|rest| rest.trim().is_empty()) {
+                if t.strip_prefix("```json")
+                    .is_some_and(|rest| rest.trim().is_empty())
+                {
                     open = Some(Vec::new());
                 }
             }
         }
     }
-    if open.is_some() { None } else { best }
+    if open.is_some() {
+        None
+    } else {
+        best
+    }
 }
 
 #[derive(Deserialize)]
@@ -221,9 +230,15 @@ fn evidence_supports_blocking(e: &Evidence) -> bool {
 }
 
 pub fn parse_review(final_message: &str) -> ReviewOutcome {
-    let unparsed = || ReviewOutcome::Unparsed { raw: final_message.to_string() };
-    let Some(block) = last_json_block(final_message) else { return unparsed() };
-    let Ok(raw) = serde_json::from_str::<RawReview>(&block) else { return unparsed() };
+    let unparsed = || ReviewOutcome::Unparsed {
+        raw: final_message.to_string(),
+    };
+    let Some(block) = last_json_block(final_message) else {
+        return unparsed();
+    };
+    let Ok(raw) = serde_json::from_str::<RawReview>(&block) else {
+        return unparsed();
+    };
     let findings = raw
         .findings
         .into_iter()
@@ -270,9 +285,15 @@ enum RawVerifyStatus {
 }
 
 pub fn parse_verify(final_message: &str) -> VerifyOutcome {
-    let unparsed = || VerifyOutcome::Unparsed { raw: final_message.to_string() };
-    let Some(block) = last_json_block(final_message) else { return unparsed() };
-    let Ok(raw) = serde_json::from_str::<RawVerify>(&block) else { return unparsed() };
+    let unparsed = || VerifyOutcome::Unparsed {
+        raw: final_message.to_string(),
+    };
+    let Some(block) = last_json_block(final_message) else {
+        return unparsed();
+    };
+    let Ok(raw) = serde_json::from_str::<RawVerify>(&block) else {
+        return unparsed();
+    };
     VerifyOutcome::Results(
         raw.results
             .into_iter()
@@ -295,7 +316,11 @@ pub fn auto_rule(findings: &[Finding]) -> Vec<Ruling> {
         .iter()
         .map(|f| Ruling {
             finding: f.id,
-            decision: if f.blocking { Decision::Fix } else { Decision::Advisory },
+            decision: if f.blocking {
+                Decision::Fix
+            } else {
+                Decision::Advisory
+            },
             note: String::new(),
         })
         .collect()
@@ -318,26 +343,63 @@ mod tests {
 
     #[test]
     fn done_status() {
-        assert_eq!(parse_builder_status("Did X.\n\nStatus: done\n"), BuilderStatus::Done);
-        assert_eq!(parse_builder_status("x\n  STATUS: Done  \n\n"), BuilderStatus::Done);
+        assert_eq!(
+            parse_builder_status("Did X.\n\nStatus: done\n"),
+            BuilderStatus::Done
+        );
+        assert_eq!(
+            parse_builder_status("x\n  STATUS: Done  \n\n"),
+            BuilderStatus::Done
+        );
     }
 
     #[test]
     fn status_line_must_be_last() {
-        assert_eq!(parse_builder_status("Status: done\nThen one more thing?"), BuilderStatus::Question);
-        assert_eq!(parse_builder_status("No status line at all"), BuilderStatus::Question);
-        assert_eq!(parse_builder_status("Status: question"), BuilderStatus::Question);
+        assert_eq!(
+            parse_builder_status("Status: done\nThen one more thing?"),
+            BuilderStatus::Question
+        );
+        assert_eq!(
+            parse_builder_status("No status line at all"),
+            BuilderStatus::Question
+        );
+        assert_eq!(
+            parse_builder_status("Status: question"),
+            BuilderStatus::Question
+        );
         assert_eq!(parse_builder_status(""), BuilderStatus::Question);
-        assert_eq!(parse_builder_status("Status: done soon"), BuilderStatus::Question);
-        assert_eq!(parse_builder_status("**Status: done**\nmore"), BuilderStatus::Question);
-        assert_eq!(parse_builder_status("**Status: question**"), BuilderStatus::Question);
-        assert_eq!(parse_builder_status("**Status: done"), BuilderStatus::Question);
+        assert_eq!(
+            parse_builder_status("Status: done soon"),
+            BuilderStatus::Question
+        );
+        assert_eq!(
+            parse_builder_status("**Status: done**\nmore"),
+            BuilderStatus::Question
+        );
+        assert_eq!(
+            parse_builder_status("**Status: question**"),
+            BuilderStatus::Question
+        );
+        assert_eq!(
+            parse_builder_status("**Status: done"),
+            BuilderStatus::Question
+        );
     }
 
     #[test]
     fn status_line_may_be_wrapped_in_emphasis_or_code() {
-        for l in ["**Status: done**", "*Status: done*", "_Status: done_", "`Status: done`", "  **STATUS: Done**  "] {
-            assert_eq!(parse_builder_status(&format!("Work.\n\n{l}\n\n")), BuilderStatus::Done, "{l}");
+        for l in [
+            "**Status: done**",
+            "*Status: done*",
+            "_Status: done_",
+            "`Status: done`",
+            "  **STATUS: Done**  ",
+        ] {
+            assert_eq!(
+                parse_builder_status(&format!("Work.\n\n{l}\n\n")),
+                BuilderStatus::Done,
+                "{l}"
+            );
         }
     }
 
@@ -353,47 +415,71 @@ mod tests {
         let f = findings(parse_review(&msg));
         assert_eq!(f.len(), 2);
         assert_eq!((f[0].id, f[1].id), (1, 2));
-        assert_eq!((f[0].kind, f[1].kind), (FindingKind::Bug, FindingKind::Design));
+        assert_eq!(
+            (f[0].kind, f[1].kind),
+            (FindingKind::Bug, FindingKind::Design)
+        );
         assert!(f[0].blocking);
         assert!(!f[1].blocking);
-        assert_eq!(f[0].evidence.as_ref().unwrap().r#type, EvidenceType::Command);
+        assert_eq!(
+            f[0].evidence.as_ref().unwrap().r#type,
+            EvidenceType::Command
+        );
         assert_eq!(f[1].evidence, None);
     }
 
     #[test]
     fn blocking_without_evidence_is_advisory() {
-        let msg = block(r#"{"findings":[
+        let msg = block(
+            r#"{"findings":[
             {"title":"a","kind":"bug","blocking":true},
             {"title":"b","kind":"bug","blocking":true,"evidence":null},
             {"title":"c","kind":"bug","blocking":true,"evidence":{"type":"test","detail":"  "}}
-        ]}"#);
+        ]}"#,
+        );
         let f = findings(parse_review(&msg));
         assert!(f.iter().all(|x| !x.blocking));
     }
 
     #[test]
     fn criterion_needs_file_and_line() {
-        let msg = block(r#"{"findings":[
+        let msg = block(
+            r#"{"findings":[
             {"title":"a","kind":"unmet_criterion","blocking":true,
              "evidence":{"type":"criterion","detail":"d","file":"src/a.rs"}},
             {"title":"b","kind":"unmet_criterion","blocking":true,
              "evidence":{"type":"criterion","detail":"d","line":3}},
             {"title":"c","kind":"unmet_criterion","blocking":true,
              "evidence":{"type":"criterion","detail":"d","file":"src/a.rs","line":3}}
-        ]}"#);
+        ]}"#,
+        );
         let f = findings(parse_review(&msg));
-        assert_eq!(f.iter().map(|x| x.blocking).collect::<Vec<_>>(), [false, false, true]);
+        assert_eq!(
+            f.iter().map(|x| x.blocking).collect::<Vec<_>>(),
+            [false, false, true]
+        );
         assert_eq!(f[2].evidence.as_ref().unwrap().line, Some(3));
     }
 
     #[test]
     fn review_without_json_is_unparsed() {
-        assert!(matches!(parse_review("Looks fine to me."), ReviewOutcome::Unparsed { .. }));
-        assert!(matches!(parse_review("```json\n{not json\n```"), ReviewOutcome::Unparsed { .. }));
-        // unterminated fence, unknown kind, missing blocking: never read as clean
-        assert!(matches!(parse_review("```json\n{\"findings\":[]}"), ReviewOutcome::Unparsed { .. }));
         assert!(matches!(
-            parse_review(&block(r#"{"findings":[{"title":"a","kind":"weird","blocking":false}]}"#)),
+            parse_review("Looks fine to me."),
+            ReviewOutcome::Unparsed { .. }
+        ));
+        assert!(matches!(
+            parse_review("```json\n{not json\n```"),
+            ReviewOutcome::Unparsed { .. }
+        ));
+        // unterminated fence, unknown kind, missing blocking: never read as clean
+        assert!(matches!(
+            parse_review("```json\n{\"findings\":[]}"),
+            ReviewOutcome::Unparsed { .. }
+        ));
+        assert!(matches!(
+            parse_review(&block(
+                r#"{"findings":[{"title":"a","kind":"weird","blocking":false}]}"#
+            )),
             ReviewOutcome::Unparsed { .. }
         ));
         assert!(matches!(
@@ -401,12 +487,18 @@ mod tests {
             ReviewOutcome::Unparsed { .. }
         ));
         let raw = "Looks fine to me.";
-        assert_eq!(parse_review(raw), ReviewOutcome::Unparsed { raw: raw.into() });
+        assert_eq!(
+            parse_review(raw),
+            ReviewOutcome::Unparsed { raw: raw.into() }
+        );
     }
 
     #[test]
     fn empty_findings_is_a_clean_review() {
-        assert_eq!(parse_review("```json\n{\"findings\":[]}\n```"), ReviewOutcome::Findings(vec![]));
+        assert_eq!(
+            parse_review("```json\n{\"findings\":[]}\n```"),
+            ReviewOutcome::Findings(vec![])
+        );
     }
 
     #[test]
@@ -423,7 +515,8 @@ mod tests {
 
     #[test]
     fn unterminated_last_fence_is_unparsed() {
-        let rev = "```json\n{\"findings\":[]}\n```\nMore:\n```json\n{\"findings\":[{\"title\":\"x\"";
+        let rev =
+            "```json\n{\"findings\":[]}\n```\nMore:\n```json\n{\"findings\":[{\"title\":\"x\"";
         assert!(matches!(parse_review(rev), ReviewOutcome::Unparsed { .. }));
         let ver = "```json\n{\"results\":[]}\n```\nMore:\n```json\n{\"results\":[{\"finding\":1";
         assert!(matches!(parse_verify(ver), VerifyOutcome::Unparsed { .. }));
@@ -431,19 +524,30 @@ mod tests {
 
     #[test]
     fn verify_results_parsed() {
-        let msg = block(r#"{"results":[
+        let msg = block(
+            r#"{"results":[
             {"finding":1,"status":"fixed","note":"ok"},
             {"finding":2,"status":"not_fixed"},
             {"finding":3,"status":"disputed","note":"not a bug"}
-        ]}"#);
-        let VerifyOutcome::Results(r) = parse_verify(&msg) else { panic!("unparsed") };
+        ]}"#,
+        );
+        let VerifyOutcome::Results(r) = parse_verify(&msg) else {
+            panic!("unparsed")
+        };
         assert_eq!(
             r.iter().map(|x| (x.finding, x.status)).collect::<Vec<_>>(),
-            [(1, VerifyStatus::Fixed), (2, VerifyStatus::NotFixed), (3, VerifyStatus::Disputed)]
+            [
+                (1, VerifyStatus::Fixed),
+                (2, VerifyStatus::NotFixed),
+                (3, VerifyStatus::Disputed)
+            ]
         );
         assert_eq!(r[0].note, "ok");
         assert_eq!(r[1].note, "");
-        assert!(matches!(parse_verify("nothing"), VerifyOutcome::Unparsed { .. }));
+        assert!(matches!(
+            parse_verify("nothing"),
+            VerifyOutcome::Unparsed { .. }
+        ));
         assert!(matches!(
             parse_verify(&block(r#"{"results":[{"finding":1,"status":"maybe"}]}"#)),
             VerifyOutcome::Unparsed { .. }
@@ -461,7 +565,9 @@ mod tests {
         };
         let r = auto_rule(&[mk(1, true), mk(2, false)]);
         assert_eq!(
-            r.iter().map(|x| (x.finding, x.decision)).collect::<Vec<_>>(),
+            r.iter()
+                .map(|x| (x.finding, x.decision))
+                .collect::<Vec<_>>(),
             [(1, Decision::Fix), (2, Decision::Advisory)]
         );
     }

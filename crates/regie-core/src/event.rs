@@ -92,8 +92,14 @@ pub struct Event {
 #[serde(tag = "type")]
 #[ts(export)]
 pub enum EventKind {
-    SessionCreated { name: String, repos: Vec<RepoInfo> },
-    ProjectFactsSet { repo: String, facts: ProjectFacts },
+    SessionCreated {
+        name: String,
+        repos: Vec<RepoInfo>,
+    },
+    ProjectFactsSet {
+        repo: String,
+        facts: ProjectFacts,
+    },
     TaskCreated {
         repo: String,
         title: String,
@@ -104,7 +110,9 @@ pub enum EventKind {
         paths: Vec<String>,
         provider: Option<Provider>,
     },
-    LevelRaised { level: Level },
+    LevelRaised {
+        level: Level,
+    },
     WorktreeCreated {
         path: String,
         branch: String,
@@ -113,7 +121,10 @@ pub enum EventKind {
         #[serde(default)]
         base: String,
     },
-    SetupFinished { ok: bool, output_tail: String },
+    SetupFinished {
+        ok: bool,
+        output_tail: String,
+    },
     RunStarted {
         run: RunId,
         role: Role,
@@ -124,9 +135,20 @@ pub enum EventKind {
         resume_of: Option<String>,
     },
     /// The agent's process started (before it attached), so a restart can stop it.
-    RunSpawned { run: RunId, pid: u32 },
-    RunAttached { run: RunId, native_session: String, pid: Option<u32> },
-    RunFinished { run: RunId, outcome: RunOutcome, final_message: Option<String> },
+    RunSpawned {
+        run: RunId,
+        pid: u32,
+    },
+    RunAttached {
+        run: RunId,
+        native_session: String,
+        pid: Option<u32>,
+    },
+    RunFinished {
+        run: RunId,
+        outcome: RunOutcome,
+        final_message: Option<String>,
+    },
     RunUsage {
         run: RunId,
         #[ts(type = "number")]
@@ -138,15 +160,33 @@ pub enum EventKind {
         #[ts(type = "number")]
         duration_ms: u64,
     },
-    MessageQueued { text: String },
+    MessageQueued {
+        text: String,
+    },
     MessageDelivered,
-    ReviewReported { run: RunId, round: u32, outcome: ReviewOutcome },
-    FindingsRuled { round: u32, rulings: Vec<Ruling> },
-    VerifyReported { run: RunId, outcome: VerifyOutcome },
-    PrObserved { pr: PrState },
+    ReviewReported {
+        run: RunId,
+        round: u32,
+        outcome: ReviewOutcome,
+    },
+    FindingsRuled {
+        round: u32,
+        rulings: Vec<Ruling>,
+    },
+    VerifyReported {
+        run: RunId,
+        outcome: VerifyOutcome,
+    },
+    PrObserved {
+        pr: PrState,
+    },
     PrMissing,
-    PrCommentObserved { comment: PrComment },
-    TaskCancelled { close_pr: bool },
+    PrCommentObserved {
+        comment: PrComment,
+    },
+    TaskCancelled {
+        close_pr: bool,
+    },
     TaskRetried,
     PrClosedByRegie,
     WorktreeCleaned,
@@ -154,6 +194,12 @@ pub enum EventKind {
     SessionResumed,
     AllPaused,
     AllResumed,
-    UsageReading { provider: Provider, reading: Reading },
-    LimitHit { provider: Provider, resets_at: Millis },
+    UsageReading {
+        provider: Provider,
+        reading: Reading,
+    },
+    LimitHit {
+        provider: Provider,
+        resets_at: Millis,
+    },
 }

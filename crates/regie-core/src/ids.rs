@@ -8,7 +8,9 @@ use std::fmt;
 
 macro_rules! id_type {
     ($name:ident) => {
-        #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(
+            Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
+        )]
         #[ts(export)]
         pub struct $name(#[ts(type = "number")] pub i64);
     };

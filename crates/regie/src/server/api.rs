@@ -31,7 +31,11 @@ pub struct BoardQuery {
 }
 
 fn not_found(what: &str) -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({"error": format!("{what} not found")}))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({"error": format!("{what} not found")})),
+    )
+        .into_response()
 }
 
 pub async fn board(State(s): State<AppState>, Query(q): Query<BoardQuery>) -> Response {
@@ -45,9 +49,11 @@ pub async fn task(State(s): State<AppState>, Path(id): Path<i64>) -> Response {
     match s.engine.task(TaskId(id)) {
         Ok(Some(t)) => Json(t).into_response(),
         Ok(None) => not_found(&format!("task {id}")),
-        Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e:#}")}))).into_response()
-        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("{e:#}")})),
+        )
+            .into_response(),
     }
 }
 
@@ -57,7 +63,11 @@ pub struct OutputQuery {
 }
 
 /// The last `lines` (default 200) lines of the run's file.
-pub async fn run_output(State(s): State<AppState>, Path(id): Path<i64>, Query(q): Query<OutputQuery>) -> Response {
+pub async fn run_output(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+    Query(q): Query<OutputQuery>,
+) -> Response {
     let Ok(text) = tokio::fs::read_to_string(s.data.run_file(RunId(id))).await else {
         return not_found(&format!("output of run {id}"));
     };
@@ -67,5 +77,12 @@ pub async fn run_output(State(s): State<AppState>, Path(id): Path<i64>, Query(q)
     if !out.is_empty() {
         out.push('\n');
     }
-    ([(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], out).into_response()
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        out,
+    )
+        .into_response()
 }

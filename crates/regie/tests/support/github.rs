@@ -28,7 +28,10 @@ impl FakeGitHub {
 
     /// New PRs are created at the clock's time.
     pub fn with_clock(clock: Arc<AtomicI64>) -> Self {
-        FakeGitHub { clock: Some(clock), ..Self::default() }
+        FakeGitHub {
+            clock: Some(clock),
+            ..Self::default()
+        }
     }
 
     /// Opens or updates the branch's PR with this number (created now, if new).
@@ -49,13 +52,24 @@ impl FakeGitHub {
 
     /// Mark the branch's newest PR merged.
     pub fn merge(&self, branch: &str) {
-        if let Some(p) = self.prs.lock().unwrap().get_mut(branch).and_then(|l| l.last_mut()) {
+        if let Some(p) = self
+            .prs
+            .lock()
+            .unwrap()
+            .get_mut(branch)
+            .and_then(|l| l.last_mut())
+        {
             p.pr.lifecycle = PrLifecycle::Merged;
         }
     }
 
     pub fn add_comment(&self, number: u64, comment: PrComment) {
-        self.comments.lock().unwrap().entry(number).or_default().push(comment);
+        self.comments
+            .lock()
+            .unwrap()
+            .entry(number)
+            .or_default()
+            .push(comment);
     }
 
     /// PR numbers passed to `close_pr`, in call order.
@@ -88,14 +102,26 @@ impl FakeGitHub {
 impl GitHub for FakeGitHub {
     async fn prs_for_branch(&self, repo: &GhRepo, branch: &str) -> anyhow::Result<Vec<BranchPr>> {
         self.call(repo)?;
-        let mut list = self.prs.lock().unwrap().get(branch).cloned().unwrap_or_default();
+        let mut list = self
+            .prs
+            .lock()
+            .unwrap()
+            .get(branch)
+            .cloned()
+            .unwrap_or_default();
         list.reverse();
         Ok(list)
     }
 
     async fn pr_activity(&self, repo: &GhRepo, number: u64) -> anyhow::Result<Vec<PrComment>> {
         self.call(repo)?;
-        Ok(self.comments.lock().unwrap().get(&number).cloned().unwrap_or_default())
+        Ok(self
+            .comments
+            .lock()
+            .unwrap()
+            .get(&number)
+            .cloned()
+            .unwrap_or_default())
     }
 
     async fn close_pr(&self, repo: &GhRepo, number: u64) -> anyhow::Result<()> {

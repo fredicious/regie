@@ -7,7 +7,11 @@ use tokio::sync::broadcast;
 pub enum BusMsg {
     Event(Event),
     /// A line for people to read; not stored (the run file has the raw stream).
-    Output { task: TaskId, run: RunId, line: String },
+    Output {
+        task: TaskId,
+        run: RunId,
+        line: String,
+    },
 }
 
 /// A broadcast channel; a watcher that falls more than 1024 messages behind misses some.
@@ -18,7 +22,9 @@ pub struct Bus {
 
 impl Default for Bus {
     fn default() -> Self {
-        Bus { tx: broadcast::channel(1024).0 }
+        Bus {
+            tx: broadcast::channel(1024).0,
+        }
     }
 }
 
@@ -40,9 +46,17 @@ mod tests {
     #[tokio::test]
     async fn watchers_get_what_is_published_after_they_subscribe() {
         let bus = Bus::default();
-        bus.publish(BusMsg::Output { task: TaskId(1), run: RunId(1), line: "lost".into() });
+        bus.publish(BusMsg::Output {
+            task: TaskId(1),
+            run: RunId(1),
+            line: "lost".into(),
+        });
         let mut rx = bus.subscribe();
-        let msg = BusMsg::Output { task: TaskId(1), run: RunId(2), line: "hi".into() };
+        let msg = BusMsg::Output {
+            task: TaskId(1),
+            run: RunId(2),
+            line: "hi".into(),
+        };
         bus.publish(msg.clone());
         assert_eq!(rx.recv().await.unwrap(), msg);
     }

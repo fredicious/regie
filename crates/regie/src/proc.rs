@@ -52,7 +52,10 @@ mod tests {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "echo out; echo err >&2; exit 3"]);
         let out = output(cmd, Duration::from_secs(5)).await.unwrap();
-        assert_eq!((out.stdout.as_slice(), out.stderr.as_slice()), (&b"out\n"[..], &b"err\n"[..]));
+        assert_eq!(
+            (out.stdout.as_slice(), out.stderr.as_slice()),
+            (&b"out\n"[..], &b"err\n"[..])
+        );
         assert_eq!(out.status.code(), Some(3));
     }
 }

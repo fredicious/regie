@@ -11,9 +11,15 @@ use support::repo::{git, TempRepo};
 #[tokio::test]
 async fn default_branch_fallback_in_a_french_locale() {
     let r = TempRepo::new();
-    git(&r.work, &["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"]);
+    git(
+        &r.work,
+        &["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"],
+    );
     // A `git` first on PATH that refuses to run unless the locale is C.
-    let real = std::process::Command::new("sh").args(["-c", "command -v git"]).output().unwrap();
+    let real = std::process::Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
     let real = String::from_utf8(real.stdout).unwrap().trim().to_string();
     let shim_dir = tempfile::tempdir().unwrap();
     let shim = shim_dir.path().join("git");

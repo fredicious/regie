@@ -13,7 +13,11 @@ use crate::agents::AgentControl;
 
 impl Engine {
     /// Pauses one session, or all of them with `None`.
-    pub(super) fn pause(&mut self, session: Option<SessionId>, actor: Actor) -> anyhow::Result<CommandResult> {
+    pub(super) fn pause(
+        &mut self,
+        session: Option<SessionId>,
+        actor: Actor,
+    ) -> anyhow::Result<CommandResult> {
         match session {
             Some(s) if !self.state.sessions[&s].paused => {
                 self.emit(Some(s), None, actor, EventKind::SessionPaused)?;
@@ -37,7 +41,11 @@ impl Engine {
 
     /// Resumes one session, or lifts the pause on all with `None` (a session
     /// paused on its own stays paused).
-    pub(super) fn resume(&mut self, session: Option<SessionId>, actor: Actor) -> anyhow::Result<CommandResult> {
+    pub(super) fn resume(
+        &mut self,
+        session: Option<SessionId>,
+        actor: Actor,
+    ) -> anyhow::Result<CommandResult> {
         match session {
             Some(s) if self.state.sessions[&s].paused => {
                 self.emit(Some(s), None, actor, EventKind::SessionResumed)?;
@@ -53,14 +61,21 @@ impl Engine {
     /// Stops the task's running agent; the run ends `Stopped` and the task waits
     /// for Frédéric (`AgentStopped`).
     pub(super) fn stop_agent(&mut self, task: TaskId) -> anyhow::Result<CommandResult> {
-        let Some(run) = self.run_of(task) else { anyhow::bail!("{task} has no running agent") };
+        let Some(run) = self.run_of(task) else {
+            anyhow::bail!("{task} has no running agent")
+        };
         self.control(run, AgentControl::Stop);
         Ok(CommandResult::Ok)
     }
 
     /// Stops any running agent first; the PR close and cleanup the next step asks
     /// for wait until that run has ended (see `advance`).
-    pub(super) fn cancel(&mut self, task: TaskId, close_pr: bool, actor: Actor) -> anyhow::Result<CommandResult> {
+    pub(super) fn cancel(
+        &mut self,
+        task: TaskId,
+        close_pr: bool,
+        actor: Actor,
+    ) -> anyhow::Result<CommandResult> {
         if let Some(run) = self.run_of(task) {
             self.control(run, AgentControl::Stop);
         }
@@ -76,7 +91,10 @@ impl Engine {
     }
 
     fn run_of(&self, task: TaskId) -> Option<RunId> {
-        self.runs.iter().find(|(_, ctl)| ctl.task == task).map(|(run, _)| *run)
+        self.runs
+            .iter()
+            .find(|(_, ctl)| ctl.task == task)
+            .map(|(run, _)| *run)
     }
 
     fn control(&self, run: RunId, c: AgentControl) {

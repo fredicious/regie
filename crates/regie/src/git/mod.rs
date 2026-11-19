@@ -5,5 +5,6 @@ mod worktree;
 
 pub use locks::RepoLocks;
 pub use worktree::{
-    branch_name, create_worktree, default_branch, github_remote, remove_worktree, run_setup, slug, task_env,
+    branch_name, create_worktree, default_branch, github_remote, remove_worktree, run_setup, slug,
+    task_env,
 };

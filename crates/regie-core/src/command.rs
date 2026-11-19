@@ -13,8 +13,14 @@ use crate::state::State;
 #[serde(tag = "type")]
 #[ts(export)]
 pub enum Command {
-    CreateSession { name: String, repos: Vec<String> },
-    SetProjectFacts { repo: String, facts: ProjectFacts },
+    CreateSession {
+        name: String,
+        repos: Vec<String>,
+    },
+    SetProjectFacts {
+        repo: String,
+        facts: ProjectFacts,
+    },
     CreateTask {
         session: SessionId,
         repo: String,
@@ -26,13 +32,31 @@ pub enum Command {
         paths: Vec<String>,
         provider: Option<Provider>,
     },
-    MessageAgent { task: TaskId, text: String, level: Option<Level> },
-    RaiseLevel { task: TaskId, level: Level },
-    StopAgent { task: TaskId },
-    RetryTask { task: TaskId },
-    CancelTask { task: TaskId, close_pr: bool },
-    PauseSession { session: SessionId },
-    ResumeSession { session: SessionId },
+    MessageAgent {
+        task: TaskId,
+        text: String,
+        level: Option<Level>,
+    },
+    RaiseLevel {
+        task: TaskId,
+        level: Level,
+    },
+    StopAgent {
+        task: TaskId,
+    },
+    RetryTask {
+        task: TaskId,
+    },
+    CancelTask {
+        task: TaskId,
+        close_pr: bool,
+    },
+    PauseSession {
+        session: SessionId,
+    },
+    ResumeSession {
+        session: SessionId,
+    },
     PauseAll,
     ResumeAll,
 }
@@ -71,20 +95,31 @@ pub enum CommandError {
 /// Checks a command against the state before it is turned into events.
 pub fn validate(cmd: &Command, state: &State) -> Result<(), CommandError> {
     let task = |id: &TaskId| state.tasks.get(id).ok_or(CommandError::TaskNotFound(*id));
-    let session = |id: &SessionId| state.sessions.get(id).ok_or(CommandError::SessionNotFound(*id));
+    let session = |id: &SessionId| {
+        state
+            .sessions
+            .get(id)
+            .ok_or(CommandError::SessionNotFound(*id))
+    };
     match cmd {
         Command::CreateSession { repos, .. } => {
             if repos.is_empty() {
                 return Err(CommandError::NoRepos);
             }
         }
-        Command::CreateTask { session: sid, repo, blocked_by, .. } => {
+        Command::CreateTask {
+            session: sid,
+            repo,
+            blocked_by,
+            ..
+        } => {
             let s = session(sid)?;
-            let info = s
-                .repos
-                .iter()
-                .find(|r| &r.path == repo)
-                .ok_or_else(|| CommandError::RepoNotInSession { session: *sid, repo: repo.clone() })?;
+            let info = s.repos.iter().find(|r| &r.path == repo).ok_or_else(|| {
+                CommandError::RepoNotInSession {
+                    session: *sid,
+                    repo: repo.clone(),
+                }
+            })?;
             if info.github.is_none() {
                 return Err(CommandError::NoGithubRemote(repo.clone()));
             }
@@ -99,25 +134,39 @@ pub fn validate(cmd: &Command, state: &State) -> Result<(), CommandError> {
         }
         Command::RaiseLevel { task: id, level } => {
             let t = task(id)?;
-            let merged = t.pr.as_ref().is_some_and(|pr| pr.lifecycle == PrLifecycle::Merged);
+            let merged =
+                t.pr.as_ref()
+                    .is_some_and(|pr| pr.lifecycle == PrLifecycle::Merged);
             if merged || t.cancelled.is_some() {
                 return Err(CommandError::TaskFinished(*id));
             }
             if *level <= t.level {
-                return Err(CommandError::LevelNotHigher { current: t.level, requested: *level });
+                return Err(CommandError::LevelNotHigher {
+                    current: t.level,
+                    requested: *level,
+                });
             }
         }
-        Command::MessageAgent { task: id, level, .. } => {
+        Command::MessageAgent {
+            task: id, level, ..
+        } => {
             let t = task(id)?;
-            let merged = t.pr.as_ref().is_some_and(|pr| pr.lifecycle == PrLifecycle::Merged);
+            let merged =
+                t.pr.as_ref()
+                    .is_some_and(|pr| pr.lifecycle == PrLifecycle::Merged);
             if merged || t.cancelled.is_some() {
                 return Err(CommandError::TaskFinished(*id));
             }
             if let Some(requested) = level.filter(|l| *l <= t.level) {
-                return Err(CommandError::LevelNotHigher { current: t.level, requested });
+                return Err(CommandError::LevelNotHigher {
+                    current: t.level,
+                    requested,
+                });
             }
         }
-        Command::StopAgent { task: id } | Command::RetryTask { task: id } | Command::CancelTask { task: id, .. } => {
+        Command::StopAgent { task: id }
+        | Command::RetryTask { task: id }
+        | Command::CancelTask { task: id, .. } => {
             task(id)?;
         }
         Command::PauseSession { session: id } | Command::ResumeSession { session: id } => {
@@ -167,15 +216,34 @@ mod tests {
     fn state(facts: bool) -> State {
         let repos = |paths: &[(&str, Option<&str>)]| EventKind::SessionCreated {
             name: "s".into(),
-            repos: paths.iter().map(|(p, g)| RepoInfo { path: (*p).into(), github: g.map(Into::into) }).collect(),
+            repos: paths
+                .iter()
+                .map(|(p, g)| RepoInfo {
+                    path: (*p).into(),
+                    github: g.map(Into::into),
+                })
+                .collect(),
         };
         let mut events = vec![
-            ev(1, Some(1), None, repos(&[("/r", Some("o/r")), ("/nogh", None)])),
+            ev(
+                1,
+                Some(1),
+                None,
+                repos(&[("/r", Some("o/r")), ("/nogh", None)]),
+            ),
             ev(2, Some(2), None, repos(&[("/r", Some("o/r"))])),
         ];
         if facts {
             for repo in ["/r", "/nogh"] {
-                events.push(ev(3, None, None, EventKind::ProjectFactsSet { repo: repo.into(), facts: ProjectFacts::default() }));
+                events.push(ev(
+                    3,
+                    None,
+                    None,
+                    EventKind::ProjectFactsSet {
+                        repo: repo.into(),
+                        facts: ProjectFacts::default(),
+                    },
+                ));
             }
         }
         events.push(created(1, 1, Level::Standard));
@@ -203,7 +271,10 @@ mod tests {
 
     #[test]
     fn create_task_requires_project_facts() {
-        assert_eq!(validate(&create("/r", vec![]), &state(false)), Err(CommandError::NoProjectFacts("/r".into())));
+        assert_eq!(
+            validate(&create("/r", vec![]), &state(false)),
+            Err(CommandError::NoProjectFacts("/r".into()))
+        );
         assert_eq!(validate(&create("/r", vec![]), &state(true)), Ok(()));
         assert_eq!(
             validate(&create_in(9, "/r", vec![]), &state(true)),
@@ -211,13 +282,19 @@ mod tests {
         );
         assert_eq!(
             validate(&create("/other", vec![]), &state(true)),
-            Err(CommandError::RepoNotInSession { session: SessionId(1), repo: "/other".into() })
+            Err(CommandError::RepoNotInSession {
+                session: SessionId(1),
+                repo: "/other".into()
+            })
         );
     }
 
     #[test]
     fn create_task_rejects_repo_without_github() {
-        assert_eq!(validate(&create("/nogh", vec![]), &state(true)), Err(CommandError::NoGithubRemote("/nogh".into())));
+        assert_eq!(
+            validate(&create("/nogh", vec![]), &state(true)),
+            Err(CommandError::NoGithubRemote("/nogh".into()))
+        );
     }
 
     #[test]
@@ -225,42 +302,82 @@ mod tests {
         let s = state(true);
         assert_eq!(validate(&create("/r", vec![TaskId(1)]), &s), Ok(()));
         // T2 is in another session, T9 does not exist.
-        assert_eq!(validate(&create("/r", vec![TaskId(2)]), &s), Err(CommandError::BlockedByNotInSession(TaskId(2))));
-        assert_eq!(validate(&create("/r", vec![TaskId(1), TaskId(9)]), &s), Err(CommandError::BlockedByNotInSession(TaskId(9))));
+        assert_eq!(
+            validate(&create("/r", vec![TaskId(2)]), &s),
+            Err(CommandError::BlockedByNotInSession(TaskId(2)))
+        );
+        assert_eq!(
+            validate(&create("/r", vec![TaskId(1), TaskId(9)]), &s),
+            Err(CommandError::BlockedByNotInSession(TaskId(9)))
+        );
     }
 
     #[test]
     fn level_can_only_go_up() {
         let s = state(true);
-        let msg = |level| Command::MessageAgent { task: TaskId(1), text: "x".into(), level };
+        let msg = |level| Command::MessageAgent {
+            task: TaskId(1),
+            text: "x".into(),
+            level,
+        };
         assert_eq!(validate(&msg(None), &s), Ok(()));
         assert_eq!(validate(&msg(Some(Level::Hard)), &s), Ok(()));
-        let err = |l| Err(CommandError::LevelNotHigher { current: Level::Standard, requested: l });
-        assert_eq!(validate(&msg(Some(Level::Standard)), &s), err(Level::Standard));
+        let err = |l| {
+            Err(CommandError::LevelNotHigher {
+                current: Level::Standard,
+                requested: l,
+            })
+        };
+        assert_eq!(
+            validate(&msg(Some(Level::Standard)), &s),
+            err(Level::Standard)
+        );
         assert_eq!(validate(&msg(Some(Level::Light)), &s), err(Level::Light));
     }
 
     #[test]
     fn raise_level_checks_task_and_direction() {
         let mut s = state(true);
-        let raise = |t, level| Command::RaiseLevel { task: TaskId(t), level };
+        let raise = |t, level| Command::RaiseLevel {
+            task: TaskId(t),
+            level,
+        };
         assert_eq!(validate(&raise(1, Level::Hard), &s), Ok(()));
         assert_eq!(
             validate(&raise(1, Level::Standard), &s),
-            Err(CommandError::LevelNotHigher { current: Level::Standard, requested: Level::Standard })
+            Err(CommandError::LevelNotHigher {
+                current: Level::Standard,
+                requested: Level::Standard
+            })
         );
-        assert_eq!(validate(&raise(9, Level::Hard), &s), Err(CommandError::TaskNotFound(TaskId(9))));
+        assert_eq!(
+            validate(&raise(9, Level::Hard), &s),
+            Err(CommandError::TaskNotFound(TaskId(9)))
+        );
         s.tasks.get_mut(&TaskId(1)).unwrap().cancelled = Some(false);
-        assert_eq!(validate(&raise(1, Level::Hard), &s), Err(CommandError::TaskFinished(TaskId(1))));
+        assert_eq!(
+            validate(&raise(1, Level::Hard), &s),
+            Err(CommandError::TaskFinished(TaskId(1)))
+        );
     }
 
     #[test]
     fn message_to_finished_or_missing_task_is_rejected() {
         let mut s = state(true);
-        let msg = |t| Command::MessageAgent { task: TaskId(t), text: "x".into(), level: None };
-        assert_eq!(validate(&msg(9), &s), Err(CommandError::TaskNotFound(TaskId(9))));
+        let msg = |t| Command::MessageAgent {
+            task: TaskId(t),
+            text: "x".into(),
+            level: None,
+        };
+        assert_eq!(
+            validate(&msg(9), &s),
+            Err(CommandError::TaskNotFound(TaskId(9)))
+        );
         s.tasks.get_mut(&TaskId(1)).unwrap().cancelled = Some(false);
-        assert_eq!(validate(&msg(1), &s), Err(CommandError::TaskFinished(TaskId(1))));
+        assert_eq!(
+            validate(&msg(1), &s),
+            Err(CommandError::TaskFinished(TaskId(1)))
+        );
     }
 
     #[test]
@@ -269,17 +386,53 @@ mod tests {
         for c in [
             Command::StopAgent { task: TaskId(9) },
             Command::RetryTask { task: TaskId(9) },
-            Command::CancelTask { task: TaskId(9), close_pr: false },
+            Command::CancelTask {
+                task: TaskId(9),
+                close_pr: false,
+            },
         ] {
             assert_eq!(validate(&c, &s), Err(CommandError::TaskNotFound(TaskId(9))));
         }
-        assert_eq!(validate(&Command::CancelTask { task: TaskId(1), close_pr: true }, &s), Ok(()));
-        for c in [Command::PauseSession { session: SessionId(9) }, Command::ResumeSession { session: SessionId(9) }] {
-            assert_eq!(validate(&c, &s), Err(CommandError::SessionNotFound(SessionId(9))));
-        }
-        assert_eq!(validate(&Command::PauseSession { session: SessionId(1) }, &s), Ok(()));
         assert_eq!(
-            validate(&Command::CreateSession { name: "n".into(), repos: vec![] }, &s),
+            validate(
+                &Command::CancelTask {
+                    task: TaskId(1),
+                    close_pr: true
+                },
+                &s
+            ),
+            Ok(())
+        );
+        for c in [
+            Command::PauseSession {
+                session: SessionId(9),
+            },
+            Command::ResumeSession {
+                session: SessionId(9),
+            },
+        ] {
+            assert_eq!(
+                validate(&c, &s),
+                Err(CommandError::SessionNotFound(SessionId(9)))
+            );
+        }
+        assert_eq!(
+            validate(
+                &Command::PauseSession {
+                    session: SessionId(1)
+                },
+                &s
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate(
+                &Command::CreateSession {
+                    name: "n".into(),
+                    repos: vec![]
+                },
+                &s
+            ),
             Err(CommandError::NoRepos)
         );
         assert_eq!(validate(&Command::PauseAll, &s), Ok(()));

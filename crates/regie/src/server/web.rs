@@ -9,17 +9,26 @@ use rust_embed::RustEmbed;
 #[allow_missing = true]
 struct Assets;
 
-const MISSING: &str = "Régie's web page is not built into this binary. Run `make web`, then `make build`.\n";
+const MISSING: &str =
+    "Régie's web page is not built into this binary. Run `make web`, then `make build`.\n";
 
 pub async fn asset(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
     match Assets::get(path) {
         Some(file) => with_security_headers(
-            ([(header::CONTENT_TYPE, content_type(path))], file.data.into_owned()).into_response(),
+            (
+                [(header::CONTENT_TYPE, content_type(path))],
+                file.data.into_owned(),
+            )
+                .into_response(),
         ),
         None if path == "index.html" => with_security_headers(
-            ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], MISSING).into_response(),
+            (
+                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                MISSING,
+            )
+                .into_response(),
         ),
         None => StatusCode::NOT_FOUND.into_response(),
     }
@@ -29,8 +38,14 @@ pub async fn asset(uri: Uri) -> Response {
 fn with_security_headers(mut r: Response) -> Response {
     let h = r.headers_mut();
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("frame-ancestors 'none'"));
-    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("frame-ancestors 'none'"),
+    );
+    h.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
     r
 }
 

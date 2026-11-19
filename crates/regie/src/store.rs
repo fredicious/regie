@@ -36,8 +36,10 @@ impl Store {
     /// Opens an existing database for reading only (the server's second connection);
     /// waits up to 5 seconds when the engine is writing.
     pub fn open_reader(path: &Path) -> anyhow::Result<Store> {
-        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let conn = Connection::open_with_flags(path, flags).with_context(|| format!("opening {}", path.display()))?;
+        let flags =
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let conn = Connection::open_with_flags(path, flags)
+            .with_context(|| format!("opening {}", path.display()))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         Ok(Store { conn })
     }
@@ -77,14 +79,18 @@ impl Store {
 
     /// Events with an id greater than `after`, in order.
     pub fn load_after(&self, after: EventId) -> anyhow::Result<Vec<Event>> {
-        let mut stmt = self.conn.prepare(&format!("SELECT {COLUMNS} FROM events WHERE id > ?1 ORDER BY id"))?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {COLUMNS} FROM events WHERE id > ?1 ORDER BY id"
+        ))?;
         let rows = stmt.query_map([after.0], read_row)?;
         rows.map(|r| r?).collect()
     }
 
     /// The task's events, in order.
     pub fn load_task(&self, task: TaskId) -> anyhow::Result<Vec<Event>> {
-        let mut stmt = self.conn.prepare(&format!("SELECT {COLUMNS} FROM events WHERE task = ?1 ORDER BY id"))?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {COLUMNS} FROM events WHERE task = ?1 ORDER BY id"
+        ))?;
         let rows = stmt.query_map([task.0], read_row)?;
         rows.map(|r| r?).collect()
     }
@@ -98,9 +104,18 @@ fn read_row(row: &Row) -> rusqlite::Result<anyhow::Result<Event>> {
     let actor: String = row.get(4)?;
     let payload: String = row.get(5)?;
     Ok((|| {
-        let actor: Actor = serde_json::from_str(&actor).with_context(|| format!("event {id}: actor"))?;
-        let kind: EventKind = serde_json::from_str(&payload).with_context(|| format!("event {id}: payload"))?;
-        Ok(Event { id: EventId(id), at: Millis(at), session: session.map(SessionId), task: task.map(TaskId), actor, kind })
+        let actor: Actor =
+            serde_json::from_str(&actor).with_context(|| format!("event {id}: actor"))?;
+        let kind: EventKind =
+            serde_json::from_str(&payload).with_context(|| format!("event {id}: payload"))?;
+        Ok(Event {
+            id: EventId(id),
+            at: Millis(at),
+            session: session.map(SessionId),
+            task: task.map(TaskId),
+            actor,
+            kind,
+        })
     })())
 }
 
@@ -111,7 +126,13 @@ mod tests {
     use super::*;
 
     fn ev(kind: EventKind, session: Option<SessionId>, task: Option<TaskId>, at: i64) -> NewEvent {
-        NewEvent { at: Millis(at), session, task, actor: Actor::Regie, kind }
+        NewEvent {
+            at: Millis(at),
+            session,
+            task,
+            actor: Actor::Regie,
+            kind,
+        }
     }
 
     fn task_created() -> EventKind {
@@ -131,8 +152,12 @@ mod tests {
     fn append_assigns_increasing_ids() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(&dir.path().join("regie.db")).unwrap();
-        let a = store.append(ev(EventKind::AllPaused, None, None, 1)).unwrap();
-        let b = store.append(ev(EventKind::AllResumed, None, None, 2)).unwrap();
+        let a = store
+            .append(ev(EventKind::AllPaused, None, None, 1))
+            .unwrap();
+        let b = store
+            .append(ev(EventKind::AllResumed, None, None, 2))
+            .unwrap();
         assert_eq!(a.id, EventId(1));
         assert_eq!(b.id, EventId(2));
         assert_eq!(b.kind, EventKind::AllResumed);
@@ -148,7 +173,13 @@ mod tests {
         {
             let mut store = Store::open(&path).unwrap();
             let kinds = [
-                (EventKind::SessionCreated { name: "s".into(), repos: vec![] }, None),
+                (
+                    EventKind::SessionCreated {
+                        name: "s".into(),
+                        repos: vec![],
+                    },
+                    None,
+                ),
                 (task_created(), Some(TaskId(1))),
                 (EventKind::SessionPaused, None),
             ];
@@ -169,10 +200,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(&dir.path().join("regie.db")).unwrap();
         for i in 0..4 {
-            store.append(ev(EventKind::AllPaused, None, None, i)).unwrap();
+            store
+                .append(ev(EventKind::AllPaused, None, None, i))
+                .unwrap();
         }
         let newer = store.load_after(EventId(2)).unwrap();
-        assert_eq!(newer.iter().map(|e| e.id).collect::<Vec<_>>(), vec![EventId(3), EventId(4)]);
+        assert_eq!(
+            newer.iter().map(|e| e.id).collect::<Vec<_>>(),
+            vec![EventId(3), EventId(4)]
+        );
         assert!(store.load_after(EventId(4)).unwrap().is_empty());
     }
 
@@ -181,9 +217,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(&dir.path().join("regie.db")).unwrap();
         for (i, t) in [Some(1), None, Some(2), Some(1)].into_iter().enumerate() {
-            store.append(ev(EventKind::PrMissing, None, t.map(TaskId), i as i64)).unwrap();
+            store
+                .append(ev(EventKind::PrMissing, None, t.map(TaskId), i as i64))
+                .unwrap();
         }
-        let ids: Vec<EventId> = store.load_task(TaskId(1)).unwrap().iter().map(|e| e.id).collect();
+        let ids: Vec<EventId> = store
+            .load_task(TaskId(1))
+            .unwrap()
+            .iter()
+            .map(|e| e.id)
+            .collect();
         assert_eq!(ids, vec![EventId(1), EventId(4)]);
     }
 
@@ -192,9 +235,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("regie.db");
         let mut store = Store::open(&path).unwrap();
-        store.append(ev(EventKind::PrMissing, None, None, 1)).unwrap();
+        store
+            .append(ev(EventKind::PrMissing, None, None, 1))
+            .unwrap();
         let conn = rusqlite::Connection::open(&path).unwrap();
-        let kind: String = conn.query_row("SELECT kind FROM events", [], |r| r.get(0)).unwrap();
+        let kind: String = conn
+            .query_row("SELECT kind FROM events", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(kind, "PrMissing");
     }
 }

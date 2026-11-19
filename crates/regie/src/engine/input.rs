@@ -1,7 +1,9 @@
 //! Everything the engine loop reacts to: commands, agent events, the tick, and
 //! the results of slow work it handed to spawned tasks.
 
-use regie_core::{Actor, Command, CommandResult, PrComment, PrState, Reading, RepoInfo, RunId, TaskId, Worktree};
+use regie_core::{
+    Actor, Command, CommandResult, PrComment, PrState, Reading, RepoInfo, RunId, TaskId, Worktree,
+};
 use tokio::sync::oneshot;
 
 use crate::agents::AgentEvent;
@@ -16,13 +18,31 @@ pub enum Input {
     /// Ends every run `Interrupted`, stops the agents, then ends the loop and replies.
     Quit(oneshot::Sender<()>),
     /// A new session's repos, made canonical and with their GitHub remotes.
-    SessionReady { name: String, repos: Result<Vec<RepoInfo>, String>, actor: Actor, reply: Reply },
-    WorktreeReady { task: TaskId, result: Result<Worktree, String> },
-    SetupDone { task: TaskId, ok: bool, output: String },
+    SessionReady {
+        name: String,
+        repos: Result<Vec<RepoInfo>, String>,
+        actor: Actor,
+        reply: Reply,
+    },
+    WorktreeReady {
+        task: TaskId,
+        result: Result<Worktree, String>,
+    },
+    SetupDone {
+        task: TaskId,
+        ok: bool,
+        output: String,
+    },
     Polled(Polled),
     Probed(Result<Reading, String>),
-    CleanedUp { task: TaskId, result: Result<(), String> },
-    PrClosed { task: TaskId, result: Result<(), String> },
+    CleanedUp {
+        task: TaskId,
+        result: Result<(), String>,
+    },
+    PrClosed {
+        task: TaskId,
+        result: Result<(), String>,
+    },
 }
 
 /// One look at a task's PR on GitHub.

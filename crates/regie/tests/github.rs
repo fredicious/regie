@@ -20,7 +20,10 @@ fn pr(number: u64) -> PrState {
 #[tokio::test]
 async fn fake_tracks_merge_and_close() {
     let gh = FakeGitHub::new();
-    let repo = &GhRepo { path: ".".into(), github: Some("o/r".into()) };
+    let repo = &GhRepo {
+        path: ".".into(),
+        github: Some("o/r".into()),
+    };
     assert_eq!(gh.prs_for_branch(repo, "b").await.unwrap(), vec![]);
     gh.set("b", pr(1));
     gh.set("c", pr(2));

@@ -10,7 +10,10 @@ pub struct Caffeinate {
 impl Caffeinate {
     /// A disabled one never starts anything (tests).
     pub fn new(enabled: bool) -> Caffeinate {
-        Caffeinate { enabled, child: None }
+        Caffeinate {
+            enabled,
+            child: None,
+        }
     }
 
     /// Starts `caffeinate -i -w <own pid>` when `n` goes above 0 and stops it at 0.

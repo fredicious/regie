@@ -75,7 +75,10 @@ fn place(
     }
     // 4. The next run is about to start, or a ruling is due.
     match next {
-        NextStep::StartRun { role: Role::Builder, .. } => {
+        NextStep::StartRun {
+            role: Role::Builder,
+            ..
+        } => {
             flags.extend(waiting);
             return Lane::Working;
         }
@@ -87,9 +90,9 @@ fn place(
         NextStep::AwaitHuman(reason) => {
             flags.push(Flag::NeedsMe(*reason));
             return match reason {
-                HumanReason::ReviewUnparsed | HumanReason::VerifyFailed | HumanReason::ChangesRequested => {
-                    Lane::InReview
-                }
+                HumanReason::ReviewUnparsed
+                | HumanReason::VerifyFailed
+                | HumanReason::ChangesRequested => Lane::InReview,
                 _ => Lane::Working,
             };
         }
@@ -128,13 +131,30 @@ mod tests {
     use crate::state::{State, Worktree};
 
     pub(crate) fn event(id: i64, task: Option<TaskId>, kind: EventKind) -> Event {
-        Event { id: EventId(id), at: Millis(id), session: Some(SessionId(1)), task, actor: Actor::Regie, kind }
+        Event {
+            id: EventId(id),
+            at: Millis(id),
+            session: Some(SessionId(1)),
+            task,
+            actor: Actor::Regie,
+            kind,
+        }
     }
 
     /// A fresh task (created, no worktree) from a replayed `TaskCreated`.
     fn task() -> Task {
         let events = [
-            event(1, None, EventKind::SessionCreated { name: "s".into(), repos: vec![RepoInfo { path: "/r".into(), github: Some("o/r".into()) }] }),
+            event(
+                1,
+                None,
+                EventKind::SessionCreated {
+                    name: "s".into(),
+                    repos: vec![RepoInfo {
+                        path: "/r".into(),
+                        github: Some("o/r".into()),
+                    }],
+                },
+            ),
             event(
                 2,
                 Some(TaskId(1)),
@@ -154,11 +174,21 @@ mod tests {
     }
 
     fn with_worktree(mut t: Task) -> Task {
-        t.worktree = Some(Worktree { path: "/w".into(), branch: "b".into(), port_base: 41000, base: "main".into() });
+        t.worktree = Some(Worktree {
+            path: "/w".into(),
+            branch: "b".into(),
+            port_base: 41000,
+            base: "main".into(),
+        });
         t
     }
 
-    fn pr(checks: Checks, merge_state: MergeState, conflicting: bool, lifecycle: PrLifecycle) -> PrState {
+    fn pr(
+        checks: Checks,
+        merge_state: MergeState,
+        conflicting: bool,
+        lifecycle: PrLifecycle,
+    ) -> PrState {
         PrState {
             number: 7,
             url: "u".into(),
@@ -177,8 +207,16 @@ mod tests {
     }
 
     fn start(role: Role) -> NextStep {
-        let purpose = if role == Role::Builder { Purpose::Fix } else { Purpose::Review };
-        NextStep::StartRun { role, purpose, input: crate::flow::PromptInput::Initial }
+        let purpose = if role == Role::Builder {
+            Purpose::Fix
+        } else {
+            Purpose::Review
+        };
+        NextStep::StartRun {
+            role,
+            purpose,
+            input: crate::flow::PromptInput::Initial,
+        }
     }
 
     #[test]
@@ -188,48 +226,323 @@ mod tests {
         let mut cancelled = with_worktree(task());
         cancelled.cancelled = Some(false);
         let merged_and_cancelled = {
-            let mut t = with_pr(with_worktree(task()), pr(Checks::Success, MergeState::Clean, false, PrLifecycle::Merged));
+            let mut t = with_pr(
+                with_worktree(task()),
+                pr(
+                    Checks::Success,
+                    MergeState::Clean,
+                    false,
+                    PrLifecycle::Merged,
+                ),
+            );
             t.cancelled = Some(false);
             t
         };
         let nothing = NextStep::Nothing;
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(&str, Task, Option<Role>, NextStep, bool, Option<QueuedReason>, Lane, Vec<Flag>)> = vec![
+        let rows: Vec<(
+            &str,
+            Task,
+            Option<Role>,
+            NextStep,
+            bool,
+            Option<QueuedReason>,
+            Lane,
+            Vec<Flag>,
+        )> = vec![
             // 1. merged wins over everything, even cancelled and an active run
-            ("merged", merged_and_cancelled, Some(Role::Builder), nothing.clone(), false, None, Lane::Merged, vec![]),
-            ("cancelled", cancelled, Some(Role::Builder), nothing.clone(), false, None, Lane::Cancelled, vec![]),
+            (
+                "merged",
+                merged_and_cancelled,
+                Some(Role::Builder),
+                nothing.clone(),
+                false,
+                None,
+                Lane::Merged,
+                vec![],
+            ),
+            (
+                "cancelled",
+                cancelled,
+                Some(Role::Builder),
+                nothing.clone(),
+                false,
+                None,
+                Lane::Cancelled,
+                vec![],
+            ),
             // 2. active role
-            ("active builder", with_worktree(task()), Some(Role::Builder), nothing.clone(), false, None, Lane::Working, vec![]),
-            ("active reviewer", with_worktree(task()), Some(Role::Reviewer), nothing.clone(), false, None, Lane::InReview, vec![]),
-            ("active verify", with_worktree(task()), Some(Role::Verify), nothing.clone(), false, None, Lane::InReview, vec![]),
+            (
+                "active builder",
+                with_worktree(task()),
+                Some(Role::Builder),
+                nothing.clone(),
+                false,
+                None,
+                Lane::Working,
+                vec![],
+            ),
+            (
+                "active reviewer",
+                with_worktree(task()),
+                Some(Role::Reviewer),
+                nothing.clone(),
+                false,
+                None,
+                Lane::InReview,
+                vec![],
+            ),
+            (
+                "active verify",
+                with_worktree(task()),
+                Some(Role::Verify),
+                nothing.clone(),
+                false,
+                None,
+                Lane::InReview,
+                vec![],
+            ),
             // 3. no worktree
-            ("no worktree", task(), None, start(Role::Builder), false, None, Lane::Queued, vec![]),
-            ("no worktree waiting", task(), None, start(Role::Builder), false, Some(Slot), Lane::Queued, vec![Flag::Waiting(Slot)]),
+            (
+                "no worktree",
+                task(),
+                None,
+                start(Role::Builder),
+                false,
+                None,
+                Lane::Queued,
+                vec![],
+            ),
+            (
+                "no worktree waiting",
+                task(),
+                None,
+                start(Role::Builder),
+                false,
+                Some(Slot),
+                Lane::Queued,
+                vec![Flag::Waiting(Slot)],
+            ),
             // 4. next step
-            ("start builder", with_worktree(task()), None, start(Role::Builder), false, None, Lane::Working, vec![]),
-            ("start builder waiting", with_worktree(task()), None, start(Role::Builder), false, Some(Slot), Lane::Working, vec![Flag::Waiting(Slot)]),
-            ("start reviewer", with_worktree(task()), None, start(Role::Reviewer), false, None, Lane::InReview, vec![]),
-            ("start verify", with_worktree(task()), None, start(Role::Verify), false, Some(Slot), Lane::InReview, vec![Flag::Waiting(Slot)]),
-            ("await ruling", with_worktree(task()), None, NextStep::AwaitRuling { round: 1 }, false, None, Lane::InReview, vec![]),
+            (
+                "start builder",
+                with_worktree(task()),
+                None,
+                start(Role::Builder),
+                false,
+                None,
+                Lane::Working,
+                vec![],
+            ),
+            (
+                "start builder waiting",
+                with_worktree(task()),
+                None,
+                start(Role::Builder),
+                false,
+                Some(Slot),
+                Lane::Working,
+                vec![Flag::Waiting(Slot)],
+            ),
+            (
+                "start reviewer",
+                with_worktree(task()),
+                None,
+                start(Role::Reviewer),
+                false,
+                None,
+                Lane::InReview,
+                vec![],
+            ),
+            (
+                "start verify",
+                with_worktree(task()),
+                None,
+                start(Role::Verify),
+                false,
+                Some(Slot),
+                Lane::InReview,
+                vec![Flag::Waiting(Slot)],
+            ),
+            (
+                "await ruling",
+                with_worktree(task()),
+                None,
+                NextStep::AwaitRuling { round: 1 },
+                false,
+                None,
+                Lane::InReview,
+                vec![],
+            ),
             // 5. await human
-            ("human review unparsed", with_worktree(task()), None, NextStep::AwaitHuman(HumanReason::ReviewUnparsed), false, None, Lane::InReview, vec![Flag::NeedsMe(HumanReason::ReviewUnparsed)]),
-            ("human verify failed", with_worktree(task()), None, NextStep::AwaitHuman(HumanReason::VerifyFailed), false, None, Lane::InReview, vec![Flag::NeedsMe(HumanReason::VerifyFailed)]),
-            ("human changes requested", with_worktree(task()), None, NextStep::AwaitHuman(HumanReason::ChangesRequested), false, None, Lane::InReview, vec![Flag::NeedsMe(HumanReason::ChangesRequested)]),
-            ("human question", with_worktree(task()), None, NextStep::AwaitHuman(HumanReason::BuilderQuestion), false, None, Lane::Working, vec![Flag::NeedsMe(HumanReason::BuilderQuestion)]),
-            ("human crashed", with_worktree(task()), None, NextStep::AwaitHuman(HumanReason::RunCrashed), false, None, Lane::Working, vec![Flag::NeedsMe(HumanReason::RunCrashed)]),
-            ("human agent stopped", with_worktree(task()), None, NextStep::AwaitHuman(HumanReason::AgentStopped), false, None, Lane::Working, vec![Flag::NeedsMe(HumanReason::AgentStopped)]),
+            (
+                "human review unparsed",
+                with_worktree(task()),
+                None,
+                NextStep::AwaitHuman(HumanReason::ReviewUnparsed),
+                false,
+                None,
+                Lane::InReview,
+                vec![Flag::NeedsMe(HumanReason::ReviewUnparsed)],
+            ),
+            (
+                "human verify failed",
+                with_worktree(task()),
+                None,
+                NextStep::AwaitHuman(HumanReason::VerifyFailed),
+                false,
+                None,
+                Lane::InReview,
+                vec![Flag::NeedsMe(HumanReason::VerifyFailed)],
+            ),
+            (
+                "human changes requested",
+                with_worktree(task()),
+                None,
+                NextStep::AwaitHuman(HumanReason::ChangesRequested),
+                false,
+                None,
+                Lane::InReview,
+                vec![Flag::NeedsMe(HumanReason::ChangesRequested)],
+            ),
+            (
+                "human question",
+                with_worktree(task()),
+                None,
+                NextStep::AwaitHuman(HumanReason::BuilderQuestion),
+                false,
+                None,
+                Lane::Working,
+                vec![Flag::NeedsMe(HumanReason::BuilderQuestion)],
+            ),
+            (
+                "human crashed",
+                with_worktree(task()),
+                None,
+                NextStep::AwaitHuman(HumanReason::RunCrashed),
+                false,
+                None,
+                Lane::Working,
+                vec![Flag::NeedsMe(HumanReason::RunCrashed)],
+            ),
+            (
+                "human agent stopped",
+                with_worktree(task()),
+                None,
+                NextStep::AwaitHuman(HumanReason::AgentStopped),
+                false,
+                None,
+                Lane::Working,
+                vec![Flag::NeedsMe(HumanReason::AgentStopped)],
+            ),
             // 6. open PR
-            ("pr ready", with_pr(with_worktree(task()), open(Checks::Success, MergeState::Clean, false)), None, nothing.clone(), false, None, Lane::ReadyToMerge, vec![]),
-            ("pr green, blocked", with_pr(with_worktree(task()), open(Checks::Success, MergeState::Blocked, false)), None, nothing.clone(), false, None, Lane::InReview, vec![]),
-            ("pr conflicting", with_pr(with_worktree(task()), open(Checks::Success, MergeState::Clean, true)), None, nothing.clone(), false, None, Lane::Ci, vec![]),
-            ("pr pending", with_pr(with_worktree(task()), open(Checks::Pending, MergeState::Blocked, false)), None, nothing.clone(), false, None, Lane::Ci, vec![]),
-            ("pr failing", with_pr(with_worktree(task()), open(Checks::Failure { failed: vec!["x".into()] }, MergeState::Unstable, false)), None, nothing.clone(), false, None, Lane::Ci, vec![]),
+            (
+                "pr ready",
+                with_pr(
+                    with_worktree(task()),
+                    open(Checks::Success, MergeState::Clean, false),
+                ),
+                None,
+                nothing.clone(),
+                false,
+                None,
+                Lane::ReadyToMerge,
+                vec![],
+            ),
+            (
+                "pr green, blocked",
+                with_pr(
+                    with_worktree(task()),
+                    open(Checks::Success, MergeState::Blocked, false),
+                ),
+                None,
+                nothing.clone(),
+                false,
+                None,
+                Lane::InReview,
+                vec![],
+            ),
+            (
+                "pr conflicting",
+                with_pr(
+                    with_worktree(task()),
+                    open(Checks::Success, MergeState::Clean, true),
+                ),
+                None,
+                nothing.clone(),
+                false,
+                None,
+                Lane::Ci,
+                vec![],
+            ),
+            (
+                "pr pending",
+                with_pr(
+                    with_worktree(task()),
+                    open(Checks::Pending, MergeState::Blocked, false),
+                ),
+                None,
+                nothing.clone(),
+                false,
+                None,
+                Lane::Ci,
+                vec![],
+            ),
+            (
+                "pr failing",
+                with_pr(
+                    with_worktree(task()),
+                    open(
+                        Checks::Failure {
+                            failed: vec!["x".into()],
+                        },
+                        MergeState::Unstable,
+                        false,
+                    ),
+                ),
+                None,
+                nothing.clone(),
+                false,
+                None,
+                Lane::Ci,
+                vec![],
+            ),
             // 7. otherwise
-            ("nothing, no pr", with_worktree(task()), None, nothing.clone(), false, None, Lane::Queued, vec![]),
-            ("closed pr", with_pr(with_worktree(task()), pr(Checks::Success, MergeState::Clean, false, PrLifecycle::Closed)), None, nothing, false, None, Lane::Queued, vec![]),
+            (
+                "nothing, no pr",
+                with_worktree(task()),
+                None,
+                nothing.clone(),
+                false,
+                None,
+                Lane::Queued,
+                vec![],
+            ),
+            (
+                "closed pr",
+                with_pr(
+                    with_worktree(task()),
+                    pr(
+                        Checks::Success,
+                        MergeState::Clean,
+                        false,
+                        PrLifecycle::Closed,
+                    ),
+                ),
+                None,
+                nothing,
+                false,
+                None,
+                Lane::Queued,
+                vec![],
+            ),
         ];
         for (name, t, role, next, paused, waiting, want_lane, want_flags) in rows {
-            assert_eq!(lane(&t, role, &next, paused, waiting), (want_lane, want_flags), "{name}");
+            assert_eq!(
+                lane(&t, role, &next, paused, waiting),
+                (want_lane, want_flags),
+                "{name}"
+            );
         }
     }
 
@@ -247,7 +560,10 @@ mod tests {
     fn requested_pr_not_yet_seen_is_ci() {
         let mut t = with_worktree(task());
         t.open_pr_requested = true;
-        assert_eq!(lane(&t, None, &NextStep::Nothing, false, None), (Lane::Ci, vec![]));
+        assert_eq!(
+            lane(&t, None, &NextStep::Nothing, false, None),
+            (Lane::Ci, vec![])
+        );
         // a missing PR waits for Frédéric instead
         let next = NextStep::AwaitHuman(HumanReason::PrNotFound);
         assert_eq!(lane(&t, None, &next, false, None).0, Lane::Working);
@@ -256,32 +572,109 @@ mod tests {
     #[test]
     fn needs_me_flag_on_await_human() {
         let t = with_worktree(task());
-        let (l, flags) = lane(&t, None, &NextStep::AwaitHuman(HumanReason::PrNotFound), false, None);
-        assert_eq!((l, flags), (Lane::Working, vec![Flag::NeedsMe(HumanReason::PrNotFound)]));
+        let (l, flags) = lane(
+            &t,
+            None,
+            &NextStep::AwaitHuman(HumanReason::PrNotFound),
+            false,
+            None,
+        );
+        assert_eq!(
+            (l, flags),
+            (Lane::Working, vec![Flag::NeedsMe(HumanReason::PrNotFound)])
+        );
     }
 
     #[test]
     fn ready_to_merge_needs_clean_merge_state() {
-        let t = |m| with_pr(with_worktree(task()), pr(Checks::Success, m, false, PrLifecycle::Open));
-        assert_eq!(lane(&t(MergeState::Clean), None, &NextStep::Nothing, false, None).0, Lane::ReadyToMerge);
-        assert_eq!(lane(&t(MergeState::Blocked), None, &NextStep::Nothing, false, None).0, Lane::InReview);
+        let t = |m| {
+            with_pr(
+                with_worktree(task()),
+                pr(Checks::Success, m, false, PrLifecycle::Open),
+            )
+        };
+        assert_eq!(
+            lane(&t(MergeState::Clean), None, &NextStep::Nothing, false, None).0,
+            Lane::ReadyToMerge
+        );
+        assert_eq!(
+            lane(
+                &t(MergeState::Blocked),
+                None,
+                &NextStep::Nothing,
+                false,
+                None
+            )
+            .0,
+            Lane::InReview
+        );
     }
 
     #[test]
     fn no_ci_clean_pr_is_ready_to_merge() {
         // A repo with no CI: GitHub's rollup is empty and the merge state CLEAN.
-        let t = |m, x| with_pr(with_worktree(task()), pr(Checks::None, m, x, PrLifecycle::Open));
-        assert_eq!(lane(&t(MergeState::Clean, false), None, &NextStep::Nothing, false, None).0, Lane::ReadyToMerge);
-        assert_eq!(lane(&t(MergeState::Clean, true), None, &NextStep::Nothing, false, None).0, Lane::Ci);
-        assert_eq!(lane(&t(MergeState::Unstable, false), None, &NextStep::Nothing, false, None).0, Lane::Ci);
+        let t = |m, x| {
+            with_pr(
+                with_worktree(task()),
+                pr(Checks::None, m, x, PrLifecycle::Open),
+            )
+        };
+        assert_eq!(
+            lane(
+                &t(MergeState::Clean, false),
+                None,
+                &NextStep::Nothing,
+                false,
+                None
+            )
+            .0,
+            Lane::ReadyToMerge
+        );
+        assert_eq!(
+            lane(
+                &t(MergeState::Clean, true),
+                None,
+                &NextStep::Nothing,
+                false,
+                None
+            )
+            .0,
+            Lane::Ci
+        );
+        assert_eq!(
+            lane(
+                &t(MergeState::Unstable, false),
+                None,
+                &NextStep::Nothing,
+                false,
+                None
+            )
+            .0,
+            Lane::Ci
+        );
     }
 
     #[test]
     fn paused_flag_added() {
-        let (l, flags) = lane(&task(), None, &start(Role::Builder), true, Some(QueuedReason::Paused));
+        let (l, flags) = lane(
+            &task(),
+            None,
+            &start(Role::Builder),
+            true,
+            Some(QueuedReason::Paused),
+        );
         assert_eq!(l, Lane::Queued);
-        assert_eq!(flags, vec![Flag::Waiting(QueuedReason::Paused), Flag::Paused]);
-        let (_, flags) = lane(&with_worktree(task()), Some(Role::Builder), &NextStep::Nothing, true, None);
+        assert_eq!(
+            flags,
+            vec![Flag::Waiting(QueuedReason::Paused), Flag::Paused]
+        );
+        let (_, flags) = lane(
+            &with_worktree(task()),
+            Some(Role::Builder),
+            &NextStep::Nothing,
+            true,
+            None,
+        );
         assert_eq!(flags, vec![Flag::Paused]);
     }
 }

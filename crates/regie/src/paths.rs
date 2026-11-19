@@ -13,8 +13,12 @@ pub struct DataDir {
 
 impl Default for DataDir {
     fn default() -> Self {
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-        DataDir { root: home.join(".regie") }
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        DataDir {
+            root: home.join(".regie"),
+        }
     }
 }
 
@@ -56,7 +60,9 @@ mod tests {
     #[test]
     fn layout_and_ensure() {
         let tmp = tempfile::tempdir().unwrap();
-        let d = DataDir { root: tmp.path().join(".regie") };
+        let d = DataDir {
+            root: tmp.path().join(".regie"),
+        };
         d.ensure().unwrap();
         d.ensure().unwrap();
         assert!(d.runs().is_dir() && d.worktrees().is_dir());

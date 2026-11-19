@@ -7,8 +7,8 @@ use ts_rs::TS;
 
 use crate::event::{Event, EventKind, LoopKind, Purpose, RepoInfo, Role, RunOutcome};
 use crate::facts::ProjectFacts;
-use crate::flow;
 use crate::findings::{parse_builder_status, BuilderStatus, ReviewOutcome, Ruling, VerifyOutcome};
+use crate::flow;
 use crate::github::{PrComment, PrState, ReviewDecision};
 use crate::ids::{Millis, RunId, SessionId, TaskId};
 use crate::settings::{Effort, Level, Provider};
@@ -149,14 +149,28 @@ impl State {
         match &e.kind {
             EventKind::SessionCreated { name, repos } => {
                 if let Some(id) = e.session {
-                    let session = Session { id, name: name.clone(), repos: repos.clone(), paused: false };
+                    let session = Session {
+                        id,
+                        name: name.clone(),
+                        repos: repos.clone(),
+                        paused: false,
+                    };
                     self.sessions.insert(id, session);
                 }
             }
             EventKind::ProjectFactsSet { repo, facts } => {
                 self.project_facts.insert(repo.clone(), facts.clone());
             }
-            EventKind::TaskCreated { repo, title, instruction, tickets, blocked_by, level, paths, provider: _ } => {
+            EventKind::TaskCreated {
+                repo,
+                title,
+                instruction,
+                tickets,
+                blocked_by,
+                level,
+                paths,
+                provider: _,
+            } => {
                 if let (Some(id), Some(session)) = (e.task, e.session) {
                     let task = Task {
                         id,
@@ -192,7 +206,15 @@ impl State {
                     self.tasks.insert(id, task);
                 }
             }
-            EventKind::RunStarted { run, role, purpose, provider, model, effort, resume_of: _ } => {
+            EventKind::RunStarted {
+                run,
+                role,
+                purpose,
+                provider,
+                model,
+                effort,
+                resume_of: _,
+            } => {
                 let Some(task) = e.task else { return };
                 self.runs.insert(
                     *run,
@@ -220,12 +242,18 @@ impl State {
                     r.pid = Some(*pid);
                 }
             }
-            EventKind::RunAttached { run, native_session, pid } => {
+            EventKind::RunAttached {
+                run,
+                native_session,
+                pid,
+            } => {
                 // A Message run takes its message off the queue only once its chain
                 // first attaches: interrupted before that, the message was never sent.
-                let takes_message =
-                    !self.chain_attached(*run) && self.effective_purpose(*run) == Some(Purpose::Message);
-                let Some(r) = self.runs.get_mut(run) else { return };
+                let takes_message = !self.chain_attached(*run)
+                    && self.effective_purpose(*run) == Some(Purpose::Message);
+                let Some(r) = self.runs.get_mut(run) else {
+                    return;
+                };
                 r.native_session = Some(native_session.clone());
                 r.pid = pid.or(r.pid);
                 if r.role == Role::Builder {
@@ -237,16 +265,25 @@ impl State {
                     }
                 }
             }
-            EventKind::RunFinished { run, outcome, final_message } => {
+            EventKind::RunFinished {
+                run,
+                outcome,
+                final_message,
+            } => {
                 let purpose = self.effective_purpose(*run);
-                let Some(r) = self.runs.get_mut(run) else { return };
+                let Some(r) = self.runs.get_mut(run) else {
+                    return;
+                };
                 r.outcome = Some(*outcome);
                 r.final_message = final_message.clone();
                 let role = r.role;
-                let Some(t) = self.tasks.get_mut(&r.task) else { return };
+                let Some(t) = self.tasks.get_mut(&r.task) else {
+                    return;
+                };
                 t.last_run_outcome = Some(*outcome);
                 if role == Role::Builder && *outcome == RunOutcome::Finished {
-                    t.last_builder_status = Some(parse_builder_status(final_message.as_deref().unwrap_or("")));
+                    t.last_builder_status =
+                        Some(parse_builder_status(final_message.as_deref().unwrap_or("")));
                     if purpose == Some(Purpose::Fix) {
                         if let Some(review) = t.reviews.last_mut() {
                             review.fix_done = true;
@@ -264,7 +301,10 @@ impl State {
             EventKind::UsageReading { provider, reading } => {
                 self.readings.insert(*provider, reading.clone());
             }
-            EventKind::LimitHit { provider, resets_at } => {
+            EventKind::LimitHit {
+                provider,
+                resets_at,
+            } => {
                 self.blocked_until.insert(*provider, *resets_at);
             }
             // Usage totals are not part of the state.
@@ -291,7 +331,10 @@ impl State {
 
     /// The task's run that has started and not finished.
     pub fn active_run(&self, task: TaskId) -> Option<&Run> {
-        self.runs.values().rev().find(|r| r.task == task && r.outcome.is_none())
+        self.runs
+            .values()
+            .rev()
+            .find(|r| r.task == task && r.outcome.is_none())
     }
 
     /// The task's most recently started run.
@@ -301,19 +344,26 @@ impl State {
 
     /// Whether a builder run was ever started for the task.
     pub fn builder_started(&self, task: TaskId) -> bool {
-        self.runs.values().any(|r| r.task == task && r.role == Role::Builder)
+        self.runs
+            .values()
+            .any(|r| r.task == task && r.role == Role::Builder)
     }
 
     /// A run's purpose, looking through `Resume` runs to the run they continue
     /// (the latest earlier non-resume run of the same task and role).
     pub fn effective_purpose(&self, run: RunId) -> Option<Purpose> {
-        self.runs.get(&self.chain_start(run)?).map(|r| r.purpose).filter(|p| *p != Purpose::Resume)
+        self.runs
+            .get(&self.chain_start(run)?)
+            .map(|r| r.purpose)
+            .filter(|p| *p != Purpose::Resume)
     }
 
     /// Whether the run, or an earlier run of the chain it continues, attached to
     /// an agent session (so that session got the chain's prompt).
     pub fn chain_attached(&self, run: RunId) -> bool {
-        let (Some(r), Some(start)) = (self.runs.get(&run), self.chain_start(run)) else { return false };
+        let (Some(r), Some(start)) = (self.runs.get(&run), self.chain_start(run)) else {
+            return false;
+        };
         self.runs
             .range(start..=run)
             .map(|(_, p)| p)
@@ -373,13 +423,18 @@ impl Task {
             || self.setup_ok == Some(false)
             || self.last_builder_status == Some(BuilderStatus::Question)
             || !self.pending_messages.is_empty();
-        let Some(latest) = self.reviews.last().filter(|_| !waits_first) else { return };
+        let Some(latest) = self.reviews.last().filter(|_| !waits_first) else {
+            return;
+        };
         match &latest.outcome {
             ReviewOutcome::Unparsed { .. } => {
                 self.reviews.pop();
             }
             ReviewOutcome::Findings(_) => {
-                let failed = self.verify.as_ref().is_some_and(|v| !flow::verified(v, &flow::to_fix(latest)));
+                let failed = self
+                    .verify
+                    .as_ref()
+                    .is_some_and(|v| !flow::verified(v, &flow::to_fix(latest)));
                 if latest.fix_done && failed {
                     self.verify = None;
                 }
@@ -391,9 +446,19 @@ impl Task {
     fn apply(&mut self, kind: &EventKind, at: Millis) {
         match kind {
             EventKind::LevelRaised { level } => self.level = *level,
-            EventKind::WorktreeCreated { path, branch, port_base, base } => {
+            EventKind::WorktreeCreated {
+                path,
+                branch,
+                port_base,
+                base,
+            } => {
                 let (path, branch, base) = (path.clone(), branch.clone(), base.clone());
-                self.worktree = Some(Worktree { path, branch, port_base: *port_base, base });
+                self.worktree = Some(Worktree {
+                    path,
+                    branch,
+                    port_base: *port_base,
+                    base,
+                });
                 self.worktree_created_at = Some(at);
             }
             EventKind::SetupFinished { ok, output_tail } => {
@@ -406,8 +471,17 @@ impl Task {
                     self.pending_messages.remove(0);
                 }
             }
-            EventKind::ReviewReported { run: _, round, outcome } => {
-                let record = ReviewRecord { round: *round, outcome: outcome.clone(), rulings: None, fix_done: false };
+            EventKind::ReviewReported {
+                run: _,
+                round,
+                outcome,
+            } => {
+                let record = ReviewRecord {
+                    round: *round,
+                    outcome: outcome.clone(),
+                    rulings: None,
+                    fix_done: false,
+                };
                 match self.reviews.iter_mut().find(|r| r.round == *round) {
                     Some(existing) => *existing = record,
                     None => self.reviews.push(record),
@@ -475,7 +549,14 @@ mod tests {
             | EventKind::LimitHit { .. } => None,
             _ => Some(T),
         };
-        Event { id: EventId(id), at: Millis(1000 + id), session: Some(S), task, actor: Actor::Regie, kind }
+        Event {
+            id: EventId(id),
+            at: Millis(1000 + id),
+            session: Some(S),
+            task,
+            actor: Actor::Regie,
+            kind,
+        }
     }
 
     fn started(run: i64, role: Role, purpose: Purpose) -> EventKind {
@@ -491,7 +572,11 @@ mod tests {
     }
 
     fn finished(run: i64, outcome: RunOutcome, msg: &str) -> EventKind {
-        EventKind::RunFinished { run: RunId(run), outcome, final_message: Some(msg.into()) }
+        EventKind::RunFinished {
+            run: RunId(run),
+            outcome,
+            final_message: Some(msg.into()),
+        }
     }
 
     fn pr(sha: &str, decision: Option<ReviewDecision>) -> PrState {
@@ -508,16 +593,28 @@ mod tests {
     }
 
     fn blocking_finding() -> Finding {
-        Finding { id: 1, title: "panics".into(), kind: FindingKind::Bug, blocking: true, evidence: None }
+        Finding {
+            id: 1,
+            title: "panics".into(),
+            kind: FindingKind::Bug,
+            blocking: true,
+            evidence: None,
+        }
     }
 
     fn base() -> Vec<EventKind> {
         vec![
             EventKind::SessionCreated {
                 name: "s".into(),
-                repos: vec![RepoInfo { path: "/r".into(), github: Some("o/r".into()) }],
+                repos: vec![RepoInfo {
+                    path: "/r".into(),
+                    github: Some("o/r".into()),
+                }],
             },
-            EventKind::ProjectFactsSet { repo: "/r".into(), facts: ProjectFacts::default() },
+            EventKind::ProjectFactsSet {
+                repo: "/r".into(),
+                facts: ProjectFacts::default(),
+            },
             EventKind::TaskCreated {
                 repo: "/r".into(),
                 title: "t".into(),
@@ -532,18 +629,36 @@ mod tests {
     }
 
     fn state_of(kinds: Vec<EventKind>) -> State {
-        let events: Vec<Event> =
-            base().into_iter().chain(kinds).enumerate().map(|(i, k)| ev(i as i64 + 1, k)).collect();
+        let events: Vec<Event> = base()
+            .into_iter()
+            .chain(kinds)
+            .enumerate()
+            .map(|(i, k)| ev(i as i64 + 1, k))
+            .collect();
         State::replay(&events)
     }
 
     fn script() -> Vec<Event> {
         let kinds = base().into_iter().chain([
-            EventKind::WorktreeCreated { path: "/w/t1".into(), branch: "regie/t1-t".into(), port_base: 41000, base: "main".into() },
-            EventKind::SetupFinished { ok: true, output_tail: "ok".into() },
+            EventKind::WorktreeCreated {
+                path: "/w/t1".into(),
+                branch: "regie/t1-t".into(),
+                port_base: 41000,
+                base: "main".into(),
+            },
+            EventKind::SetupFinished {
+                ok: true,
+                output_tail: "ok".into(),
+            },
             started(1, Role::Builder, Purpose::Initial),
-            EventKind::RunAttached { run: RunId(1), native_session: "n1".into(), pid: Some(42) },
-            EventKind::MessageQueued { text: "also do X".into() },
+            EventKind::RunAttached {
+                run: RunId(1),
+                native_session: "n1".into(),
+                pid: Some(42),
+            },
+            EventKind::MessageQueued {
+                text: "also do X".into(),
+            },
             EventKind::MessageDelivered,
             finished(1, RunOutcome::Finished, "Done.\nStatus: done"),
             started(2, Role::Reviewer, Purpose::Review),
@@ -555,7 +670,11 @@ mod tests {
             },
             EventKind::FindingsRuled {
                 round: 1,
-                rulings: vec![Ruling { finding: 1, decision: Decision::Fix, note: String::new() }],
+                rulings: vec![Ruling {
+                    finding: 1,
+                    decision: Decision::Fix,
+                    note: String::new(),
+                }],
             },
             started(3, Role::Builder, Purpose::Fix),
             finished(3, RunOutcome::Finished, "Status: done"),
@@ -571,7 +690,9 @@ mod tests {
             finished(4, RunOutcome::Finished, "verify"),
             started(5, Role::Builder, Purpose::OpenPr),
             finished(5, RunOutcome::Finished, "Status: done"),
-            EventKind::PrObserved { pr: pr("abc", None) },
+            EventKind::PrObserved {
+                pr: pr("abc", None),
+            },
             EventKind::PrCommentObserved {
                 comment: PrComment {
                     id: "c1".into(),
@@ -585,16 +706,28 @@ mod tests {
             EventKind::UsageReading {
                 provider: Provider::Claude,
                 reading: Reading {
-                    five_hour: Window { used: 0.1, resets_at: Millis(9) },
-                    seven_day: Window { used: 0.2, resets_at: Millis(99) },
+                    five_hour: Window {
+                        used: 0.1,
+                        resets_at: Millis(9),
+                    },
+                    seven_day: Window {
+                        used: 0.2,
+                        resets_at: Millis(99),
+                    },
                     read_at: Millis(3),
                 },
             },
-            EventKind::LimitHit { provider: Provider::Claude, resets_at: Millis(77) },
+            EventKind::LimitHit {
+                provider: Provider::Claude,
+                resets_at: Millis(77),
+            },
             EventKind::SessionPaused,
             EventKind::AllPaused,
         ]);
-        kinds.enumerate().map(|(i, k)| ev(i as i64 + 1, k)).collect()
+        kinds
+            .enumerate()
+            .map(|(i, k)| ev(i as i64 + 1, k))
+            .collect()
     }
 
     #[test]
@@ -637,9 +770,15 @@ mod tests {
     #[test]
     fn next_ids_start_at_one() {
         let s = State::default();
-        assert_eq!((s.next_session_id(), s.next_task_id(), s.next_run_id()), (SessionId(1), TaskId(1), RunId(1)));
+        assert_eq!(
+            (s.next_session_id(), s.next_task_id(), s.next_run_id()),
+            (SessionId(1), TaskId(1), RunId(1))
+        );
         let s = State::replay(&script());
-        assert_eq!((s.next_session_id(), s.next_task_id(), s.next_run_id()), (SessionId(2), TaskId(2), RunId(6)));
+        assert_eq!(
+            (s.next_session_id(), s.next_task_id(), s.next_run_id()),
+            (SessionId(2), TaskId(2), RunId(6))
+        );
     }
 
     #[test]
@@ -647,7 +786,10 @@ mod tests {
         let s = state_of(vec![started(1, Role::Builder, Purpose::Initial)]);
         assert_eq!(s.active_run(T).map(|r| r.id), Some(RunId(1)));
         assert!(s.builder_started(T));
-        let s = state_of(vec![started(1, Role::Builder, Purpose::Initial), finished(1, RunOutcome::Finished, "")]);
+        let s = state_of(vec![
+            started(1, Role::Builder, Purpose::Initial),
+            finished(1, RunOutcome::Finished, ""),
+        ]);
         assert_eq!(s.active_run(T), None);
         assert_eq!(s.last_run(T).map(|r| r.id), Some(RunId(1)));
         assert!(!state_of(vec![]).builder_started(T));
@@ -659,7 +801,10 @@ mod tests {
             started(1, Role::Builder, Purpose::Initial),
             finished(1, RunOutcome::Finished, "Which DB?\nStatus: question"),
         ]);
-        assert_eq!(s.tasks[&T].last_builder_status, Some(BuilderStatus::Question));
+        assert_eq!(
+            s.tasks[&T].last_builder_status,
+            Some(BuilderStatus::Question)
+        );
         let s = state_of(vec![
             started(1, Role::Builder, Purpose::Initial),
             finished(1, RunOutcome::Crashed, "Status: done"),
@@ -696,15 +841,26 @@ mod tests {
 
     #[test]
     fn findings_ruled_sets_that_rounds_rulings() {
-        let rulings = vec![Ruling { finding: 1, decision: Decision::Advisory, note: "meh".into() }];
+        let rulings = vec![Ruling {
+            finding: 1,
+            decision: Decision::Advisory,
+            note: "meh".into(),
+        }];
         let s = state_of(vec![
-            EventKind::ReviewReported { run: RunId(9), round: 1, outcome: ReviewOutcome::Findings(vec![]) },
+            EventKind::ReviewReported {
+                run: RunId(9),
+                round: 1,
+                outcome: ReviewOutcome::Findings(vec![]),
+            },
             EventKind::ReviewReported {
                 run: RunId(10),
                 round: 2,
                 outcome: ReviewOutcome::Findings(vec![blocking_finding()]),
             },
-            EventKind::FindingsRuled { round: 2, rulings: rulings.clone() },
+            EventKind::FindingsRuled {
+                round: 2,
+                rulings: rulings.clone(),
+            },
         ]);
         let r = &s.tasks[&T].reviews;
         assert_eq!(r.iter().map(|x| x.round).collect::<Vec<_>>(), [1, 2]);
@@ -718,10 +874,24 @@ mod tests {
         let s = state_of(vec![q("a"), q("b"), q("c")]);
         assert_eq!(s.tasks[&T].pending_messages, ["a", "b", "c"]);
         // a Message run takes the first one once it attaches (before that it may never be sent)
-        let s = state_of(vec![q("a"), q("b"), q("c"), started(1, Role::Builder, Purpose::Message)]);
+        let s = state_of(vec![
+            q("a"),
+            q("b"),
+            q("c"),
+            started(1, Role::Builder, Purpose::Message),
+        ]);
         assert_eq!(s.tasks[&T].pending_messages, ["a", "b", "c"]);
-        let attached = |run| EventKind::RunAttached { run: RunId(run), native_session: "n".into(), pid: None };
-        let s = state_of(vec![q("a"), q("b"), started(1, Role::Builder, Purpose::Message), attached(1)]);
+        let attached = |run| EventKind::RunAttached {
+            run: RunId(run),
+            native_session: "n".into(),
+            pid: None,
+        };
+        let s = state_of(vec![
+            q("a"),
+            q("b"),
+            started(1, Role::Builder, Purpose::Message),
+            attached(1),
+        ]);
         assert_eq!(s.tasks[&T].pending_messages, ["b"]);
         // interrupted before attaching: still queued; the run resent with it takes it
         let s = state_of(vec![
@@ -755,15 +925,25 @@ mod tests {
     fn spawned_run_records_its_pid() {
         let s = state_of(vec![
             started(1, Role::Builder, Purpose::Initial),
-            EventKind::RunSpawned { run: RunId(1), pid: 4242 },
+            EventKind::RunSpawned {
+                run: RunId(1),
+                pid: 4242,
+            },
         ]);
         assert_eq!(s.runs[&RunId(1)].pid, Some(4242));
         assert_eq!(s.runs[&RunId(1)].native_session, None);
         // attaching keeps it when the runner sends no pid
         let s = state_of(vec![
             started(1, Role::Builder, Purpose::Initial),
-            EventKind::RunSpawned { run: RunId(1), pid: 4242 },
-            EventKind::RunAttached { run: RunId(1), native_session: "n1".into(), pid: None },
+            EventKind::RunSpawned {
+                run: RunId(1),
+                pid: 4242,
+            },
+            EventKind::RunAttached {
+                run: RunId(1),
+                native_session: "n1".into(),
+                pid: None,
+            },
         ]);
         assert_eq!(s.runs[&RunId(1)].pid, Some(4242));
     }
@@ -782,11 +962,20 @@ mod tests {
             // a message with no changes requested is not PR feedback
             started(4, Role::Builder, Purpose::Message),
             finished(4, RunOutcome::Finished, "Status: done"),
-            EventKind::PrObserved { pr: pr("s3", Some(ReviewDecision::ChangesRequested)) },
+            EventKind::PrObserved {
+                pr: pr("s3", Some(ReviewDecision::ChangesRequested)),
+            },
             started(5, Role::Builder, Purpose::Message),
         ]);
         let t = &s.tasks[&T];
-        assert_eq!(t.loops, LoopCounts { ci: 2, conflict: 1, pr_feedback: 1 });
+        assert_eq!(
+            t.loops,
+            LoopCounts {
+                ci: 2,
+                conflict: 1,
+                pr_feedback: 1
+            }
+        );
         assert_eq!(t.fixed_shas[&LoopKind::Ci], "s2");
         assert_eq!(t.fixed_shas[&LoopKind::Conflict], "s2");
         assert_eq!(t.fixed_shas[&LoopKind::PrFeedback], "s3");
@@ -796,7 +985,10 @@ mod tests {
     #[test]
     fn retry_clears_failures_and_turns_a_crash_into_a_resume() {
         let s = state_of(vec![
-            EventKind::SetupFinished { ok: false, output_tail: "boom".into() },
+            EventKind::SetupFinished {
+                ok: false,
+                output_tail: "boom".into(),
+            },
             EventKind::PrMissing,
             started(1, Role::Builder, Purpose::Initial),
             finished(1, RunOutcome::Crashed, ""),
@@ -807,14 +999,20 @@ mod tests {
         assert_eq!(t.last_run_outcome, Some(RunOutcome::Interrupted));
         // a finished run's outcome is simply cleared; a good setup is kept
         let s = state_of(vec![
-            EventKind::SetupFinished { ok: true, output_tail: String::new() },
+            EventKind::SetupFinished {
+                ok: true,
+                output_tail: String::new(),
+            },
             started(1, Role::Builder, Purpose::OpenPr),
             finished(1, RunOutcome::Finished, "Status: done"),
             EventKind::PrMissing,
             EventKind::TaskRetried,
         ]);
         let t = &s.tasks[&T];
-        assert_eq!((t.setup_ok, t.pr_missing, t.last_run_outcome), (Some(true), false, None));
+        assert_eq!(
+            (t.setup_ok, t.pr_missing, t.last_run_outcome),
+            (Some(true), false, None)
+        );
         assert!(t.open_pr_requested);
     }
 
@@ -822,13 +1020,22 @@ mod tests {
         vec![
             started(run, Role::Reviewer, Purpose::Review),
             finished(run, RunOutcome::Finished, "review"),
-            EventKind::ReviewReported { run: RunId(run), round, outcome },
+            EventKind::ReviewReported {
+                run: RunId(run),
+                round,
+                outcome,
+            },
         ]
     }
 
     fn built() -> Vec<EventKind> {
         vec![
-            EventKind::WorktreeCreated { path: "/w/t1".into(), branch: "regie/t1-t".into(), port_base: 41000, base: "main".into() },
+            EventKind::WorktreeCreated {
+                path: "/w/t1".into(),
+                branch: "regie/t1-t".into(),
+                port_base: 41000,
+                base: "main".into(),
+            },
             started(1, Role::Builder, Purpose::Initial),
             finished(1, RunOutcome::Finished, "Status: done"),
         ]
@@ -845,15 +1052,25 @@ mod tests {
     fn ruled_fix(round: u32) -> EventKind {
         EventKind::FindingsRuled {
             round,
-            rulings: vec![Ruling { finding: 1, decision: Decision::Fix, note: String::new() }],
+            rulings: vec![Ruling {
+                finding: 1,
+                decision: Decision::Fix,
+                note: String::new(),
+            }],
         }
     }
 
     #[test]
     fn retry_runs_an_unparsed_review_again() {
         // R9: round 1 could not be read; a retry drops it and the reviewer runs again.
-        let kinds: Vec<EventKind> = built().into_iter().chain(review(2, 1, unparsed())).collect();
-        assert_eq!(next(&state_of(kinds.clone())), NextStep::AwaitHuman(HumanReason::ReviewUnparsed));
+        let kinds: Vec<EventKind> = built()
+            .into_iter()
+            .chain(review(2, 1, unparsed()))
+            .collect();
+        assert_eq!(
+            next(&state_of(kinds.clone())),
+            NextStep::AwaitHuman(HumanReason::ReviewUnparsed)
+        );
         let s = state_of(kinds.into_iter().chain([EventKind::TaskRetried]).collect());
         assert!(s.tasks[&T].reviews.is_empty());
         let round = |round| NextStep::StartRun {
@@ -866,13 +1083,28 @@ mod tests {
         // round 2: round 1 stays, round 2 runs again
         let kinds: Vec<EventKind> = built()
             .into_iter()
-            .chain(review(2, 1, ReviewOutcome::Findings(vec![blocking_finding()])))
-            .chain([ruled_fix(1), started(3, Role::Builder, Purpose::Fix), finished(3, RunOutcome::Finished, "Status: done")])
+            .chain(review(
+                2,
+                1,
+                ReviewOutcome::Findings(vec![blocking_finding()]),
+            ))
+            .chain([
+                ruled_fix(1),
+                started(3, Role::Builder, Purpose::Fix),
+                finished(3, RunOutcome::Finished, "Status: done"),
+            ])
             .chain(review(4, 2, unparsed()))
             .chain([EventKind::TaskRetried])
             .collect();
         let s = state_of(kinds);
-        assert_eq!(s.tasks[&T].reviews.iter().map(|r| r.round).collect::<Vec<_>>(), [1]);
+        assert_eq!(
+            s.tasks[&T]
+                .reviews
+                .iter()
+                .map(|r| r.round)
+                .collect::<Vec<_>>(),
+            [1]
+        );
         assert_eq!(next(&s), round(2));
 
         // a retry that resumes a crashed run keeps the review: the task was not waiting on it
@@ -880,7 +1112,9 @@ mod tests {
             .into_iter()
             .chain(review(2, 1, unparsed()))
             .chain([
-                EventKind::MessageQueued { text: "look again".into() },
+                EventKind::MessageQueued {
+                    text: "look again".into(),
+                },
                 started(3, Role::Builder, Purpose::Message),
                 finished(3, RunOutcome::Crashed, ""),
                 EventKind::TaskRetried,
@@ -893,29 +1127,62 @@ mod tests {
     fn retry_runs_a_failed_verify_again() {
         let verify = |status| EventKind::VerifyReported {
             run: RunId(7),
-            outcome: VerifyOutcome::Results(vec![VerifyResult { finding: 1, status, note: String::new() }]),
+            outcome: VerifyOutcome::Results(vec![VerifyResult {
+                finding: 1,
+                status,
+                note: String::new(),
+            }]),
         };
         let two_rounds = |status| -> Vec<EventKind> {
             built()
                 .into_iter()
-                .chain(review(2, 1, ReviewOutcome::Findings(vec![blocking_finding()])))
-                .chain([ruled_fix(1), started(3, Role::Builder, Purpose::Fix), finished(3, RunOutcome::Finished, "Status: done")])
-                .chain(review(4, 2, ReviewOutcome::Findings(vec![blocking_finding()])))
-                .chain([ruled_fix(2), started(5, Role::Builder, Purpose::Fix), finished(5, RunOutcome::Finished, "Status: done")])
-                .chain([started(6, Role::Verify, Purpose::Verify), finished(6, RunOutcome::Finished, "v"), verify(status)])
+                .chain(review(
+                    2,
+                    1,
+                    ReviewOutcome::Findings(vec![blocking_finding()]),
+                ))
+                .chain([
+                    ruled_fix(1),
+                    started(3, Role::Builder, Purpose::Fix),
+                    finished(3, RunOutcome::Finished, "Status: done"),
+                ])
+                .chain(review(
+                    4,
+                    2,
+                    ReviewOutcome::Findings(vec![blocking_finding()]),
+                ))
+                .chain([
+                    ruled_fix(2),
+                    started(5, Role::Builder, Purpose::Fix),
+                    finished(5, RunOutcome::Finished, "Status: done"),
+                ])
+                .chain([
+                    started(6, Role::Verify, Purpose::Verify),
+                    finished(6, RunOutcome::Finished, "v"),
+                    verify(status),
+                ])
                 .collect()
         };
         // Frédéric has the builder fix it, then retries: verify runs again
         let kinds: Vec<EventKind> = two_rounds(VerifyStatus::NotFixed)
             .into_iter()
             .chain([
-                EventKind::MessageQueued { text: "fix the panic".into() },
+                EventKind::MessageQueued {
+                    text: "fix the panic".into(),
+                },
                 started(7, Role::Builder, Purpose::Message),
-                EventKind::RunAttached { run: RunId(7), native_session: "n1".into(), pid: None },
+                EventKind::RunAttached {
+                    run: RunId(7),
+                    native_session: "n1".into(),
+                    pid: None,
+                },
                 finished(7, RunOutcome::Finished, "Status: done"),
             ])
             .collect();
-        assert_eq!(next(&state_of(kinds.clone())), NextStep::AwaitHuman(HumanReason::VerifyFailed));
+        assert_eq!(
+            next(&state_of(kinds.clone())),
+            NextStep::AwaitHuman(HumanReason::VerifyFailed)
+        );
         let s = state_of(kinds.into_iter().chain([EventKind::TaskRetried]).collect());
         assert_eq!(s.tasks[&T].verify, None);
         assert_eq!(
@@ -923,11 +1190,18 @@ mod tests {
             NextStep::StartRun {
                 role: Role::Verify,
                 purpose: Purpose::Verify,
-                input: PromptInput::Verify { findings: vec![blocking_finding()] },
+                input: PromptInput::Verify {
+                    findings: vec![blocking_finding()]
+                },
             }
         );
         // a verify that passed is kept
-        let s = state_of(two_rounds(VerifyStatus::Fixed).into_iter().chain([EventKind::TaskRetried]).collect());
+        let s = state_of(
+            two_rounds(VerifyStatus::Fixed)
+                .into_iter()
+                .chain([EventKind::TaskRetried])
+                .collect(),
+        );
         assert!(s.tasks[&T].verify.is_some());
     }
 
@@ -960,9 +1234,19 @@ mod tests {
     #[test]
     fn worktree_records_its_base_and_time() {
         // A log written before `base` was recorded still reads.
-        let old: EventKind =
-            serde_json::from_str(r#"{"type":"WorktreeCreated","path":"/w","branch":"b","port_base":41000}"#).unwrap();
-        assert_eq!(old, EventKind::WorktreeCreated { path: "/w".into(), branch: "b".into(), port_base: 41000, base: String::new() });
+        let old: EventKind = serde_json::from_str(
+            r#"{"type":"WorktreeCreated","path":"/w","branch":"b","port_base":41000}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            old,
+            EventKind::WorktreeCreated {
+                path: "/w".into(),
+                branch: "b".into(),
+                port_base: 41000,
+                base: String::new()
+            }
+        );
         let s = State::replay(&script());
         let t = &s.tasks[&TaskId(1)];
         assert_eq!(t.worktree.as_ref().map(|w| w.base.as_str()), Some("main"));

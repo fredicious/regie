@@ -11,7 +11,13 @@ pub struct RepoLocks {
 
 impl RepoLocks {
     pub async fn lock(&self, repo: &Path) -> OwnedMutexGuard<()> {
-        let m = self.map.lock().unwrap().entry(repo.to_path_buf()).or_default().clone();
+        let m = self
+            .map
+            .lock()
+            .unwrap()
+            .entry(repo.to_path_buf())
+            .or_default()
+            .clone();
         m.lock_owned().await
     }
 }

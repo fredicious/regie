@@ -59,7 +59,11 @@ pub fn pick(
             Some(QueuedReason::Paused)
         } else if !c.deps_merged {
             Some(QueuedReason::Dependency)
-        } else if cap.openness.get(&c.provider).is_some_and(|o| *o != Openness::Open) {
+        } else if cap
+            .openness
+            .get(&c.provider)
+            .is_some_and(|o| *o != Openness::Open)
+        {
             Some(QueuedReason::Quota)
         } else if running_here >= s.caps.per_session || total >= s.caps.overall {
             Some(QueuedReason::Slot)
@@ -110,7 +114,12 @@ mod tests {
 
     #[test]
     fn started_work_goes_first() {
-        let cands = [cand(1, 1, false, 10), cand(2, 1, true, 30), cand(3, 1, false, 5), cand(4, 1, true, 20)];
+        let cands = [
+            cand(1, 1, false, 10),
+            cand(2, 1, true, 30),
+            cand(3, 1, false, 5),
+            cand(4, 1, true, 20),
+        ];
         let (start, queued) = pick(&cands, &cap(), &Settings::default());
         // per_session = 2: the two started tasks (by created_at) win
         assert_eq!(start, vec![TaskId(4), TaskId(2)]);
@@ -155,10 +164,8 @@ mod tests {
     fn quota_dependency_paused_reasons() {
         let s = Settings::default();
         let mut c = cap();
-        c.openness.insert(
-            Provider::Codex,
-            Openness::Blocked { until: Millis(99) },
-        );
+        c.openness
+            .insert(Provider::Codex, Openness::Blocked { until: Millis(99) });
         c.paused_sessions.insert(SessionId(3));
         let mut quota = cand(1, 1, false, 1);
         quota.provider = Provider::Codex;

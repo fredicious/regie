@@ -10,7 +10,12 @@ pub fn openness_now(state: &State, now: Millis, s: &Settings) -> BTreeMap<Provid
     [Provider::Claude, Provider::Codex]
         .into_iter()
         .map(|p| {
-            let o = openness(state.readings.get(&p), state.blocked_until.get(&p).copied(), now, &s.thresholds);
+            let o = openness(
+                state.readings.get(&p),
+                state.blocked_until.get(&p).copied(),
+                now,
+                &s.thresholds,
+            );
             (p, o)
         })
         .collect()
@@ -33,15 +38,31 @@ mod tests {
         state.readings.insert(
             Provider::Claude,
             Reading {
-                five_hour: Window { used: 0.8, resets_at: Millis(100) },
-                seven_day: Window { used: 0.1, resets_at: Millis(1000) },
+                five_hour: Window {
+                    used: 0.8,
+                    resets_at: Millis(100),
+                },
+                seven_day: Window {
+                    used: 0.1,
+                    resets_at: Millis(1000),
+                },
                 read_at: Millis(0),
             },
         );
         state.blocked_until.insert(Provider::Codex, Millis(50));
         let o = openness_now(&state, Millis(10), &s);
-        assert_eq!(o[&Provider::Claude], Openness::Threshold { window: WindowKind::FiveHour, used: 0.8, ahead: None });
+        assert_eq!(
+            o[&Provider::Claude],
+            Openness::Threshold {
+                window: WindowKind::FiveHour,
+                used: 0.8,
+                ahead: None
+            }
+        );
         assert_eq!(o[&Provider::Codex], Openness::Blocked { until: Millis(50) });
-        assert_eq!(openness_now(&state, Millis(60), &s)[&Provider::Codex], Openness::Open);
+        assert_eq!(
+            openness_now(&state, Millis(60), &s)[&Provider::Codex],
+            Openness::Open
+        );
     }
 }

@@ -35,8 +35,14 @@ pub enum WindowKind {
 #[ts(export)]
 pub enum Openness {
     Open,
-    Threshold { window: WindowKind, used: f64, ahead: Option<f64> },
-    Blocked { until: Millis },
+    Threshold {
+        window: WindowKind,
+        used: f64,
+        ahead: Option<f64>,
+    },
+    Blocked {
+        until: Millis,
+    },
 }
 
 /// Fraction of the seven-day window already gone, clamped to 0..=1.
@@ -55,14 +61,24 @@ pub fn openness(
     if let Some(until) = blocked_until.filter(|u| u.0 > now.0) {
         return Openness::Blocked { until };
     }
-    let Some(r) = reading else { return Openness::Open };
+    let Some(r) = reading else {
+        return Openness::Open;
+    };
     if r.five_hour.used >= t.five_hour_max {
-        return Openness::Threshold { window: WindowKind::FiveHour, used: r.five_hour.used, ahead: None };
+        return Openness::Threshold {
+            window: WindowKind::FiveHour,
+            used: r.five_hour.used,
+            ahead: None,
+        };
     }
     let used = r.seven_day.used;
     let ahead = used - week_elapsed(r.seven_day.resets_at, now);
     if used > t.weekly_floor && ahead > t.weekly_ahead_max {
-        return Openness::Threshold { window: WindowKind::SevenDay, used, ahead: Some(ahead) };
+        return Openness::Threshold {
+            window: WindowKind::SevenDay,
+            used,
+            ahead: Some(ahead),
+        };
     }
     Openness::Open
 }
@@ -80,8 +96,14 @@ mod tests {
 
     fn reading(five_used: f64, five_resets: i64, week_used: f64, week_resets: i64) -> Reading {
         Reading {
-            five_hour: Window { used: five_used, resets_at: Millis(five_resets) },
-            seven_day: Window { used: week_used, resets_at: Millis(week_resets) },
+            five_hour: Window {
+                used: five_used,
+                resets_at: Millis(five_resets),
+            },
+            seven_day: Window {
+                used: week_used,
+                resets_at: Millis(week_resets),
+            },
             read_at: Millis(0),
         }
     }
@@ -94,14 +116,21 @@ mod tests {
     fn todays_reading_is_open() {
         let now = 0;
         let r = reading(0.30, now + 5 * HOUR, 0.76, now + week_left(0.285));
-        assert_eq!(openness(Some(&r), None, Millis(now), &Thresholds::default()), Openness::Open);
+        assert_eq!(
+            openness(Some(&r), None, Millis(now), &Thresholds::default()),
+            Openness::Open
+        );
     }
 
     #[test]
     fn eleven_points_ahead_is_threshold() {
         let r = reading(0.30, 5 * HOUR, 0.82, week_left(0.29));
         match openness(Some(&r), None, Millis(0), &Thresholds::default()) {
-            Openness::Threshold { window: WindowKind::SevenDay, used, ahead: Some(a) } => {
+            Openness::Threshold {
+                window: WindowKind::SevenDay,
+                used,
+                ahead: Some(a),
+            } => {
                 assert_eq!(used, 0.82);
                 assert!((a - 0.11).abs() < 1e-6, "ahead {a}");
             }
@@ -112,7 +141,10 @@ mod tests {
     #[test]
     fn low_weekly_use_ignores_pace() {
         let r = reading(0.10, 5 * HOUR, 0.15, week_left(0.99));
-        assert_eq!(openness(Some(&r), None, Millis(0), &Thresholds::default()), Openness::Open);
+        assert_eq!(
+            openness(Some(&r), None, Millis(0), &Thresholds::default()),
+            Openness::Open
+        );
     }
 
     #[test]
@@ -121,7 +153,11 @@ mod tests {
         let r = reading(0.75, 5 * HOUR, 0.10, week_left(0.5));
         assert_eq!(
             openness(Some(&r), None, Millis(0), &t),
-            Openness::Threshold { window: WindowKind::FiveHour, used: 0.75, ahead: None }
+            Openness::Threshold {
+                window: WindowKind::FiveHour,
+                used: 0.75,
+                ahead: None
+            }
         );
         let r = reading(0.749, 5 * HOUR, 0.10, week_left(0.5));
         assert_eq!(openness(Some(&r), None, Millis(0), &t), Openness::Open);
@@ -134,8 +170,14 @@ mod tests {
             openness(None, Some(Millis(100)), Millis(50), &t),
             Openness::Blocked { until: Millis(100) }
         );
-        assert_eq!(openness(None, Some(Millis(100)), Millis(100), &t), Openness::Open);
-        assert_eq!(openness(None, Some(Millis(100)), Millis(150), &t), Openness::Open);
+        assert_eq!(
+            openness(None, Some(Millis(100)), Millis(100), &t),
+            Openness::Open
+        );
+        assert_eq!(
+            openness(None, Some(Millis(100)), Millis(150), &t),
+            Openness::Open
+        );
         // blocked wins over a threshold
         let r = reading(0.9, 5 * HOUR, 0.9, week_left(0.1));
         assert_eq!(

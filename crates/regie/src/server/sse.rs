@@ -34,7 +34,10 @@ pub async fn events(
     headers: HeaderMap,
 ) -> Sse<KeepAliveStream<ReceiverStream<Result<Frame, Infallible>>>> {
     // A reconnecting EventSource keeps its URL (`after=N`) and adds a newer Last-Event-ID.
-    let header_id = headers.get("last-event-id").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<i64>().ok());
+    let header_id = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i64>().ok());
     let after = q.after.into_iter().chain(header_id).max().unwrap_or(0);
     // Subscribe before reading the store, so nothing falls between the two.
     let mut live = s.engine.bus.subscribe();
@@ -56,8 +59,13 @@ pub async fn events(
                     }
                 }
                 Ok(BusMsg::Output { task, run, line }) => {
-                    let data = serde_json::to_string(&OutputLine { task, run, line }).unwrap_or_default();
-                    if tx.send(Ok(Frame::default().event("output").data(data))).await.is_err() {
+                    let data =
+                        serde_json::to_string(&OutputLine { task, run, line }).unwrap_or_default();
+                    if tx
+                        .send(Ok(Frame::default().event("output").data(data)))
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -75,18 +83,27 @@ pub async fn events(
 }
 
 fn event_frame(e: &Event) -> Frame {
-    Frame::default().event("event").id(e.id.0.to_string()).data(serde_json::to_string(e).unwrap_or_default())
+    Frame::default()
+        .event("event")
+        .id(e.id.0.to_string())
+        .data(serde_json::to_string(e).unwrap_or_default())
 }
 
 /// Sends the stored events after `last`, moving `last` forward. `None` when the watcher left
 /// or the store could not be read: the stream then ends and the client reconnects from its
 /// real last id, instead of seeing a failed replay as an empty one.
-async fn send_stored(db: &std::path::Path, last: &mut EventId, tx: &mpsc::Sender<Result<Frame, Infallible>>) -> Option<()> {
+async fn send_stored(
+    db: &std::path::Path,
+    last: &mut EventId,
+    tx: &mpsc::Sender<Result<Frame, Infallible>>,
+) -> Option<()> {
     let (path, after) = (db.to_path_buf(), *last);
-    let stored = tokio::task::spawn_blocking(move || Store::open_reader(&path).and_then(|s| s.load_after(after)))
-        .await
-        .ok()?
-        .ok()?;
+    let stored = tokio::task::spawn_blocking(move || {
+        Store::open_reader(&path).and_then(|s| s.load_after(after))
+    })
+    .await
+    .ok()?
+    .ok()?;
     for e in stored {
         *last = e.id;
         tx.send(Ok(event_frame(&e))).await.ok()?;

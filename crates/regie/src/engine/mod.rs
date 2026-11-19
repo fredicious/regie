@@ -19,8 +19,9 @@ use std::time::Duration;
 
 use anyhow::Context;
 use regie_core::{
-    auto_rule, board, next_step, task_detail, Actor, BoardView, Command, CommandResult, Event, EventKind, LiveView,
-    Millis, NewEvent, NextStep, Reading, ReviewOutcome, SessionId, Settings, State, TaskDetail, TaskId,
+    auto_rule, board, next_step, task_detail, Actor, BoardView, Command, CommandResult, Event,
+    EventKind, LiveView, Millis, NewEvent, NextStep, Reading, ReviewOutcome, SessionId, Settings,
+    State, TaskDetail, TaskId,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -77,7 +78,10 @@ impl EngineHandle {
     pub async fn command(&self, cmd: Command, actor: Actor) -> Result<CommandResult, String> {
         let (reply, rx) = oneshot::channel();
         let stopped = || "the engine has stopped".to_string();
-        self.tx.send(Input::Command(cmd, actor, reply)).await.map_err(|_| stopped())?;
+        self.tx
+            .send(Input::Command(cmd, actor, reply))
+            .await
+            .map_err(|_| stopped())?;
         rx.await.map_err(|_| stopped())?
     }
 
@@ -114,7 +118,14 @@ impl EngineHandle {
             .and_then(|s| s.load_task(t))
             .with_context(|| format!("reading the timeline of {t}"))?;
         let snap = self.snapshot.read().unwrap();
-        Ok(task_detail(&snap.state, &snap.live, &events, t, &snap.settings, (self.clock)()))
+        Ok(task_detail(
+            &snap.state,
+            &snap.live,
+            &events,
+            t,
+            &snap.settings,
+            (self.clock)(),
+        ))
     }
 }
 
@@ -130,10 +141,20 @@ pub async fn start(data: DataDir, settings: Settings, deps: Deps) -> anyhow::Res
         state.apply(&e);
     }
     prune_run_files(&data.runs(), settings.output_retention_days, now);
-    let snapshot = Arc::new(RwLock::new(Snapshot { state: state.clone(), live: LiveView::default(), settings: settings.clone() }));
+    let snapshot = Arc::new(RwLock::new(Snapshot {
+        state: state.clone(),
+        live: LiveView::default(),
+        settings: settings.clone(),
+    }));
     let (tx, rx) = mpsc::channel(1024);
     let bus = Bus::default();
-    let handle = EngineHandle { tx: tx.clone(), bus: bus.clone(), snapshot: snapshot.clone(), clock: deps.clock.clone(), data: data.clone() };
+    let handle = EngineHandle {
+        tx: tx.clone(),
+        bus: bus.clone(),
+        snapshot: snapshot.clone(),
+        clock: deps.clock.clone(),
+        data: data.clone(),
+    };
     let engine = Engine {
         store,
         state,
@@ -226,7 +247,11 @@ impl Engine {
         let runs: Vec<_> = self.runs.drain().collect();
         let mut pending = BTreeSet::new();
         for (run, ctl) in runs {
-            let kind = EventKind::RunFinished { run, outcome: regie_core::RunOutcome::Interrupted, final_message: None };
+            let kind = EventKind::RunFinished {
+                run,
+                outcome: regie_core::RunOutcome::Interrupted,
+                final_message: None,
+            };
             if let Err(e) = self.emit_task(ctl.task, Actor::Regie, kind) {
                 eprintln!("regie: {e:#}");
             }
@@ -254,13 +279,23 @@ impl Engine {
     fn handle(&mut self, input: Input) -> anyhow::Result<()> {
         match input {
             Input::Command(cmd, actor, reply) => self.on_command(cmd, actor, reply),
-            Input::SessionReady { name, repos, actor, reply } => {
+            Input::SessionReady {
+                name,
+                repos,
+                actor,
+                reply,
+            } => {
                 let result = match repos {
                     Ok(repos) => {
                         let id = self.state.next_session_id();
-                        self.emit(Some(id), None, actor, EventKind::SessionCreated { name, repos })
-                            .map(|_| CommandResult::Session(id))
-                            .map_err(|e| format!("{e:#}"))
+                        self.emit(
+                            Some(id),
+                            None,
+                            actor,
+                            EventKind::SessionCreated { name, repos },
+                        )
+                        .map(|_| CommandResult::Session(id))
+                        .map_err(|e| format!("{e:#}"))
                     }
                     Err(e) => Err(e),
                 };
@@ -275,7 +310,14 @@ impl Engine {
             Input::WorktreeReady { task, result } => self.on_worktree(task, result)?,
             Input::SetupDone { task, ok, output } => {
                 self.prep.remove(&task);
-                self.emit_task(task, Actor::Regie, EventKind::SetupFinished { ok, output_tail: output })?;
+                self.emit_task(
+                    task,
+                    Actor::Regie,
+                    EventKind::SetupFinished {
+                        ok,
+                        output_tail: output,
+                    },
+                )?;
             }
             Input::Polled(p) => self.on_polled(p)?,
             Input::Probed(result) => self.on_probed(result)?,
@@ -309,7 +351,13 @@ impl Engine {
         actor: Actor,
         kind: EventKind,
     ) -> anyhow::Result<Event> {
-        let e = self.store.append(NewEvent { at: self.now(), session, task, actor, kind })?;
+        let e = self.store.append(NewEvent {
+            at: self.now(),
+            session,
+            task,
+            actor,
+            kind,
+        })?;
         self.state.apply(&e);
         self.snapshot.write().unwrap().state.apply(&e);
         self.bus.publish(BusMsg::Event(e.clone()));
@@ -337,7 +385,13 @@ impl Engine {
     /// Acts on every task's next step; runs that may start go through the scheduler.
     fn advance(&mut self) -> anyhow::Result<()> {
         let now = self.now();
-        let ids: Vec<TaskId> = self.state.tasks.values().filter(|t| !t.cleaned).map(|t| t.id).collect();
+        let ids: Vec<TaskId> = self
+            .state
+            .tasks
+            .values()
+            .filter(|t| !t.cleaned)
+            .map(|t| t.id)
+            .collect();
         let mut waiting = BTreeMap::new();
         for id in ids {
             if self.prep.contains_key(&id) || self.busy.contains(&id) {
@@ -346,15 +400,24 @@ impl Engine {
             let mut step = self.next(id);
             if let NextStep::AwaitRuling { round } = step {
                 // Milestone 2 wakes the lead here; until then the fixed rule decides.
-                let findings = self.state.tasks[&id].reviews.iter().find(|r| r.round == round).map(|r| &r.outcome);
+                let findings = self.state.tasks[&id]
+                    .reviews
+                    .iter()
+                    .find(|r| r.round == round)
+                    .map(|r| &r.outcome);
                 let rulings = match findings {
                     Some(ReviewOutcome::Findings(f)) => auto_rule(f),
                     _ => Vec::new(),
                 };
-                self.emit_task(id, Actor::Regie, EventKind::FindingsRuled { round, rulings })?;
+                self.emit_task(
+                    id,
+                    Actor::Regie,
+                    EventKind::FindingsRuled { round, rulings },
+                )?;
                 step = self.next(id);
             }
-            let can_touch = self.state.active_run(id).is_none() && self.retry_at.get(&id).is_none_or(|t| *t <= now);
+            let can_touch = self.state.active_run(id).is_none()
+                && self.retry_at.get(&id).is_none_or(|t| *t <= now);
             match step {
                 NextStep::Cleanup if can_touch => self.cleanup(id)?,
                 NextStep::ClosePr if can_touch => self.close_pr(id),
@@ -376,7 +439,9 @@ impl Engine {
         let (locks, tx) = (self.locks.clone(), self.tx.clone());
         self.busy.insert(id);
         tokio::spawn(async move {
-            let result = crate::git::remove_worktree(&locks, &repo, &wt).await.map_err(|e| format!("{e:#}"));
+            let result = crate::git::remove_worktree(&locks, &repo, &wt)
+                .await
+                .map_err(|e| format!("{e:#}"));
             let _ = tx.send(Input::CleanedUp { task: id, result }).await;
         });
         Ok(())
@@ -391,17 +456,25 @@ impl Engine {
             .get(&task.session)
             .and_then(|s| s.repos.iter().find(|r| r.path == task.repo))
             .and_then(|r| r.github.clone());
-        crate::github::GhRepo { path: std::path::PathBuf::from(&task.repo), github }
+        crate::github::GhRepo {
+            path: std::path::PathBuf::from(&task.repo),
+            github,
+        }
     }
 
     fn close_pr(&mut self, id: TaskId) {
         let task = &self.state.tasks[&id];
-        let Some(number) = task.pr.as_ref().map(|pr| pr.number) else { return };
+        let Some(number) = task.pr.as_ref().map(|pr| pr.number) else {
+            return;
+        };
         let repo = self.gh_repo(id);
         let (github, tx) = (self.deps.github.clone(), self.tx.clone());
         self.busy.insert(id);
         tokio::spawn(async move {
-            let result = github.close_pr(&repo, number).await.map_err(|e| format!("{e:#}"));
+            let result = github
+                .close_pr(&repo, number)
+                .await
+                .map_err(|e| format!("{e:#}"));
             let _ = tx.send(Input::PrClosed { task: id, result }).await;
         });
     }

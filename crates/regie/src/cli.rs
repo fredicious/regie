@@ -426,7 +426,10 @@ pub async fn wait_for_server(
             return Ok(client);
         }
         if let Some(status) = child.try_wait().context("checking on `regie serve`")? {
-            anyhow::bail!("`regie serve` exited ({status}) before it answered; see {}", log.display());
+            anyhow::bail!(
+                "`regie serve` exited ({status}) before it answered; see {}",
+                log.display()
+            );
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

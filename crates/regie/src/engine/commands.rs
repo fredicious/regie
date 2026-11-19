@@ -3,7 +3,9 @@
 
 use std::path::Path;
 
-use regie_core::{validate, Actor, Command, CommandResult, EventKind, Level, RepoInfo, Role, TaskId};
+use regie_core::{
+    validate, Actor, Command, CommandResult, EventKind, Level, RepoInfo, Role, TaskId,
+};
 
 use super::{Engine, Input, Reply};
 use crate::agents::AgentControl;
@@ -21,22 +23,54 @@ impl Engine {
                 let tx = self.tx.clone();
                 tokio::spawn(async move {
                     let repos = resolve_repos(&repos).await;
-                    let _ = tx.send(Input::SessionReady { name, repos, actor, reply }).await;
+                    let _ = tx
+                        .send(Input::SessionReady {
+                            name,
+                            repos,
+                            actor,
+                            reply,
+                        })
+                        .await;
                 });
                 return;
             }
-            Command::SetProjectFacts { repo, facts } => {
-                self.emit(None, None, actor, EventKind::ProjectFactsSet { repo, facts }).map(|_| CommandResult::Ok)
-            }
-            Command::CreateTask { session, repo, title, instruction, tickets, blocked_by, level, paths, provider } => {
+            Command::SetProjectFacts { repo, facts } => self
+                .emit(
+                    None,
+                    None,
+                    actor,
+                    EventKind::ProjectFactsSet { repo, facts },
+                )
+                .map(|_| CommandResult::Ok),
+            Command::CreateTask {
+                session,
+                repo,
+                title,
+                instruction,
+                tickets,
+                blocked_by,
+                level,
+                paths,
+                provider,
+            } => {
                 let id = self.state.next_task_id();
-                let kind = EventKind::TaskCreated { repo, title, instruction, tickets, blocked_by, level, paths, provider };
-                self.emit(Some(session), Some(id), actor, kind).map(|_| CommandResult::Task(id))
+                let kind = EventKind::TaskCreated {
+                    repo,
+                    title,
+                    instruction,
+                    tickets,
+                    blocked_by,
+                    level,
+                    paths,
+                    provider,
+                };
+                self.emit(Some(session), Some(id), actor, kind)
+                    .map(|_| CommandResult::Task(id))
             }
             Command::MessageAgent { task, text, level } => self.message(task, text, level, actor),
-            Command::RaiseLevel { task, level } => {
-                self.emit_task(task, actor, EventKind::LevelRaised { level }).map(|_| CommandResult::Ok)
-            }
+            Command::RaiseLevel { task, level } => self
+                .emit_task(task, actor, EventKind::LevelRaised { level })
+                .map(|_| CommandResult::Ok),
             Command::StopAgent { task } => self.stop_agent(task),
             Command::CancelTask { task, close_pr } => self.cancel(task, close_pr, actor),
             Command::RetryTask { task } => self.retry(task, actor),
@@ -65,8 +99,15 @@ impl Engine {
         }
         let older = self.state.tasks[&task].pending_messages.len();
         self.emit_task(task, actor, EventKind::MessageQueued { text: text.clone() })?;
-        let running = self.state.active_run(task).filter(|r| r.role == Role::Builder).map(|r| r.id);
-        if let Some(ctl) = running.and_then(|run| self.runs.get_mut(&run)).filter(|ctl| ctl.awaiting == older) {
+        let running = self
+            .state
+            .active_run(task)
+            .filter(|r| r.role == Role::Builder)
+            .map(|r| r.id);
+        if let Some(ctl) = running
+            .and_then(|run| self.runs.get_mut(&run))
+            .filter(|ctl| ctl.awaiting == older)
+        {
             if ctl.control.try_send(AgentControl::Message(text)).is_ok() {
                 ctl.awaiting += 1;
             }
@@ -77,15 +118,42 @@ impl Engine {
 
 /// Repo paths are stored canonical, so the same folder always matches.
 fn canonical_repos(cmd: Command) -> Command {
-    let canon = |p: String| std::fs::canonicalize(&p).ok().and_then(|c| c.to_str().map(String::from)).unwrap_or(p);
+    let canon = |p: String| {
+        std::fs::canonicalize(&p)
+            .ok()
+            .and_then(|c| c.to_str().map(String::from))
+            .unwrap_or(p)
+    };
     match cmd {
-        Command::CreateSession { name, repos } => {
-            Command::CreateSession { name, repos: repos.into_iter().map(canon).collect() }
-        }
-        Command::SetProjectFacts { repo, facts } => Command::SetProjectFacts { repo: canon(repo), facts },
-        Command::CreateTask { session, repo, title, instruction, tickets, blocked_by, level, paths, provider } => {
-            Command::CreateTask { session, repo: canon(repo), title, instruction, tickets, blocked_by, level, paths, provider }
-        }
+        Command::CreateSession { name, repos } => Command::CreateSession {
+            name,
+            repos: repos.into_iter().map(canon).collect(),
+        },
+        Command::SetProjectFacts { repo, facts } => Command::SetProjectFacts {
+            repo: canon(repo),
+            facts,
+        },
+        Command::CreateTask {
+            session,
+            repo,
+            title,
+            instruction,
+            tickets,
+            blocked_by,
+            level,
+            paths,
+            provider,
+        } => Command::CreateTask {
+            session,
+            repo: canon(repo),
+            title,
+            instruction,
+            tickets,
+            blocked_by,
+            level,
+            paths,
+            provider,
+        },
         other => other,
     }
 }
@@ -97,7 +165,10 @@ async fn resolve_repos(repos: &[String]) -> Result<Vec<RepoInfo>, String> {
         if !tokio::fs::metadata(path).await.is_ok_and(|m| m.is_dir()) {
             return Err(format!("{repo} is not a folder"));
         }
-        out.push(RepoInfo { path: repo.clone(), github: crate::git::github_remote(path).await });
+        out.push(RepoInfo {
+            path: repo.clone(),
+            github: crate::git::github_remote(path).await,
+        });
     }
     Ok(out)
 }

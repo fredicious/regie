@@ -1,5 +1,7 @@
 mod support;
-use regie::git::{create_worktree, default_branch, github_remote, remove_worktree, run_setup, RepoLocks};
+use regie::git::{
+    create_worktree, default_branch, github_remote, remove_worktree, run_setup, RepoLocks,
+};
 use regie_core::TaskId;
 use std::path::Path;
 use support::repo::{git, TempRepo};
@@ -9,15 +11,26 @@ async fn creates_worktree_from_fresh_origin() {
     let r = TempRepo::new();
     let sha = r.push_new_commit_to_origin();
     let locks = RepoLocks::default();
-    let wt = create_worktree(&locks, &r.work, &r.root, TaskId(7), "Add CSV export: v2!", &[".env".into(), "missing.txt".into()], 41020)
-        .await
-        .unwrap();
+    let wt = create_worktree(
+        &locks,
+        &r.work,
+        &r.root,
+        TaskId(7),
+        "Add CSV export: v2!",
+        &[".env".into(), "missing.txt".into()],
+        41020,
+    )
+    .await
+    .unwrap();
     assert_eq!(wt.branch, "regie/t7-add-csv-export-v2");
     assert_eq!(wt.port_base, 41020);
     assert_eq!(wt.base, "main");
     assert_eq!(Path::new(&wt.path), r.root.join("t7-add-csv-export-v2"));
     assert_eq!(git(Path::new(&wt.path), &["rev-parse", "HEAD"]), sha);
-    assert_eq!(std::fs::read_to_string(Path::new(&wt.path).join(".env")).unwrap(), "SECRET=1\n");
+    assert_eq!(
+        std::fs::read_to_string(Path::new(&wt.path).join(".env")).unwrap(),
+        "SECRET=1\n"
+    );
     assert!(!Path::new(&wt.path).join("missing.txt").exists());
     // the user's own working copy is untouched
     assert_ne!(git(&r.work, &["rev-parse", "HEAD"]), sha);
@@ -27,7 +40,10 @@ async fn creates_worktree_from_fresh_origin() {
 async fn default_branch_without_origin_head() {
     let r = TempRepo::new();
     assert_eq!(default_branch(&r.work).await.unwrap(), "main");
-    git(&r.work, &["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"]);
+    git(
+        &r.work,
+        &["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"],
+    );
     assert_eq!(default_branch(&r.work).await.unwrap(), "main");
 }
 
@@ -50,7 +66,9 @@ async fn remove_cleans_worktree_and_branch() {
     let r = TempRepo::new();
     let locks = RepoLocks::default();
     let before = r.origin_branches();
-    let wt = create_worktree(&locks, &r.work, &r.root, TaskId(1), "thing", &[], 41000).await.unwrap();
+    let wt = create_worktree(&locks, &r.work, &r.root, TaskId(1), "thing", &[], 41000)
+        .await
+        .unwrap();
     remove_worktree(&locks, &r.work, &wt).await.unwrap();
     assert!(!Path::new(&wt.path).exists());
     assert!(!git(&r.work, &["branch", "--list"]).contains("regie/"));
@@ -91,11 +109,26 @@ async fn rejects_copy_paths_outside_the_repo() {
     let outside = r.root.parent().unwrap().join("x");
     std::fs::write(&outside, "keep\n").unwrap();
     for bad in ["../x".to_string(), "../../x".to_string(), abs] {
-        let res = create_worktree(&locks, &r.work, &r.root, TaskId(3), "bad", std::slice::from_ref(&bad), 41000).await;
+        let res = create_worktree(
+            &locks,
+            &r.work,
+            &r.root,
+            TaskId(3),
+            "bad",
+            std::slice::from_ref(&bad),
+            41000,
+        )
+        .await;
         assert!(res.is_err(), "{bad}");
-        assert!(!git(&r.work, &["branch", "--list"]).contains("regie/"), "no git call before validation");
+        assert!(
+            !git(&r.work, &["branch", "--list"]).contains("regie/"),
+            "no git call before validation"
+        );
     }
-    assert_eq!(std::fs::read_to_string(r.work.join(".env")).unwrap(), "SECRET=1\n");
+    assert_eq!(
+        std::fs::read_to_string(r.work.join(".env")).unwrap(),
+        "SECRET=1\n"
+    );
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep\n");
     assert!(!r.root.join("x").exists());
 }
@@ -104,10 +137,16 @@ async fn rejects_copy_paths_outside_the_repo() {
 async fn task_branch_has_no_upstream() {
     let r = TempRepo::new();
     let locks = RepoLocks::default();
-    let wt = create_worktree(&locks, &r.work, &r.root, TaskId(4), "solo", &[], 41000).await.unwrap();
+    let wt = create_worktree(&locks, &r.work, &r.root, TaskId(4), "solo", &[], 41000)
+        .await
+        .unwrap();
     let out = std::process::Command::new("git")
         .current_dir(&r.work)
-        .args(["rev-parse", "--abbrev-ref", &format!("{}@{{upstream}}", wt.branch)])
+        .args([
+            "rev-parse",
+            "--abbrev-ref",
+            &format!("{}@{{upstream}}", wt.branch),
+        ])
         .output()
         .unwrap();
     assert!(!out.status.success());

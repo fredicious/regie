@@ -49,13 +49,20 @@ pub struct FakeClaude {
 
 impl FakeClaude {
     pub fn new(script: impl Fn(&RunSpec) -> FakeOutcome + Send + Sync + 'static) -> Self {
-        FakeClaude { script: Box::new(script), specs: Default::default(), controls: Default::default() }
+        FakeClaude {
+            script: Box::new(script),
+            specs: Default::default(),
+            controls: Default::default(),
+        }
     }
 
     /// A fake whose every run finishes at once with `final_message`.
     pub fn always(final_message: &str) -> Self {
         let m = final_message.to_string();
-        Self::new(move |_| FakeOutcome { final_message: m.clone(), actions: vec![] })
+        Self::new(move |_| FakeOutcome {
+            final_message: m.clone(),
+            actions: vec![],
+        })
     }
 
     /// Every spec started, in order.
@@ -71,21 +78,33 @@ impl FakeClaude {
 
 /// The native session a fake run reports: the resumed one, or a new name.
 pub fn fake_session(spec: &RunSpec) -> String {
-    spec.resume.clone().unwrap_or_else(|| format!("fake-session-{}", spec.run.0))
+    spec.resume
+        .clone()
+        .unwrap_or_else(|| format!("fake-session-{}", spec.run.0))
 }
 
 fn commit(cwd: &Path, message: &str) -> Result<(), String> {
     let git = |args: &[&str]| {
         let out = Command::new("git")
             .current_dir(cwd)
-            .args(["-c", "user.name=Fake Claude", "-c", "user.email=fake-claude@example.com", "-c", "commit.gpgsign=false"])
+            .args([
+                "-c",
+                "user.name=Fake Claude",
+                "-c",
+                "user.email=fake-claude@example.com",
+                "-c",
+                "commit.gpgsign=false",
+            ])
             .args(args)
             .output()
             .map_err(|e| e.to_string())?;
         if out.status.success() {
             Ok(())
         } else {
-            Err(format!("git {args:?}: {}", String::from_utf8_lossy(&out.stderr)))
+            Err(format!(
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ))
         }
     };
     git(&["add", "-A"])?;
@@ -118,11 +137,19 @@ impl AgentRunner for FakeClaude {
                     let _ = tx.send(e).await;
                 }
             };
-            let attach = AgentEvent::Attached { native_session: fake_session(&spec), pid: None };
+            let attach = AgentEvent::Attached {
+                native_session: fake_session(&spec),
+                pid: None,
+            };
             let mut attached = false;
             let mut end = RunOutcome::Finished;
             'actions: for action in outcome.actions {
-                if !attached && !matches!(action, FakeAction::Spawned(_) | FakeAction::HangBeforeAttach) {
+                if !attached
+                    && !matches!(
+                        action,
+                        FakeAction::Spawned(_) | FakeAction::HangBeforeAttach
+                    )
+                {
                     send(attach.clone()).await;
                     attached = true;
                 }
@@ -206,13 +233,23 @@ impl AgentRunner for FakeClaude {
             let final_message = match end {
                 RunOutcome::Finished => {
                     send(AgentEvent::Output(outcome.final_message.clone())).await;
-                    send(AgentEvent::Usage { input_tokens: 10, output_tokens: 5, cache_read_tokens: 0, duration_ms: 1 })
-                        .await;
+                    send(AgentEvent::Usage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        cache_read_tokens: 0,
+                        duration_ms: 1,
+                    })
+                    .await;
                     Some(outcome.final_message)
                 }
                 _ => None,
             };
-            send(AgentEvent::Finished { final_message, outcome: end, limit_resets_at: None }).await;
+            send(AgentEvent::Finished {
+                final_message,
+                outcome: end,
+                limit_resets_at: None,
+            })
+            .await;
         });
         Ok(RunHandle { events, control })
     }

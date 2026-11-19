@@ -2,8 +2,8 @@
 //! open, at once after the builder opens or fixes one, and three looks ten
 //! seconds apart before a requested PR counts as missing.
 
-use std::collections::BTreeMap;
 use regie_core::{Actor, EventKind, Millis, PrLifecycle, Task, TaskId};
+use std::collections::BTreeMap;
 
 use super::{Engine, Input, Polled};
 
@@ -59,10 +59,19 @@ impl Engine {
         if periodic {
             self.polls.next_due = now.0 + EVERY_MS;
         }
-        let ids: Vec<TaskId> = self.state.tasks.values().filter(|t| watched(t)).map(|t| t.id).collect();
+        let ids: Vec<TaskId> = self
+            .state
+            .tasks
+            .values()
+            .filter(|t| watched(t))
+            .map(|t| t.id)
+            .collect();
         for id in ids {
             let track = self.polls.tasks.entry(id).or_default();
-            let check_due = track.check.as_ref().is_some_and(|c| c.next_at.is_some_and(|at| now >= at));
+            let check_due = track
+                .check
+                .as_ref()
+                .is_some_and(|c| c.next_at.is_some_and(|at| now >= at));
             let idle = track.sent <= track.applied;
             if check_due || (periodic && idle) {
                 self.send_poll(id, check_due);
@@ -77,7 +86,10 @@ impl Engine {
             return;
         }
         if check {
-            self.polls.tasks.entry(id).or_default().check = Some(Check { misses: 0, next_at: None });
+            self.polls.tasks.entry(id).or_default().check = Some(Check {
+                misses: 0,
+                next_at: None,
+            });
         }
         let seq = self.send_poll(id, check);
         if hold {
@@ -95,22 +107,41 @@ impl Engine {
         }
         let task = &self.state.tasks[&id];
         let repo = self.gh_repo(id);
-        let branch = task.worktree.as_ref().map(|w| w.branch.clone()).unwrap_or_default();
+        let branch = task
+            .worktree
+            .as_ref()
+            .map(|w| w.branch.clone())
+            .unwrap_or_default();
         // A PR opened before the worktree is from an earlier task on a branch of the same name.
-        let not_before = task.worktree_created_at.map_or(i64::MIN, |at| at.0 - CLOCK_SKEW_MS);
+        let not_before = task
+            .worktree_created_at
+            .map_or(i64::MIN, |at| at.0 - CLOCK_SKEW_MS);
         let (github, tx) = (self.deps.github.clone(), self.tx.clone());
         tokio::spawn(async move {
             let look = async {
                 let prs = github.prs_for_branch(&repo, &branch).await?;
-                let pr = prs.into_iter().filter(|p| p.created_at.0 >= not_before).max_by_key(|p| p.created_at).map(|p| p.pr);
+                let pr = prs
+                    .into_iter()
+                    .filter(|p| p.created_at.0 >= not_before)
+                    .max_by_key(|p| p.created_at)
+                    .map(|p| p.pr);
                 let comments = match &pr {
-                    Some(pr) if pr.lifecycle == PrLifecycle::Open => github.pr_activity(&repo, pr.number).await?,
+                    Some(pr) if pr.lifecycle == PrLifecycle::Open => {
+                        github.pr_activity(&repo, pr.number).await?
+                    }
                     _ => Vec::new(),
                 };
                 anyhow::Ok((pr, comments))
             };
             let result = look.await.map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Input::Polled(Polled { task: id, seq, check, result })).await;
+            let _ = tx
+                .send(Input::Polled(Polled {
+                    task: id,
+                    seq,
+                    check,
+                    result,
+                }))
+                .await;
         });
         seq
     }
@@ -145,14 +176,22 @@ impl Engine {
                 c.next_at = Some(Millis(now.0 + CHECK_EVERY_MS));
             }
         }
-        let Some(task) = self.state.tasks.get(&p.task) else { return Ok(()) };
-        let new_comments: Vec<_> =
-            comments.into_iter().filter(|c| !task.comments.iter().any(|seen| seen.id == c.id)).collect();
+        let Some(task) = self.state.tasks.get(&p.task) else {
+            return Ok(());
+        };
+        let new_comments: Vec<_> = comments
+            .into_iter()
+            .filter(|c| !task.comments.iter().any(|seen| seen.id == c.id))
+            .collect();
         if let Some(pr) = pr.filter(|pr| !stale && task.pr.as_ref() != Some(pr)) {
             self.emit_task(p.task, Actor::Regie, EventKind::PrObserved { pr })?;
         }
         for comment in new_comments {
-            self.emit_task(p.task, Actor::Regie, EventKind::PrCommentObserved { comment })?;
+            self.emit_task(
+                p.task,
+                Actor::Regie,
+                EventKind::PrCommentObserved { comment },
+            )?;
         }
         if missing {
             self.emit_task(p.task, Actor::Regie, EventKind::PrMissing)?;

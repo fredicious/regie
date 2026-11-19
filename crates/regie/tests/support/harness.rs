@@ -12,8 +12,9 @@ use regie::engine::{self, BoxFuture, Deps, EngineHandle, Input};
 use regie::paths::DataDir;
 use regie::store::Store;
 use regie_core::{
-    lane, next_step, Actor, Checks, Command, CommandResult, Event, Lane, Level, MergeState, Millis, PrLifecycle,
-    PrState, ProjectFacts, Reading, SessionId, Settings, State, TaskCard, TaskId, Window,
+    lane, next_step, Actor, Checks, Command, CommandResult, Event, Lane, Level, MergeState, Millis,
+    PrLifecycle, PrState, ProjectFacts, Reading, SessionId, Settings, State, TaskCard, TaskId,
+    Window,
 };
 
 use super::claude::{FakeAction, FakeClaude, FakeOutcome};
@@ -44,12 +45,16 @@ type Probe = Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<Reading>> + Send 
 
 impl Harness {
     /// `script` decides each run; it can change the fake GitHub as the agent would.
-    pub async fn new(script: impl Fn(&RunSpec, &FakeGitHub) -> FakeOutcome + Send + Sync + 'static) -> Harness {
+    pub async fn new(
+        script: impl Fn(&RunSpec, &FakeGitHub) -> FakeOutcome + Send + Sync + 'static,
+    ) -> Harness {
         Self::build(script, false).await
     }
 
     /// An engine started as with `REGIE_RUN_ANYWAY=1`.
-    pub async fn run_anyway(script: impl Fn(&RunSpec, &FakeGitHub) -> FakeOutcome + Send + Sync + 'static) -> Harness {
+    pub async fn run_anyway(
+        script: impl Fn(&RunSpec, &FakeGitHub) -> FakeOutcome + Send + Sync + 'static,
+    ) -> Harness {
         Self::build(script, true).await
     }
 
@@ -60,7 +65,9 @@ impl Harness {
         let repo = TempRepo::new();
         fake_github_origin(&repo);
         let data_dir = tempfile::tempdir().unwrap();
-        let data = DataDir { root: data_dir.path().join(".regie") };
+        let data = DataDir {
+            root: data_dir.path().join(".regie"),
+        };
         let now = Arc::new(AtomicI64::new(START));
         let gh = Arc::new(FakeGitHub::with_clock(now.clone()));
         let gh_for_script = gh.clone();
@@ -77,14 +84,34 @@ impl Harness {
             })
         };
         let engine = start(&data, &claude, &gh, &probe, &now, run_anyway).await;
-        Harness { repo, _data_dir: data_dir, data, claude, gh, now, probe_calls, probe_five_hour, engine, probe, run_anyway }
+        Harness {
+            repo,
+            _data_dir: data_dir,
+            data,
+            claude,
+            gh,
+            now,
+            probe_calls,
+            probe_five_hour,
+            engine,
+            probe,
+            run_anyway,
+        }
     }
 
     /// Stops the engine (as when Régie is killed: runs are left unfinished) and
     /// starts a new one on the same data dir, with the same fakes.
     pub async fn restart(&mut self) {
         self.engine.shutdown().await;
-        self.engine = start(&self.data, &self.claude, &self.gh, &self.probe, &self.now, self.run_anyway).await;
+        self.engine = start(
+            &self.data,
+            &self.claude,
+            &self.gh,
+            &self.probe,
+            &self.now,
+            self.run_anyway,
+        )
+        .await;
     }
 
     pub fn repo_path(&self) -> String {
@@ -97,13 +124,27 @@ impl Harness {
 
     /// A session on the temp repo, with these project facts.
     pub async fn create_session(&self, facts: ProjectFacts) -> SessionId {
-        let cmd = Command::CreateSession { name: "s".into(), repos: vec![self.repo_path()] };
-        let CommandResult::Session(s) = self.command(cmd).await else { panic!("no session id") };
-        self.command(Command::SetProjectFacts { repo: self.repo_path(), facts }).await;
+        let cmd = Command::CreateSession {
+            name: "s".into(),
+            repos: vec![self.repo_path()],
+        };
+        let CommandResult::Session(s) = self.command(cmd).await else {
+            panic!("no session id")
+        };
+        self.command(Command::SetProjectFacts {
+            repo: self.repo_path(),
+            facts,
+        })
+        .await;
         s
     }
 
-    pub async fn create_task(&self, session: SessionId, title: &str, blocked_by: Vec<TaskId>) -> TaskId {
+    pub async fn create_task(
+        &self,
+        session: SessionId,
+        title: &str,
+        blocked_by: Vec<TaskId>,
+    ) -> TaskId {
         let cmd = Command::CreateTask {
             session,
             repo: self.repo_path(),
@@ -115,7 +156,9 @@ impl Harness {
             paths: vec![],
             provider: None,
         };
-        let CommandResult::Task(t) = self.command(cmd).await else { panic!("no task id") };
+        let CommandResult::Task(t) = self.command(cmd).await else {
+            panic!("no task id")
+        };
         t
     }
 
@@ -125,7 +168,12 @@ impl Harness {
     }
 
     pub async fn message(&self, task: TaskId, text: &str) {
-        self.command(Command::MessageAgent { task, text: text.into(), level: None }).await;
+        self.command(Command::MessageAgent {
+            task,
+            text: text.into(),
+            level: None,
+        })
+        .await;
     }
 
     pub async fn tick(&self) {
@@ -155,22 +203,37 @@ impl Harness {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
         while !cond(self) {
             if tokio::time::Instant::now() > deadline {
-                panic!("timed out waiting for {what}; events:\n{}", self.event_names().join("\n"));
+                panic!(
+                    "timed out waiting for {what}; events:\n{}",
+                    self.event_names().join("\n")
+                );
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
 
     pub async fn wait_lane(&self, task: TaskId, lane: Lane, secs: u64) {
-        self.wait_for(&format!("{task} in {lane:?}"), secs, |h| h.lane(task) == lane).await;
+        self.wait_for(&format!("{task} in {lane:?}"), secs, |h| {
+            h.lane(task) == lane
+        })
+        .await;
     }
 
     /// Moves the clock by `step` and ticks until `cond` holds.
-    pub async fn tick_until(&self, what: &str, step: i64, secs: u64, mut cond: impl FnMut(&Harness) -> bool) {
+    pub async fn tick_until(
+        &self,
+        what: &str,
+        step: i64,
+        secs: u64,
+        mut cond: impl FnMut(&Harness) -> bool,
+    ) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
         while !cond(self) {
             if tokio::time::Instant::now() > deadline {
-                panic!("timed out ticking for {what}; events:\n{}", self.event_names().join("\n"));
+                panic!(
+                    "timed out ticking for {what}; events:\n{}",
+                    self.event_names().join("\n")
+                );
             }
             self.advance_clock(step);
             self.tick().await;
@@ -183,7 +246,10 @@ impl Harness {
     }
 
     fn event_names(&self) -> Vec<String> {
-        self.events().iter().map(|e| format!("{:?} {:?}", e.task, e.kind)).collect()
+        self.events()
+            .iter()
+            .map(|e| format!("{:?} {:?}", e.task, e.kind))
+            .collect()
     }
 
     /// The task's lanes after each event, replayed from the log, repeats removed.
@@ -193,7 +259,9 @@ impl Harness {
         let mut lanes: Vec<Lane> = Vec::new();
         for e in self.events() {
             state.apply(&e);
-            let Some(t) = state.tasks.get(&task) else { continue };
+            let Some(t) = state.tasks.get(&task) else {
+                continue;
+            };
             let active = state.active_run(task).map(|r| r.role);
             let (l, _) = lane(t, active, &next_step(t, &state, &settings), false, None);
             if lanes.last() != Some(&l) {
@@ -225,23 +293,47 @@ async fn start(
         let now = now.clone();
         Arc::new(move || Millis(now.load(Ordering::SeqCst)))
     };
-    let deps =
-        Deps { runner: claude.clone(), github: gh.clone(), probe: probe.clone(), clock, caffeinate: false, run_anyway };
-    engine::start(data.clone(), Settings::default(), deps).await.unwrap()
+    let deps = Deps {
+        runner: claude.clone(),
+        github: gh.clone(),
+        probe: probe.clone(),
+        clock,
+        caffeinate: false,
+        run_anyway,
+    };
+    engine::start(data.clone(), Settings::default(), deps)
+        .await
+        .unwrap()
 }
 
 /// Origin looks like `git@github.com:o/r.git`, but fetches come from the local bare repo.
 fn fake_github_origin(repo: &TempRepo) {
     let origin = repo.origin.to_str().unwrap();
-    git(&repo.work, &["remote", "set-url", "origin", "git@github.com:o/r.git"]);
+    git(
+        &repo.work,
+        &["remote", "set-url", "origin", "git@github.com:o/r.git"],
+    );
     git(&repo.work, &["config", "ssh.variant", "simple"]);
-    git(&repo.work, &["config", "core.sshCommand", &format!("sh -c 'exec git upload-pack {origin}' x")]);
+    git(
+        &repo.work,
+        &[
+            "config",
+            "core.sshCommand",
+            &format!("sh -c 'exec git upload-pack {origin}' x"),
+        ],
+    );
 }
 
 pub fn reading(five_hour: f64, at: i64) -> Reading {
     Reading {
-        five_hour: Window { used: five_hour, resets_at: Millis(at + 5 * HOUR) },
-        seven_day: Window { used: 0.10, resets_at: Millis(at + 72 * HOUR) },
+        five_hour: Window {
+            used: five_hour,
+            resets_at: Millis(at + 5 * HOUR),
+        },
+        seven_day: Window {
+            used: 0.10,
+            resets_at: Millis(at + 72 * HOUR),
+        },
         read_at: Millis(at),
     }
 }
@@ -266,19 +358,28 @@ pub fn pr(number: u64, sha: &str, checks: Checks, merge_state: MergeState) -> Pr
 
 /// A run that finishes at once with `msg`.
 pub fn says(msg: &str) -> FakeOutcome {
-    FakeOutcome { final_message: msg.into(), actions: vec![] }
+    FakeOutcome {
+        final_message: msg.into(),
+        actions: vec![],
+    }
 }
 
 /// A builder run that writes `file`, commits and reports done.
 pub fn builds(file: &str, content: &str) -> FakeOutcome {
     FakeOutcome {
         final_message: "Done.\n\nStatus: done".into(),
-        actions: vec![FakeAction::WriteFile(file.into(), content.into()), FakeAction::Commit(format!("write {file}"))],
+        actions: vec![
+            FakeAction::WriteFile(file.into(), content.into()),
+            FakeAction::Commit(format!("write {file}")),
+        ],
     }
 }
 
 pub fn hangs() -> FakeOutcome {
-    FakeOutcome { final_message: String::new(), actions: vec![FakeAction::HangUntilControl] }
+    FakeOutcome {
+        final_message: String::new(),
+        actions: vec![FakeAction::HangUntilControl],
+    }
 }
 
 pub const CLEAN_REVIEW: &str = "Looks good.\n```json\n{\"findings\":[]}\n```";

@@ -71,16 +71,24 @@ pub fn effort_arg(e: Effort) -> &'static str {
 }
 
 fn user_line(text: &str) -> String {
-    format!("{}\n", json!({"type": "user", "message": {"role": "user", "content": text}}))
+    format!(
+        "{}\n",
+        json!({"type": "user", "message": {"role": "user", "content": text}})
+    )
 }
 
 fn interrupt_line() -> String {
     let id = uuid::Uuid::new_v4().to_string();
-    format!("{}\n", json!({"type": "control_request", "request_id": id, "request": {"subtype": "interrupt"}}))
+    format!(
+        "{}\n",
+        json!({"type": "control_request", "request_id": id, "request": {"subtype": "interrupt"}})
+    )
 }
 
 fn now() -> Millis {
-    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
     Millis(d.as_millis() as i64)
 }
 
@@ -132,7 +140,9 @@ impl AgentRunner for ClaudeCli {
 
 /// Writes one line to the agent's stdin; a closed pipe closes our side too.
 async fn send_line(stdin: &mut Option<ChildStdin>, line: &str) -> bool {
-    let Some(w) = stdin.as_mut() else { return false };
+    let Some(w) = stdin.as_mut() else {
+        return false;
+    };
     let ok = w.write_all(line.as_bytes()).await.is_ok() && w.flush().await.is_ok();
     if !ok {
         *stdin = None;
@@ -181,7 +191,9 @@ async fn drive(
         tokio::spawn(async move {
             let mut lines = BufReader::new(e).lines();
             while let Ok(Some(l)) = lines.next_line().await {
-                let _ = events.send(AgentEvent::Output(format!("stderr: {l}"))).await;
+                let _ = events
+                    .send(AgentEvent::Output(format!("stderr: {l}")))
+                    .await;
             }
         })
     });
@@ -259,7 +271,10 @@ async fn drive(
         },
     };
     if let Some(mut h) = stderr {
-        if tokio::time::timeout(Duration::from_secs(1), &mut h).await.is_err() {
+        if tokio::time::timeout(Duration::from_secs(1), &mut h)
+            .await
+            .is_err()
+        {
             h.abort();
         }
     }
@@ -293,7 +308,10 @@ async fn handle_item(
                 return;
             }
             p.attached = true;
-            AgentEvent::Attached { native_session: session_id, pid }
+            AgentEvent::Attached {
+                native_session: session_id,
+                pid,
+            }
         }
         StreamItem::Text(t) => AgentEvent::Output(t),
         StreamItem::ToolUse { name, summary } => AgentEvent::Output(format!("[{name}] {summary}")),
@@ -302,7 +320,12 @@ async fn handle_item(
             p.rejected = Some(resets_at);
             return;
         }
-        StreamItem::Result { text, is_error, usage, duration_ms } => {
+        StreamItem::Result {
+            text,
+            is_error,
+            usage,
+            duration_ms,
+        } => {
             // The turn is over: closing stdin lets the process exit.
             *stdin = None;
             p.result = Some(text);
@@ -384,7 +407,10 @@ mod tests {
     use crate::agents::{AgentControl, AgentEvent};
 
     fn fixture(name: &str) -> String {
-        format!("{}/tests/fixtures/claude/{name}", env!("CARGO_MANIFEST_DIR"))
+        format!(
+            "{}/tests/fixtures/claude/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        )
     }
 
     struct Env {
@@ -393,7 +419,9 @@ mod tests {
 
     impl Env {
         fn new() -> Env {
-            Env { dir: tempfile::tempdir().unwrap() }
+            Env {
+                dir: tempfile::tempdir().unwrap(),
+            }
         }
 
         fn path(&self, name: &str) -> PathBuf {
@@ -403,9 +431,16 @@ mod tests {
         /// A `claude` stand-in: a shell script run in the temp folder.
         fn cli(&self, body: &str) -> ClaudeCli {
             let bin = self.path("claude.sh");
-            std::fs::write(&bin, format!("#!/bin/sh\ncd '{}'\n{body}\n", self.dir.path().display())).unwrap();
+            std::fs::write(
+                &bin,
+                format!("#!/bin/sh\ncd '{}'\n{body}\n", self.dir.path().display()),
+            )
+            .unwrap();
             std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-            ClaudeCli { bin, runs_dir: self.path("runs") }
+            ClaudeCli {
+                bin,
+                runs_dir: self.path("runs"),
+            }
         }
 
         fn spec(&self) -> RunSpec {
@@ -450,9 +485,11 @@ mod tests {
 
     fn finished(events: &[AgentEvent]) -> (Option<String>, RunOutcome, Option<Millis>) {
         match events.last() {
-            Some(AgentEvent::Finished { final_message, outcome, limit_resets_at }) => {
-                (final_message.clone(), *outcome, *limit_resets_at)
-            }
+            Some(AgentEvent::Finished {
+                final_message,
+                outcome,
+                limit_resets_at,
+            }) => (final_message.clone(), *outcome, *limit_resets_at),
             other => panic!("expected Finished last, got {other:?}"),
         }
     }
@@ -470,7 +507,10 @@ done"#;
     #[tokio::test]
     async fn exit_without_result_is_crash() {
         let env = Env::new();
-        let cli = env.cli(&format!("cat '{}'\nexit 1", fixture("error_no_result.jsonl")));
+        let cli = env.cli(&format!(
+            "cat '{}'\nexit 1",
+            fixture("error_no_result.jsonl")
+        ));
         let events = run(&cli, env.spec(), vec![]).await;
         // the pid comes first, before the agent's first line
         assert!(matches!(&events[0], AgentEvent::Spawned { pid } if *pid > 0));
@@ -478,27 +518,40 @@ done"#;
             &events[1],
             AgentEvent::Attached { native_session, pid: Some(_) } if native_session == "4f6c2f8e-1d2a-4b7c-9e0a-6a1b2c3d4e5f"
         ));
-        assert!(events.iter().any(|e| matches!(e, AgentEvent::Output(o) if o.contains("cargo test --workspace"))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Output(o) if o.contains("cargo test --workspace"))));
         assert_eq!(finished(&events), (None, RunOutcome::Crashed, None));
     }
 
     #[tokio::test]
     async fn result_closes_stdin_and_finishes() {
         let env = Env::new();
-        let cli = env.cli(&format!("cat '{}'\ncat > /dev/null", fixture("basic.jsonl")));
+        let cli = env.cli(&format!(
+            "cat '{}'\ncat > /dev/null",
+            fixture("basic.jsonl")
+        ));
         let events = run(&cli, env.spec(), vec![]).await;
-        assert_eq!(finished(&events), (Some("ok".into()), RunOutcome::Finished, None));
+        assert_eq!(
+            finished(&events),
+            (Some("ok".into()), RunOutcome::Finished, None)
+        );
         assert!(events.contains(&AgentEvent::Usage {
             input_tokens: 2,
             output_tokens: 116,
             cache_read_tokens: 25185,
             duration_ms: 2855
         }));
-        assert!(events.iter().any(|e| matches!(e, AgentEvent::Reading(r) if r.seven_day.used == 0.79)));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Reading(r) if r.seven_day.used == 0.79)));
         assert!(events.contains(&AgentEvent::Output("ok".into())));
         // Every stdout line lands in the run file, raw.
         let run_file = std::fs::read_to_string(env.path("runs/3.jsonl")).unwrap();
-        assert_eq!(run_file, std::fs::read_to_string(fixture("basic.jsonl")).unwrap());
+        assert_eq!(
+            run_file,
+            std::fs::read_to_string(fixture("basic.jsonl")).unwrap()
+        );
     }
 
     #[tokio::test]
@@ -552,11 +605,15 @@ done"#;
     #[tokio::test]
     async fn interrupt_sends_control_request_and_pauses() {
         let env = Env::new();
-        let cli = env.cli(&format!("cat '{}'\n{RESPONDER}", fixture("error_no_result.jsonl")));
+        let cli = env.cli(&format!(
+            "cat '{}'\n{RESPONDER}",
+            fixture("error_no_result.jsonl")
+        ));
         let events = run(&cli, env.spec(), vec![AgentControl::Interrupt]).await;
         assert_eq!(finished(&events).1, RunOutcome::Paused);
         let line: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(env.path("control.txt")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(env.path("control.txt")).unwrap())
+                .unwrap();
         assert_eq!(line["type"], "control_request");
         assert_eq!(line["request"], serde_json::json!({"subtype":"interrupt"}));
         assert_eq!(line["request_id"].as_str().unwrap().len(), 36);
@@ -565,41 +622,76 @@ done"#;
     #[tokio::test]
     async fn message_writes_a_user_line() {
         let env = Env::new();
-        let cli = env.cli(&format!("cat '{}'\n{RESPONDER}", fixture("error_no_result.jsonl")));
-        let events = run(&cli, env.spec(), vec![AgentControl::Message("Also say KIWI.".into())]).await;
-        assert_eq!(finished(&events), (Some("KIWI".into()), RunOutcome::Finished, None));
+        let cli = env.cli(&format!(
+            "cat '{}'\n{RESPONDER}",
+            fixture("error_no_result.jsonl")
+        ));
+        let events = run(
+            &cli,
+            env.spec(),
+            vec![AgentControl::Message("Also say KIWI.".into())],
+        )
+        .await;
+        assert_eq!(
+            finished(&events),
+            (Some("KIWI".into()), RunOutcome::Finished, None)
+        );
         let line: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(env.path("message.txt")).unwrap()).unwrap();
-        assert_eq!(line, serde_json::json!({"type":"user","message":{"role":"user","content":"Also say KIWI."}}));
+            serde_json::from_str(&std::fs::read_to_string(env.path("message.txt")).unwrap())
+                .unwrap();
+        assert_eq!(
+            line,
+            serde_json::json!({"type":"user","message":{"role":"user","content":"Also say KIWI."}})
+        );
     }
 
     #[tokio::test]
     async fn stop_terminates_the_process() {
         let env = Env::new();
-        let cli = env.cli(&format!("cat '{}'\nsleep 30", fixture("error_no_result.jsonl")));
+        let cli = env.cli(&format!(
+            "cat '{}'\nsleep 30",
+            fixture("error_no_result.jsonl")
+        ));
         let t = Instant::now();
         let events = run(&cli, env.spec(), vec![AgentControl::Stop]).await;
         assert_eq!(finished(&events).1, RunOutcome::Stopped);
-        assert!(t.elapsed() < Duration::from_secs(4), "took {:?}", t.elapsed());
+        assert!(
+            t.elapsed() < Duration::from_secs(4),
+            "took {:?}",
+            t.elapsed()
+        );
     }
 
     #[tokio::test]
     async fn stop_kills_a_process_that_ignores_sigterm() {
         let env = Env::new();
-        let cli = env.cli(&format!("trap '' TERM\ncat '{}'\nwhile :; do sleep 1; done", fixture("error_no_result.jsonl")));
+        let cli = env.cli(&format!(
+            "trap '' TERM\ncat '{}'\nwhile :; do sleep 1; done",
+            fixture("error_no_result.jsonl")
+        ));
         let t = Instant::now();
         let events = run(&cli, env.spec(), vec![AgentControl::Stop]).await;
         assert_eq!(finished(&events).1, RunOutcome::Stopped);
-        assert!(t.elapsed() >= Duration::from_secs(5), "killed too early: {:?}", t.elapsed());
+        assert!(
+            t.elapsed() >= Duration::from_secs(5),
+            "killed too early: {:?}",
+            t.elapsed()
+        );
     }
 
     #[tokio::test]
     async fn rejected_limit_is_limit_hit() {
         let env = Env::new();
-        let cli = env.cli(&format!("cat '{}'\ncat > /dev/null", fixture("limit_rejected.jsonl")));
+        let cli = env.cli(&format!(
+            "cat '{}'\ncat > /dev/null",
+            fixture("limit_rejected.jsonl")
+        ));
         let events = run(&cli, env.spec(), vec![]).await;
         let (_, outcome, resets) = finished(&events);
-        assert_eq!((outcome, resets), (RunOutcome::LimitHit, Some(Millis(1_795_129_200_000))));
+        assert_eq!(
+            (outcome, resets),
+            (RunOutcome::LimitHit, Some(Millis(1_795_129_200_000)))
+        );
     }
 
     #[tokio::test]
@@ -607,18 +699,28 @@ done"#;
         // An expired login, a bad model id or an API error ends in a result
         // with `is_error`, and no `rejected` rate-limit event.
         let env = Env::new();
-        let cli = env.cli(&format!("cat '{}'\ncat > /dev/null", fixture("result_is_error.jsonl")));
+        let cli = env.cli(&format!(
+            "cat '{}'\ncat > /dev/null",
+            fixture("result_is_error.jsonl")
+        ));
         let events = run(&cli, env.spec(), vec![]).await;
         assert_eq!(
             finished(&events),
-            (Some("Invalid API key · Please run /login".into()), RunOutcome::Crashed, None)
+            (
+                Some("Invalid API key · Please run /login".into()),
+                RunOutcome::Crashed,
+                None
+            )
         );
     }
 
     #[tokio::test]
     async fn probe_returns_the_first_reading() {
         let env = Env::new();
-        let cli = env.cli(&format!("printf '%s\\n' \"$@\" > args.txt\ncat '{}'", fixture("basic.jsonl")));
+        let cli = env.cli(&format!(
+            "printf '%s\\n' \"$@\" > args.txt\ncat '{}'",
+            fixture("basic.jsonl")
+        ));
         let r = probe(&cli.bin, env.dir.path()).await.unwrap();
         assert_eq!((r.five_hour.used, r.seven_day.used), (0.12, 0.79));
         assert_eq!(r.seven_day.resets_at, Millis(1_795_273_200_000));
@@ -653,11 +755,18 @@ done"#;
         let env = Env::new();
         let quiet = tempfile::tempdir().unwrap();
         let bin = env.path("probe.sh");
-        let script = format!("#!/bin/sh\npwd -P > '{}'\ncat '{}'\n", env.path("cwd.txt").display(), fixture("basic.jsonl"));
+        let script = format!(
+            "#!/bin/sh\npwd -P > '{}'\ncat '{}'\n",
+            env.path("cwd.txt").display(),
+            fixture("basic.jsonl")
+        );
         std::fs::write(&bin, script).unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
         probe(&bin, quiet.path()).await.unwrap();
         let cwd = std::fs::read_to_string(env.path("cwd.txt")).unwrap();
-        assert_eq!(cwd.trim(), quiet.path().canonicalize().unwrap().to_str().unwrap());
+        assert_eq!(
+            cwd.trim(),
+            quiet.path().canonicalize().unwrap().to_str().unwrap()
+        );
     }
 }

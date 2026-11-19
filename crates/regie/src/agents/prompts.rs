@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 
 use anyhow::Context;
-use regie_core::{EvidenceType, Finding, FindingKind, Level, ModelChoice, ProjectFacts, PromptInput, Task};
+use regie_core::{
+    EvidenceType, Finding, FindingKind, Level, ModelChoice, ProjectFacts, PromptInput, Task,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Template {
@@ -24,7 +26,9 @@ impl Template {
             Template::BuilderFix => include_str!("../../../../prompts/builder_fix.md"),
             Template::BuilderOpenPr => include_str!("../../../../prompts/builder_open_pr.md"),
             Template::BuilderCiFix => include_str!("../../../../prompts/builder_ci_fix.md"),
-            Template::BuilderConflictFix => include_str!("../../../../prompts/builder_conflict_fix.md"),
+            Template::BuilderConflictFix => {
+                include_str!("../../../../prompts/builder_conflict_fix.md")
+            }
             Template::BuilderResume => include_str!("../../../../prompts/builder_resume.md"),
             Template::Reviewer => include_str!("../../../../prompts/reviewer.md"),
             Template::Verify => include_str!("../../../../prompts/verify.md"),
@@ -78,7 +82,10 @@ pub fn prompt_for(
         .set("instruction", task.instruction.as_str())
         .set("tickets", bullets(&task.tickets, "None."))
         .set("checks", checks(facts))
-        .set("definition_of_done", or(&facts.definition_of_done, "Nothing beyond the task itself."))
+        .set(
+            "definition_of_done",
+            or(&facts.definition_of_done, "Nothing beyond the task itself."),
+        )
         .set("port_base", port_base.to_string())
         .set("model", model.model.as_str())
         .set("level", level_name(task.level))
@@ -92,7 +99,10 @@ pub fn prompt_for(
         }
         PromptInput::OpenPr => Template::BuilderOpenPr,
         PromptInput::CiFix { failed } => {
-            v.set("failed_checks", bullets(failed, "(no names given; see `gh pr checks`)"));
+            v.set(
+                "failed_checks",
+                bullets(failed, "(no names given; see `gh pr checks`)"),
+            );
             Template::BuilderCiFix
         }
         PromptInput::ConflictFix => Template::BuilderConflictFix,
@@ -114,19 +124,35 @@ pub fn prompt_for(
 
 /// The branch the worktree was cut from; `HEAD` (so `origin/HEAD`) when not recorded.
 fn default_branch(task: &Task) -> String {
-    let base = task.worktree.as_ref().map(|w| w.base.trim()).unwrap_or_default();
-    if base.is_empty() { "HEAD".into() } else { base.into() }
+    let base = task
+        .worktree
+        .as_ref()
+        .map(|w| w.base.trim())
+        .unwrap_or_default();
+    if base.is_empty() {
+        "HEAD".into()
+    } else {
+        base.into()
+    }
 }
 
 fn or(s: &str, empty: &str) -> String {
-    if s.trim().is_empty() { empty.to_string() } else { s.to_string() }
+    if s.trim().is_empty() {
+        empty.to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 fn bullets(items: &[String], empty: &str) -> String {
     if items.is_empty() {
         return empty.to_string();
     }
-    items.iter().map(|i| format!("- {i}")).collect::<Vec<_>>().join("\n")
+    items
+        .iter()
+        .map(|i| format!("- {i}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn checks(f: &ProjectFacts) -> String {
@@ -135,7 +161,8 @@ fn checks(f: &ProjectFacts) -> String {
         .filter_map(|(label, cmd)| cmd.as_deref().map(|c| format!("- {label}: `{c}`")))
         .collect();
     if lines.is_empty() {
-        "No checks are set for this project; build and test it the usual way for its language.".into()
+        "No checks are set for this project; build and test it the usual way for its language."
+            .into()
     } else {
         lines.join("\n")
     }
@@ -264,7 +291,10 @@ mod tests {
     }
 
     fn opus() -> ModelChoice {
-        ModelChoice { model: "claude-opus-5-5".into(), effort: Effort::Medium }
+        ModelChoice {
+            model: "claude-opus-5-5".into(),
+            effort: Effort::Medium,
+        }
     }
 
     fn prompt(input: PromptInput) -> String {
@@ -299,7 +329,9 @@ mod tests {
     fn missing_var_is_an_error() {
         let mut vars = full_vars();
         vars.0.remove("instruction");
-        let err = render(Template::BuilderInitial, &vars).unwrap_err().to_string();
+        let err = render(Template::BuilderInitial, &vars)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("instruction"), "{err}");
     }
 
@@ -327,26 +359,45 @@ mod tests {
     fn every_builder_prompt_has_the_status_contract() {
         for input in [
             PromptInput::Initial,
-            PromptInput::Fix { findings: vec![finding()] },
+            PromptInput::Fix {
+                findings: vec![finding()],
+            },
             PromptInput::OpenPr,
-            PromptInput::CiFix { failed: vec!["test (ubuntu)".into()] },
+            PromptInput::CiFix {
+                failed: vec!["test (ubuntu)".into()],
+            },
             PromptInput::ConflictFix,
-            PromptInput::Resume { note: regie_core::RESUME_NOTE.into() },
+            PromptInput::Resume {
+                note: regie_core::RESUME_NOTE.into(),
+            },
         ] {
             let p = prompt(input.clone());
-            assert!(p.contains("End your final message with one line: `Status: done`"), "{input:?}");
-            assert!(p.contains("Never merge") || p.contains("never merge"), "{input:?}");
+            assert!(
+                p.contains("End your final message with one line: `Status: done`"),
+                "{input:?}"
+            );
+            assert!(
+                p.contains("Never merge") || p.contains("never merge"),
+                "{input:?}"
+            );
         }
     }
 
     #[test]
     fn follow_up_prompts_say_what_to_fix() {
-        let p = prompt(PromptInput::Fix { findings: vec![finding()] });
-        assert!(p.contains("Panics on empty body") && p.contains("src/health.rs:12"), "{p}");
+        let p = prompt(PromptInput::Fix {
+            findings: vec![finding()],
+        });
+        assert!(
+            p.contains("Panics on empty body") && p.contains("src/health.rs:12"),
+            "{p}"
+        );
         assert!(p.contains("run the checks") && p.contains("commit"), "{p}");
         assert!(!p.contains("push this branch"), "{p}");
 
-        let p = prompt(PromptInput::CiFix { failed: vec!["test (ubuntu)".into()] });
+        let p = prompt(PromptInput::CiFix {
+            failed: vec!["test (ubuntu)".into()],
+        });
         assert!(p.contains("test (ubuntu)") && p.contains("push"), "{p}");
 
         let p = prompt(PromptInput::ConflictFix);
@@ -357,10 +408,17 @@ mod tests {
         assert!(p.contains("push"), "{p}");
 
         let p = prompt(PromptInput::OpenPr);
-        assert!(p.contains("Review is closed. Push this branch and open a pull request with `gh pr create`"));
-        assert!(p.contains("Add a health endpoint") && p.contains("ABC-12"), "{p}");
+        assert!(p.contains(
+            "Review is closed. Push this branch and open a pull request with `gh pr create`"
+        ));
+        assert!(
+            p.contains("Add a health endpoint") && p.contains("ABC-12"),
+            "{p}"
+        );
 
-        let p = prompt(PromptInput::Resume { note: regie_core::RESUME_NOTE.into() });
+        let p = prompt(PromptInput::Resume {
+            note: regie_core::RESUME_NOTE.into(),
+        });
         assert!(p.contains(regie_core::RESUME_NOTE), "{p}");
     }
 
@@ -369,7 +427,10 @@ mod tests {
         let p = prompt(PromptInput::Review { round: 2 });
         assert!(p.contains("Do not edit files or commit."), "{p}");
         assert!(p.contains("Add GET /health returning 200."), "{p}");
-        assert!(p.contains("Tests pass and the endpoint is documented."), "{p}");
+        assert!(
+            p.contains("Tests pass and the endpoint is documented."),
+            "{p}"
+        );
         assert!(p.contains("```json") && p.contains(r#""findings""#), "{p}");
         // The example in the prompt parses with the real parser.
         assert!(matches!(
@@ -389,25 +450,48 @@ mod tests {
             port_base: 41010,
             base: "trunk".into(),
         });
-        let p = prompt_for(&t, &facts(), &PromptInput::Review { round: 1 }, &opus(), 41010).unwrap();
+        let p = prompt_for(
+            &t,
+            &facts(),
+            &PromptInput::Review { round: 1 },
+            &opus(),
+            41010,
+        )
+        .unwrap();
         assert!(p.contains("git merge-base HEAD origin/trunk"), "{p}");
         assert!(!p.contains("origin/HEAD"), "{p}");
         // a worktree recorded before the base was kept falls back to origin/HEAD
         t.worktree.as_mut().unwrap().base = String::new();
-        let p = prompt_for(&t, &facts(), &PromptInput::Review { round: 1 }, &opus(), 41010).unwrap();
+        let p = prompt_for(
+            &t,
+            &facts(),
+            &PromptInput::Review { round: 1 },
+            &opus(),
+            41010,
+        )
+        .unwrap();
         assert!(p.contains("git merge-base HEAD origin/HEAD"), "{p}");
     }
 
     #[test]
     fn verify_prompt_lists_findings_and_format() {
-        let p = prompt(PromptInput::Verify { findings: vec![finding()] });
+        let p = prompt(PromptInput::Verify {
+            findings: vec![finding()],
+        });
         assert!(p.contains("Panics on empty body"), "{p}");
         assert!(p.contains(r#""results""#) && p.contains("not_fixed"), "{p}");
-        assert!(matches!(regie_core::parse_verify(&p), regie_core::VerifyOutcome::Results(r) if r.len() == 1));
+        assert!(
+            matches!(regie_core::parse_verify(&p), regie_core::VerifyOutcome::Results(r) if r.len() == 1)
+        );
     }
 
     #[test]
     fn message_is_returned_as_is() {
-        assert_eq!(prompt(PromptInput::Message { text: "Use {{braces}} too.".into() }), "Use {{braces}} too.");
+        assert_eq!(
+            prompt(PromptInput::Message {
+                text: "Use {{braces}} too.".into()
+            }),
+            "Use {{braces}} too."
+        );
     }
 }

@@ -21,15 +21,28 @@ async fn a_server_that_exits_early_fails_fast() {
     // `regie` started `regie serve`, which died (a bad port, a locked data dir):
     // say so at once instead of waiting out the health check.
     let dir = tempfile::tempdir().unwrap();
-    let data = regie::paths::DataDir { root: dir.path().to_path_buf() };
-    let mut child = std::process::Command::new("sh").args(["-c", "exit 3"]).spawn().unwrap();
+    let data = regie::paths::DataDir {
+        root: dir.path().to_path_buf(),
+    };
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "exit 3"])
+        .spawn()
+        .unwrap();
     let t = std::time::Instant::now();
-    let Err(err) = regie::cli::wait_for_server(&data, &mut child, Duration::from_secs(20)).await else {
+    let Err(err) = regie::cli::wait_for_server(&data, &mut child, Duration::from_secs(20)).await
+    else {
         panic!("no server answered, yet it was found");
     };
     let msg = format!("{err:#}");
-    assert!(t.elapsed() < Duration::from_secs(5), "took {:?}", t.elapsed());
-    assert!(msg.contains("server.log") && msg.contains("exited"), "{msg}");
+    assert!(
+        t.elapsed() < Duration::from_secs(5),
+        "took {:?}",
+        t.elapsed()
+    );
+    assert!(
+        msg.contains("server.log") && msg.contains("exited"),
+        "{msg}"
+    );
 }
 
 #[test]
@@ -351,7 +364,8 @@ async fn shutdown_ends_runs_interrupted_and_removes_server_json() {
 async fn a_second_serve_on_a_live_data_dir_fails_and_touches_nothing() {
     let h = Harness::new(|_, _| hangs()).await;
     let t = h.create_session_and_task("Long job").await;
-    h.wait_for("a run", 10, |h| h.state().active_run(t).is_some()).await;
+    h.wait_for("a run", 10, |h| h.state().active_run(t).is_some())
+        .await;
     // The live server: it holds the lock and has written its server.json.
     h.data.ensure().unwrap();
     let _live = regie::cli::lock_data_dir(&h.data).unwrap();
@@ -359,7 +373,14 @@ async fn a_second_serve_on_a_live_data_dir_fails_and_touches_nothing() {
     std::fs::write(h.data.server_json(), info).unwrap();
     let events_before = h.events().len();
 
-    let cli = parse(&["serve", "--no-open", "--port", "0", "--data-dir", h.data.root.to_str().unwrap()]);
+    let cli = parse(&[
+        "serve",
+        "--no-open",
+        "--port",
+        "0",
+        "--data-dir",
+        h.data.root.to_str().unwrap(),
+    ]);
     let err = regie::cli::run(cli).await.unwrap_err();
     assert!(err.to_string().contains("already running"), "{err}");
 
