@@ -98,8 +98,8 @@ pub fn next_step(task: &Task, state: &State, settings: &Settings) -> NextStep {
         }
         _ => {}
     }
-    // 6. A pending message.
-    if let Some(text) = task.pending_messages.first() {
+    // 6. A pending message (after the first builder run, which gets the instruction).
+    if let Some(text) = task.pending_messages.first().filter(|_| state.builder_started(task.id)) {
         return start(Role::Builder, Purpose::Message, PromptInput::Message { text: text.clone() });
     }
     // 7. The builder asked a question.
@@ -436,6 +436,12 @@ mod tests {
                 input: PromptInput::Message { text: "use sqlite".into() },
             }
         );
+    }
+
+    #[test]
+    fn message_before_the_first_run_waits_for_it() {
+        // The first run gets the task's instruction; the message follows it.
+        assert_eq!(step(TaskB::new().message("use sqlite")), start(Role::Builder, Purpose::Initial));
     }
 
     #[test]
