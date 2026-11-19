@@ -13,6 +13,7 @@ pub trait GitHub: Send + Sync {
     async fn close_pr(&self, repo: &Path, number: u64) -> anyhow::Result<()>;
 }
 
+/// `gh` gives `null` for fields GitHub has not computed yet; every such field is optional.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawPr {
@@ -20,15 +21,15 @@ struct RawPr {
     url: String,
     state: String,
     #[serde(default)]
-    mergeable: String,
+    mergeable: Option<String>,
     #[serde(default)]
-    merge_state_status: String,
+    merge_state_status: Option<String>,
     #[serde(default)]
     review_decision: Option<String>,
     #[serde(default)]
-    status_check_rollup: Vec<serde_json::Value>,
+    status_check_rollup: Option<Vec<serde_json::Value>>,
     #[serde(default)]
-    head_ref_oid: String,
+    head_ref_oid: Option<String>,
 }
 
 pub fn parse_pr_list(json: &str) -> anyhow::Result<Option<PrState>> {
@@ -41,9 +42,9 @@ pub fn parse_pr_list(json: &str) -> anyhow::Result<Option<PrState>> {
             "CLOSED" => PrLifecycle::Closed,
             _ => PrLifecycle::Open,
         },
-        checks: aggregate_checks(&r.status_check_rollup),
-        conflicting: r.mergeable == "CONFLICTING",
-        merge_state: match r.merge_state_status.as_str() {
+        checks: aggregate_checks(r.status_check_rollup.as_deref().unwrap_or_default()),
+        conflicting: r.mergeable.as_deref() == Some("CONFLICTING"),
+        merge_state: match r.merge_state_status.as_deref().unwrap_or_default() {
             "CLEAN" => MergeState::Clean,
             "BLOCKED" => MergeState::Blocked,
             "BEHIND" => MergeState::Behind,
@@ -57,7 +58,7 @@ pub fn parse_pr_list(json: &str) -> anyhow::Result<Option<PrState>> {
             Some("REVIEW_REQUIRED") => Some(ReviewDecision::ReviewRequired),
             _ => None,
         },
-        head_sha: r.head_ref_oid,
+        head_sha: r.head_ref_oid.unwrap_or_default(),
     }))
 }
 
@@ -149,25 +150,21 @@ pub fn aggregate_checks(rollup: &[serde_json::Value]) -> Checks {
     let text = |v: &serde_json::Value, k: &str| {
         v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
     };
+    // Only known-good answers pass: a completed check run with any other
+    // conclusion failed, and a status context in an unknown state is pending.
     let mut failed = Vec::new();
     let mut pending = false;
     for c in rollup {
         if c.get("__typename").and_then(|t| t.as_str()) == Some("StatusContext") {
             match text(c, "state").as_str() {
+                "SUCCESS" => {}
                 "FAILURE" | "ERROR" => failed.push(text(c, "context")),
-                "PENDING" | "EXPECTED" => pending = true,
-                _ => {}
+                _ => pending = true,
             }
-        } else {
-            if text(c, "status") != "COMPLETED" {
-                pending = true;
-            }
-            if matches!(
-                text(c, "conclusion").as_str(),
-                "FAILURE" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED"
-            ) {
-                failed.push(text(c, "name"));
-            }
+        } else if text(c, "status") != "COMPLETED" {
+            pending = true;
+        } else if !matches!(text(c, "conclusion").as_str(), "SUCCESS" | "NEUTRAL" | "SKIPPED") {
+            failed.push(text(c, "name"));
         }
     }
     if !failed.is_empty() {
@@ -314,6 +311,53 @@ mod tests {
         assert_eq!(a[2].body, "");
         // 2026-11-19T10:00:00Z
         assert_eq!(a[0].at, Millis(1_795_082_400_000));
+    }
+
+    #[test]
+    fn null_fields_are_accepted() {
+        let json = r#"[{"number":4,"url":"u","state":"OPEN","mergeable":null,"mergeStateStatus":null,
+            "reviewDecision":null,"statusCheckRollup":null,"headRefOid":null}]"#;
+        let p = pr(json);
+        assert_eq!(p.checks, Checks::None);
+        assert_eq!(p.merge_state, MergeState::Unknown);
+        assert!(!p.conflicting);
+        assert_eq!(p.head_sha, "");
+    }
+
+    #[test]
+    fn check_conclusions_table() {
+        use serde_json::json;
+        let run = |status: &str, conclusion: &str| {
+            json!({"__typename":"CheckRun","name":conclusion.to_lowercase(),"status":status,"conclusion":conclusion})
+        };
+        let ctx = |state: &str| json!({"__typename":"StatusContext","context":state.to_lowercase(),"state":state});
+        let failed = |n: &str| Checks::Failure { failed: vec![n.into()] };
+        let rows: Vec<(&str, Vec<serde_json::Value>, Checks)> = vec![
+            ("success", vec![run("COMPLETED", "SUCCESS")], Checks::Success),
+            ("neutral", vec![run("COMPLETED", "NEUTRAL")], Checks::Success),
+            ("skipped", vec![run("COMPLETED", "SKIPPED")], Checks::Success),
+            ("timed out", vec![run("COMPLETED", "TIMED_OUT")], failed("timed_out")),
+            ("cancelled", vec![run("COMPLETED", "CANCELLED")], failed("cancelled")),
+            ("action required", vec![run("COMPLETED", "ACTION_REQUIRED")], failed("action_required")),
+            ("startup failure", vec![run("COMPLETED", "STARTUP_FAILURE")], failed("startup_failure")),
+            ("stale", vec![run("COMPLETED", "STALE")], failed("stale")),
+            ("in progress", vec![run("IN_PROGRESS", "")], Checks::Pending),
+            ("status success", vec![ctx("SUCCESS")], Checks::Success),
+            ("status error", vec![ctx("ERROR")], failed("error")),
+            ("status failure", vec![ctx("FAILURE")], failed("failure")),
+            ("status pending", vec![ctx("PENDING")], Checks::Pending),
+            ("status expected", vec![ctx("EXPECTED")], Checks::Pending),
+            ("status unknown", vec![ctx("SOMETHING_NEW")], Checks::Pending),
+            (
+                "failure beats pending",
+                vec![run("IN_PROGRESS", ""), ctx("PENDING"), run("COMPLETED", "STARTUP_FAILURE")],
+                failed("startup_failure"),
+            ),
+            ("empty", vec![], Checks::None),
+        ];
+        for (name, rollup, want) in rows {
+            assert_eq!(aggregate_checks(&rollup), want, "{name}");
+        }
     }
 
     #[test]

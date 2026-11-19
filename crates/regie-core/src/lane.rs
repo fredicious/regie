@@ -102,7 +102,10 @@ fn place(
     // 7. An open PR.
     if let Some(pr) = pr.filter(|pr| pr.lifecycle == PrLifecycle::Open) {
         let green = pr.checks == Checks::Success;
-        return if green && !pr.conflicting && pr.merge_state == MergeState::Clean {
+        // No checks at all (a repo without CI) is ready once GitHub says CLEAN;
+        // while checks are pending GitHub says UNSTABLE or BLOCKED instead.
+        let passing = green || pr.checks == Checks::None;
+        return if passing && !pr.conflicting && pr.merge_state == MergeState::Clean {
             Lane::ReadyToMerge
         } else if green && pr.merge_state == MergeState::Blocked {
             // Waiting for a required GitHub approval.
@@ -262,6 +265,15 @@ mod tests {
         let t = |m| with_pr(with_worktree(task()), pr(Checks::Success, m, false, PrLifecycle::Open));
         assert_eq!(lane(&t(MergeState::Clean), None, &NextStep::Nothing, false, None).0, Lane::ReadyToMerge);
         assert_eq!(lane(&t(MergeState::Blocked), None, &NextStep::Nothing, false, None).0, Lane::InReview);
+    }
+
+    #[test]
+    fn no_ci_clean_pr_is_ready_to_merge() {
+        // A repo with no CI: GitHub's rollup is empty and the merge state CLEAN.
+        let t = |m, x| with_pr(with_worktree(task()), pr(Checks::None, m, x, PrLifecycle::Open));
+        assert_eq!(lane(&t(MergeState::Clean, false), None, &NextStep::Nothing, false, None).0, Lane::ReadyToMerge);
+        assert_eq!(lane(&t(MergeState::Clean, true), None, &NextStep::Nothing, false, None).0, Lane::Ci);
+        assert_eq!(lane(&t(MergeState::Unstable, false), None, &NextStep::Nothing, false, None).0, Lane::Ci);
     }
 
     #[test]
