@@ -12,8 +12,6 @@ export const board = signal<BoardView | null>(null);
 export const selectedTask = signal<number | null>(null);
 export const taskDetail = signal<TaskDetail | null>(null);
 export const liveLines = signal<Record<number, string[]>>({});
-/** Learned from the replayed events (the stream starts at the first stored one). */
-export const pausedAll = signal(false);
 export const now = signal(Date.now());
 
 const MAX_LINES = 200;
@@ -26,31 +24,33 @@ export function pushLine(o: OutputLine) {
 
 let boardTimer: ReturnType<typeof setTimeout> | undefined;
 let boardDirty = false;
+let boardSeq = 0;
 
-/** Refetches the board, at most once per 250 ms. */
+/** Refetches the board: one fetch now, then at most one more every 250 ms while events keep coming. */
 export function refreshBoard() {
   if (boardTimer) {
     boardDirty = true;
     return;
   }
-  const run = async () => {
-    const s = currentSession.value;
-    if (s !== null) {
-      try {
-        board.value = await getBoard(s);
-      } catch {
-        /* the next event retries */
-      }
+  boardTimer = setTimeout(() => {
+    boardTimer = undefined;
+    if (boardDirty) {
+      boardDirty = false;
+      refreshBoard();
     }
-    boardTimer = setTimeout(() => {
-      boardTimer = undefined;
-      if (boardDirty) {
-        boardDirty = false;
-        refreshBoard();
-      }
-    }, THROTTLE_MS);
-  };
-  void run();
+  }, THROTTLE_MS);
+  const s = currentSession.value;
+  if (s === null) return;
+  const seq = ++boardSeq;
+  getBoard(s).then(
+    (b) => {
+      // Drop answers for another session and answers overtaken by a newer fetch.
+      if (currentSession.value === s && seq === boardSeq) board.value = b;
+    },
+    () => {
+      /* the next event retries */
+    },
+  );
 }
 
 export async function refreshDetail() {
@@ -87,8 +87,6 @@ export function selectTask(id: number | null) {
 }
 
 export function onEvent(e: Event) {
-  if (e.kind.type === "AllPaused") pausedAll.value = true;
-  if (e.kind.type === "AllResumed") pausedAll.value = false;
   if (e.kind.type.startsWith("Session")) void refreshSessions();
   if (e.session === null || e.session === currentSession.value) refreshBoard();
   if (e.task !== null && e.task === selectedTask.value) void refreshDetail();

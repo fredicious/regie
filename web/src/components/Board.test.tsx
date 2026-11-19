@@ -26,7 +26,7 @@ test("monitor shows tally label text, not colour only", () => {
     <Board
       cards={[
         card({ id: 1, lane: "Working", flags: [{ NeedsMe: "BuilderQuestion" }] }),
-        card({ id: 2, lane: "Working" }),
+        card({ id: 2, lane: "Working", active: "Builder" }),
         card({ id: 3, lane: "ReadyToMerge", pr: [9, "http://x"] }),
         card({ id: 4, lane: "Queued", flags: [{ Waiting: "Slot" }] }),
       ]}
@@ -39,4 +39,16 @@ test("monitor shows tally label text, not colour only", () => {
   expect(within(screen.getByRole("button", { name: /T3/ })).getByText("READY")).toBeTruthy();
   expect(within(screen.getByRole("button", { name: /T3/ })).getByText("PR #9")).toBeTruthy();
   expect(within(screen.getByRole("button", { name: /T4/ })).getByText("OFF")).toBeTruthy();
+});
+
+test("a working card with no run in flight is OFF, a queued card with one is not guessed", () => {
+  render(
+    <Board
+      cards={[card({ id: 1, lane: "Working" }), card({ id: 2, lane: "InReview", active: "Reviewer" })]}
+      selected={null}
+      onSelect={() => {}}
+    />,
+  );
+  expect(within(screen.getByRole("button", { name: /T1/ })).getByText("OFF")).toBeTruthy();
+  expect(within(screen.getByRole("button", { name: /T2/ })).getByText("ON AIR")).toBeTruthy();
 });

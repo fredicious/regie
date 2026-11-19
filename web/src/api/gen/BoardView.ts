@@ -3,4 +3,4 @@ import type { Session } from "./Session";
 import type { TaskCard } from "./TaskCard";
 import type { UsageRow } from "./UsageRow";
 
-export type BoardView = { session: Session, cards: Array<TaskCard>, running: number, usage: Array<UsageRow>, };
+export type BoardView = { session: Session, cards: Array<TaskCard>, running: number, usage: Array<UsageRow>, paused_all: boolean, };

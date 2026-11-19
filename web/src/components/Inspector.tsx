@@ -14,7 +14,8 @@ export function Inspector({ detail, lines, send, onClose }: Props) {
   const [confirming, setConfirming] = useState(false);
   const [closePr, setClosePr] = useState(false);
   const t = tally(c);
-  const next = NEXT[c.level];
+  const finished = c.lane === "Merged" || c.lane === "Cancelled";
+  const next = finished ? null : NEXT[c.level];
   const usage = new Map<number, string>();
   for (const e of detail.timeline) {
     if (e.kind.type === "RunUsage") {
@@ -62,9 +63,13 @@ export function Inspector({ detail, lines, send, onClose }: Props) {
           <>
             <span>PR</span>
             <span>
-              <a href={c.pr[1]} target="_blank" rel="noreferrer">
-                PR #{c.pr[0]}
-              </a>
+              {c.pr[1].startsWith("https:") ? (
+                <a href={c.pr[1]} target="_blank" rel="noreferrer">
+                  PR #{c.pr[0]}
+                </a>
+              ) : (
+                `PR #${c.pr[0]}`
+              )}
             </span>
           </>
         )}
@@ -129,7 +134,7 @@ export function Inspector({ detail, lines, send, onClose }: Props) {
           <button
             type="button"
             class="btn"
-            onClick={() => send({ type: "MessageAgent", task: c.id, text: `Level raised to ${next}.`, level: next })}
+            onClick={() => send({ type: "RaiseLevel", task: c.id, level: next })}
           >
             Raise level
           </button>

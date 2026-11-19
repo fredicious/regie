@@ -36,6 +36,8 @@ pub struct TaskCard {
     #[ts(type = "[number, string] | null")]
     pub pr: Option<(u64, String)>,
     pub last_output: Option<String>,
+    /// The role of the run in flight, if any.
+    pub active: Option<Role>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
@@ -53,6 +55,7 @@ pub struct BoardView {
     pub cards: Vec<TaskCard>,
     pub running: u32,
     pub usage: Vec<UsageRow>,
+    pub paused_all: bool,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
@@ -82,6 +85,7 @@ fn card(task: &Task, state: &State, live: &LiveView, settings: &Settings) -> Tas
         tickets: task.tickets.clone(),
         pr: task.pr.as_ref().map(|pr| (pr.number, pr.url.clone())),
         last_output: live.last_output.get(&task.id).cloned(),
+        active: active.map(|r| r.role),
     }
 }
 
@@ -120,7 +124,7 @@ pub fn board(
     // Stable: ties keep the oldest-first order.
     cards.sort_by_key(|c| !needs_me(c));
     let running = tasks.iter().filter(|t| state.active_run(t.id).is_some()).count() as u32;
-    Some(BoardView { session: session.clone(), cards, running, usage: usage(state, settings, now) })
+    Some(BoardView { session: session.clone(), cards, running, usage: usage(state, settings, now), paused_all: state.paused_all })
 }
 
 pub fn task_detail(
@@ -234,6 +238,18 @@ mod tests {
         assert!(needs_me(&view.cards[0]) && needs_me(&view.cards[1]) && !needs_me(&view.cards[2]));
         assert_eq!(view.running, 1);
         assert_eq!(view.session.id, SessionId(1));
+        // Only T1 has a run in flight.
+        let active: Vec<(i64, Option<Role>)> = view.cards.iter().map(|c| (c.id.0, c.active)).collect();
+        assert_eq!(active, vec![(4, None), (2, None), (1, Some(Role::Builder)), (3, None)]);
+        assert!(!view.paused_all);
+    }
+
+    #[test]
+    fn board_reports_paused_all() {
+        let events = vec![session_event(), ev(11, None, EventKind::AllPaused)];
+        let state = State::replay(&events);
+        let view = board(&state, &LiveView::default(), SessionId(1), &Settings::default(), Millis(1000)).unwrap();
+        assert!(view.paused_all);
     }
 
     #[test]

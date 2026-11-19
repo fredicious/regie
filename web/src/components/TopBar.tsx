@@ -8,15 +8,15 @@ type Props = {
   sessions: Session[];
   current: number | null;
   board: BoardView | null;
-  pausedAll: boolean;
   now: number;
   onSession: (id: number) => void;
   send: (c: Command) => void;
 };
 
-export function TopBar({ sessions, current, board, pausedAll, now, onSession, send }: Props) {
+export function TopBar({ sessions, current, board, now, onSession, send }: Props) {
   const running = board?.running ?? 0;
   const session = board?.session;
+  const pausedAll = board?.paused_all ?? false;
   return (
     <header class="top">
       <span class="logo">RÉGIE</span>

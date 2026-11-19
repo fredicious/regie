@@ -34,6 +34,9 @@ impl Engine {
                 self.emit(Some(session), Some(id), actor, kind).map(|_| CommandResult::Task(id))
             }
             Command::MessageAgent { task, text, level } => self.message(task, text, level, actor),
+            Command::RaiseLevel { task, level } => {
+                self.emit_task(task, actor, EventKind::LevelRaised { level }).map(|_| CommandResult::Ok)
+            }
             Command::StopAgent { task } => self.stop_agent(task),
             Command::CancelTask { task, close_pr } => self.cancel(task, close_pr, actor),
             Command::RetryTask { task } => self.retry(task, actor),

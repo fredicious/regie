@@ -27,6 +27,7 @@ pub enum Command {
         provider: Option<Provider>,
     },
     MessageAgent { task: TaskId, text: String, level: Option<Level> },
+    RaiseLevel { task: TaskId, level: Level },
     StopAgent { task: TaskId },
     RetryTask { task: TaskId },
     CancelTask { task: TaskId, close_pr: bool },
@@ -94,6 +95,16 @@ pub fn validate(cmd: &Command, state: &State) -> Result<(), CommandError> {
                 if state.tasks.get(b).is_none_or(|t| t.session != *sid) {
                     return Err(CommandError::BlockedByNotInSession(*b));
                 }
+            }
+        }
+        Command::RaiseLevel { task: id, level } => {
+            let t = task(id)?;
+            let merged = t.pr.as_ref().is_some_and(|pr| pr.lifecycle == PrLifecycle::Merged);
+            if merged || t.cancelled.is_some() {
+                return Err(CommandError::TaskFinished(*id));
+            }
+            if *level <= t.level {
+                return Err(CommandError::LevelNotHigher { current: t.level, requested: *level });
             }
         }
         Command::MessageAgent { task: id, level, .. } => {
@@ -227,6 +238,20 @@ mod tests {
         let err = |l| Err(CommandError::LevelNotHigher { current: Level::Standard, requested: l });
         assert_eq!(validate(&msg(Some(Level::Standard)), &s), err(Level::Standard));
         assert_eq!(validate(&msg(Some(Level::Light)), &s), err(Level::Light));
+    }
+
+    #[test]
+    fn raise_level_checks_task_and_direction() {
+        let mut s = state(true);
+        let raise = |t, level| Command::RaiseLevel { task: TaskId(t), level };
+        assert_eq!(validate(&raise(1, Level::Hard), &s), Ok(()));
+        assert_eq!(
+            validate(&raise(1, Level::Standard), &s),
+            Err(CommandError::LevelNotHigher { current: Level::Standard, requested: Level::Standard })
+        );
+        assert_eq!(validate(&raise(9, Level::Hard), &s), Err(CommandError::TaskNotFound(TaskId(9))));
+        s.tasks.get_mut(&TaskId(1)).unwrap().cancelled = Some(false);
+        assert_eq!(validate(&raise(1, Level::Hard), &s), Err(CommandError::TaskFinished(TaskId(1))));
     }
 
     #[test]

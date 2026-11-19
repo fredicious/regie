@@ -431,3 +431,21 @@ async fn commands_are_validated() {
     assert_eq!(state.sessions[&s].repos[0].github.as_deref(), Some("o/r"));
     assert_eq!(state.sessions[&s].repos[0].path, h.repo_path());
 }
+
+#[tokio::test]
+async fn raise_level_only_records_the_new_level() {
+    let h = Harness::new(|spec, _| match spec.purpose {
+        Purpose::Initial => hangs(),
+        other => panic!("unexpected run {other:?}"),
+    })
+    .await;
+    let t = h.create_session_and_task("Long job").await;
+    h.wait_for("builder running", SECS, |h| h.state().active_run(t).is_some()).await;
+    h.command(Command::RaiseLevel { task: t, level: regie_core::Level::Hard }).await;
+    assert_eq!(h.state().tasks[&t].level, regie_core::Level::Hard);
+    assert!(h.events().iter().any(|e| e.kind == EventKind::LevelRaised { level: regie_core::Level::Hard }));
+    assert!(!h.events().iter().any(|e| matches!(e.kind, EventKind::MessageQueued { .. })));
+    assert!(h.claude.controls().is_empty());
+    assert_eq!(h.card(t).level, regie_core::Level::Hard);
+    assert!(h.card(t).active.is_some());
+}

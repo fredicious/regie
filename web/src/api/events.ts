@@ -12,10 +12,12 @@ export function connect(onEvent: (e: Event) => void, onOutput: (o: OutputLine) =
 
   const open = () => {
     es = new EventSource(`/api/events?after=${last}`);
+    es.onopen = () => {
+      delay = 2000;
+    };
     es.addEventListener("event", (m) => {
       const e = JSON.parse((m as MessageEvent).data) as Event;
       last = Math.max(last, e.id);
-      delay = 2000;
       onEvent(e);
     });
     es.addEventListener("output", (m) => onOutput(JSON.parse((m as MessageEvent).data)));

@@ -10,6 +10,7 @@ export function card(over: Partial<TaskCard> & { id: number }): TaskCard {
     tickets: [],
     pr: null,
     last_output: null,
+    active: null,
     ...over,
   };
 }

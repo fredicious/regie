@@ -2,6 +2,11 @@
 import type { Flag } from "./Flag";
 import type { Lane } from "./Lane";
 import type { Level } from "./Level";
+import type { Role } from "./Role";
 import type { TaskId } from "./TaskId";
 
-export type TaskCard = { id: TaskId, title: string, lane: Lane, flags: Array<Flag>, level: Level, model: string | null, tickets: Array<string>, pr: [number, string] | null, last_output: string | null, };
+export type TaskCard = { id: TaskId, title: string, lane: Lane, flags: Array<Flag>, level: Level, model: string | null, tickets: Array<string>, pr: [number, string] | null, last_output: string | null, 
+/**
+ * The role of the run in flight, if any.
+ */
+active: Role | null, };

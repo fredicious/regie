@@ -37,7 +37,6 @@ export function App() {
         sessions={s.sessions.value}
         current={s.currentSession.value}
         board={s.board.value}
-        pausedAll={s.pausedAll.value}
         now={s.now.value}
         onSession={s.selectSession}
         send={run}

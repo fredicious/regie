@@ -20,11 +20,11 @@ export type Tally = { label: "ON AIR" | "READY" | "NEEDS ME" | "OFF"; colour: "r
 
 export const needsMe = (flags: Flag[]) => flags.some((f) => typeof f === "object" && "NeedsMe" in f);
 
-/** A card has an active run when it works or is in review and nothing holds it. */
+/** ON AIR is the server's word: the card has a run in flight. */
 export function tally(c: TaskCard): Tally {
   if (needsMe(c.flags)) return { label: "NEEDS ME", colour: "amber" };
   if (c.lane === "ReadyToMerge") return { label: "READY", colour: "green" };
-  if ((c.lane === "Working" || c.lane === "InReview") && c.flags.length === 0) return { label: "ON AIR", colour: "red" };
+  if (c.active) return { label: "ON AIR", colour: "red" };
   return { label: "OFF", colour: "off" };
 }
 
