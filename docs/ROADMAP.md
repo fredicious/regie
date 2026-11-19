@@ -1,17 +1,39 @@
-# Roadmap — deferred ideas parking lot
+# Roadmap
+
+Régie's next version is a **local lead-agent orchestrator**: you talk to a lead agent in a web dashboard; it takes tickets from your backlog, delegates them to Claude and Codex agents on your subscriptions, brings each PR to "ready to merge", and you merge.
+
+- Requirements: [`docs/requirements/2026-11-19-lead-agent-orchestrator.md`](requirements/2026-11-19-lead-agent-orchestrator.md)
+- Design: [`docs/superpowers/specs/2026-11-19-lead-agent-orchestrator-design.md`](superpowers/specs/2026-11-19-lead-agent-orchestrator-design.md)
+
+## Milestones
+
+| # | Milestone | Status |
+|---|---|---|
+| 1 | **One task, started by hand.** Rust core, event store, worktrees, Claude builder and reviewer with fix rounds, PR, CI, merge detection, cleanup, Claude usage thresholds, pause, restart recovery, CLI, board page. | **Done** (2026-11-19). [Plan](superpowers/plans/2026-11-19-milestone-1-one-task-by-hand.md), [live run](superpowers/plans/2026-11-19-milestone-1-live-run.md). |
+| 2 | **The lead.** A long Claude conversation woken by events, Régie's MCP tools, Lead view, Needs me queue, escalations, notifications, onboarding, Jira updates, `regie settings` for the level-to-model map, per-task model override. Daily use starts here. | **Next.** [Handover](superpowers/plans/2026-11-19-milestone-2-handover.md). |
+| 3 | **Codex.** Codex agents as threads of one `codex app-server`, review by the other provider, Codex usage, adaptive slots, run anyway, handover after a limit hit. | Planned |
+| 4 | **Memory and the log.** Lessons, how they reach prompts, freshness, reflection, the log and settings pages. | Planned |
+| 5 | **Done.** Full acceptance scenario, bench adapter, the Python code retired. | Planned |
+
+Open issues track each milestone and the known follow-ups.
+
+## Earlier direction (Python Régie)
+
+Until 2026-11-19 Régie was a Python pipeline with a terminal control room. Its parking lot of ideas is kept below for reference; most of it is superseded by the design above.
+
 
 Everything consciously deferred from v1. Nothing here is a commitment; it's the
 memory of good ideas so they don't get lost. Source: 2026-07-29 brainstorming
 session (see `docs/superpowers/specs/2026-07-29-regie-v1-design.md`).
 
-## v1.5
+### v1.5
 
 - **Web dashboard** — Next.js app over the run directories (pure reader of
   `state.json` + `events.jsonl`): real-time state-machine view, drill into any
   agent transcript, full run history. The terminal control room now covers the
   local operator experience; a web version would target remote/shared access.
 
-## Reconsidered after the 2026-07-29 adversarial review
+### Reconsidered after the 2026-07-29 adversarial review
 
 - **Parallel task execution** — shipped 2026-08-17: dependency-layer fan-out,
   task worktrees, predicted-scope overlap serialization, stable integration,
@@ -27,7 +49,7 @@ session (see `docs/superpowers/specs/2026-07-29-regie-v1-design.md`).
 - **Autonomous-by-default** — v1 defaults to a human spec checkpoint
   (`regie approve`), with `--autonomous` to earn back once specs prove reliable.
 
-## v1.x — DX (user-confirmed 2026-07-30)
+### v1.x — DX (user-confirmed 2026-07-30)
 
 - **Spec lands in the PR (must-have)** — the PR stage writes the run's spec
   into the target repo as `specs/<run-id>.md` (committed before the squash, or
@@ -38,7 +60,7 @@ session (see `docs/superpowers/specs/2026-07-29-regie-v1-design.md`).
   (spec, status, transcripts) without knowing the hidden `~/.regie` layout.
   General principle: no workflow step should require navigating a dotfolder.
 
-## Surfaced by the overnight dogfood run (2026-07-30/31)
+### Surfaced by the overnight dogfood run (2026-07-30/31)
 
 Fixed inline (twelve harness bugs; see git log): inline `--json-schema`, strict
 `PLAN_SCHEMA`, scribe count contract, `.gitignore` prerequisite, planner
@@ -64,7 +86,7 @@ Still open, worth briefs:
 - **`max_turns`/budget as a first-class outcome** (partially done — named now;
   make it its own `Attempt.outcome` with budget-aware escalation).
 
-## Done 2026-07-31 (features 2-4)
+### Done 2026-07-31 (features 2-4)
 
 - **`regie preflight`** — runs the repo's gate commands, verdict strictly by
   exit code. Shipped.
@@ -77,7 +99,7 @@ Still open, worth briefs:
   builds → clean PR. Note: `gpt-5-codex` is rejected on ChatGPT auth; use the
   account's real model (e.g. `gpt-5.5`). Shipped.
 
-## Done 2026-08-14 — Token Governor
+### Done 2026-08-14 — Token Governor
 
 - Provider-normalized token/cache/reasoning/tool-output/cost telemetry and
   `regie stats --tokens`, including failed attempts.
@@ -96,7 +118,7 @@ Still open, worth briefs:
   parsing, provider-wide cross-run failover, synthetic no-call skips, half-open
   recovery probes, debugger/reviewer fallback, and operator status/reset CLI.
 
-## Done 2026-08-17 — adaptive orchestration expansion
+### Done 2026-08-17 — adaptive orchestration expansion
 
 Materially inspired by [MetaSwarm](https://github.com/dsifry/metaswarm); see
 `docs/ACKNOWLEDGEMENTS.md`.
@@ -117,7 +139,7 @@ Materially inspired by [MetaSwarm](https://github.com/dsifry/metaswarm); see
 - Parent/child run linkage as the durable foundation for recursive,
   multi-repository orchestration.
 
-## Done 2026-08-17 — terminal control room
+### Done 2026-08-17 — terminal control room
 
 - Bare `regie` launches a live Textual application; every existing subcommand
   remains available for scripts and CI.
@@ -130,7 +152,7 @@ Materially inspired by [MetaSwarm](https://github.com/dsifry/metaswarm); see
 - Lock-safe approval and resume actions backed by the same durable transitions
   and CLI engine used outside the interface.
 
-## Done 2026-08-17 — bounded Product Owner recovery
+### Done 2026-08-17 — bounded Product Owner recovery
 
 - Deterministic plan-contract defects retain a three-attempt repair budget;
   advisory plan-review disputes invoke one read-only Product Owner agent after
@@ -147,7 +169,7 @@ Materially inspired by [MetaSwarm](https://github.com/dsifry/metaswarm); see
 - Managed background engine processes keep the interface responsive and retain
   a diagnostic log under `$REGIE_HOME`.
 
-## Done 2026-09-02 — lean routing and bounded execution recovery
+### Done 2026-09-02 — lean routing and bounded execution recovery
 
 - Plan-review panels now earn their cost: explicit critical workflows retain
   the full panel, while automatic single-task plans select only evidence-backed
@@ -172,7 +194,7 @@ Materially inspired by [MetaSwarm](https://github.com/dsifry/metaswarm); see
   also established the next optimization target: reduce reviewer latency and
   prevent avoidable finding oscillation without weakening defect discovery.
 
-## v2
+### v2
 
 - **Local / OSS models** — third binding target via opencode/Ollama; slot exists
   in the profile schema. Candidate first use: trivial-complexity tasks and Red
@@ -205,7 +227,7 @@ Materially inspired by [MetaSwarm](https://github.com/dsifry/metaswarm); see
   remaining quota per provider (e.g. drain Codex before touching Claude limits
   late in the day).
 
-## v3+
+### v3+
 
 - **Open-source release** — generic packaging: configurable workflows/profiles,
   docs, multi-repo support, the web dashboard grown into a workflow/profile
