@@ -391,7 +391,7 @@ async fn open_dashboard(data: &DataDir) -> anyhow::Result<()> {
         .with_context(|| format!("opening {}", log.display()))?;
     let err = out.try_clone()?;
     let exe = std::env::current_exe().context("finding my own executable")?;
-    {
+    let mut child = {
         use std::os::unix::process::CommandExt;
         std::process::Command::new(exe)
             .args(["serve", "--no-open", "--data-dir"])
@@ -401,18 +401,38 @@ async fn open_dashboard(data: &DataDir) -> anyhow::Result<()> {
             .stderr(err)
             .process_group(0)
             .spawn()
-            .context("starting `regie serve`")?;
-    }
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            .context("starting `regie serve`")?
+    };
+    let client = wait_for_server(data, &mut child, START_WAIT).await?;
+    open_browser(&browser_url(&client));
+    Ok(())
+}
+
+/// How long `regie` waits for the server it started; a start first recovers
+/// the runs a killed Régie left, which alone may take several seconds.
+const START_WAIT: Duration = Duration::from_secs(20);
+
+/// Waits until the server started as `child` answers health. Fails at once
+/// if `child` exits first, and after `limit` otherwise.
+pub async fn wait_for_server(
+    data: &DataDir,
+    child: &mut std::process::Child,
+    limit: Duration,
+) -> anyhow::Result<Client> {
+    let log = data.root.join("server.log");
+    let deadline = tokio::time::Instant::now() + limit;
     while tokio::time::Instant::now() < deadline {
         if let Some(client) = live_client(data).await {
-            open_browser(&browser_url(&client));
-            return Ok(());
+            return Ok(client);
+        }
+        if let Some(status) = child.try_wait().context("checking on `regie serve`")? {
+            anyhow::bail!("`regie serve` exited ({status}) before it answered; see {}", log.display());
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     anyhow::bail!(
-        "Régie did not start within 5 seconds; see {}",
+        "Régie did not start within {} seconds; see {}",
+        limit.as_secs(),
         log.display()
     )
 }

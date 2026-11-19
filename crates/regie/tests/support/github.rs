@@ -1,7 +1,7 @@
 //! In-memory `GitHub` for integration tests.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use regie::github::{BranchPr, GhRepo, GitHub};
@@ -16,7 +16,7 @@ pub struct FakeGitHub {
     /// The clock a new PR's creation time is read from.
     clock: Option<Arc<AtomicI64>>,
     /// How many of the next calls fail.
-    failing: AtomicUsize,
+    failing: Mutex<usize>,
     /// The `owner/name` of every call, in order.
     repos: Mutex<Vec<Option<String>>>,
 }
@@ -65,7 +65,7 @@ impl FakeGitHub {
 
     /// The next `n` calls fail, as a `gh` that timed out would.
     pub fn fail_next(&self, n: usize) {
-        self.failing.store(n, Ordering::SeqCst);
+        *self.failing.lock().unwrap() = n;
     }
 
     /// The `owner/name` each call was pointed at.
@@ -75,8 +75,9 @@ impl FakeGitHub {
 
     fn call(&self, repo: &GhRepo) -> anyhow::Result<()> {
         self.repos.lock().unwrap().push(repo.github.clone());
-        let failing = self.failing.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
-        if failing.is_ok() {
+        let mut failing = self.failing.lock().unwrap();
+        if *failing > 0 {
+            *failing -= 1;
             anyhow::bail!("running gh pr list: timed out after 60 seconds");
         }
         Ok(())

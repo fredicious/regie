@@ -16,6 +16,22 @@ fn parse(args: &[&str]) -> Cli {
     Cli::try_parse_from(std::iter::once("regie").chain(args.iter().copied())).unwrap()
 }
 
+#[tokio::test]
+async fn a_server_that_exits_early_fails_fast() {
+    // `regie` started `regie serve`, which died (a bad port, a locked data dir):
+    // say so at once instead of waiting out the health check.
+    let dir = tempfile::tempdir().unwrap();
+    let data = regie::paths::DataDir { root: dir.path().to_path_buf() };
+    let mut child = std::process::Command::new("sh").args(["-c", "exit 3"]).spawn().unwrap();
+    let t = std::time::Instant::now();
+    let Err(err) = regie::cli::wait_for_server(&data, &mut child, Duration::from_secs(20)).await else {
+        panic!("no server answered, yet it was found");
+    };
+    let msg = format!("{err:#}");
+    assert!(t.elapsed() < Duration::from_secs(5), "took {:?}", t.elapsed());
+    assert!(msg.contains("server.log") && msg.contains("exited"), "{msg}");
+}
+
 #[test]
 fn run_anyway_only_on_one() {
     use regie::cli::run_anyway;
