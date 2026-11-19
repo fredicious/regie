@@ -63,7 +63,10 @@ pub const CHECKS_GRACE_MS: i64 = 3 * 60_000;
 
 /// A PR with no checks that is younger than `CHECKS_GRACE_MS` has checks pending.
 pub fn apply_checks_grace(pr: &mut PrState, created_at: Millis, now: Millis) {
-    if pr.checks == Checks::None && now.0 - created_at.0 < CHECKS_GRACE_MS {
+    if pr.lifecycle == PrLifecycle::Open
+        && pr.checks == Checks::None
+        && now.0 - created_at.0 < CHECKS_GRACE_MS
+    {
         pr.checks = Checks::Pending;
     }
 }
@@ -551,6 +554,15 @@ mod tests {
         assert_eq!(at(0).checks, Checks::Pending);
         assert_eq!(at(CHECKS_GRACE_MS - 1).checks, Checks::Pending);
         assert_eq!(at(CHECKS_GRACE_MS).checks, Checks::None);
+    }
+
+    #[test]
+    fn grace_is_for_open_prs_only() {
+        let json = r#"[{"number":5,"url":"u","state":"MERGED","statusCheckRollup":[],"createdAt":"2026-11-19T10:00:00Z"}]"#;
+        let p = parse_pr_list(json, Millis(1_795_082_400_000))
+            .unwrap()
+            .remove(0);
+        assert_eq!(p.pr.checks, Checks::None);
     }
 
     #[test]

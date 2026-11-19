@@ -99,6 +99,11 @@ pub enum CommandError {
         session: SessionId,
         unfinished: Vec<TaskId>,
     },
+    #[error("session {session} is still cleaning up {}; try again in a moment", tasks.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "))]
+    SessionStillCleaningUp {
+        session: SessionId,
+        tasks: Vec<TaskId>,
+    },
 }
 
 /// Checks a command against the state before it is turned into events.
@@ -193,6 +198,20 @@ pub fn validate(cmd: &Command, state: &State) -> Result<(), CommandError> {
                 return Err(CommandError::SessionHasUnfinishedTasks {
                     session: *id,
                     unfinished,
+                });
+            }
+            // Finished is not yet gone: the PR close, the worktree and branch
+            // removal and a stopping run's end all still need the task.
+            let busy: Vec<TaskId> = state
+                .tasks
+                .values()
+                .filter(|t| t.session == *id && (!t.cleaned || state.active_run(t.id).is_some()))
+                .map(|t| t.id)
+                .collect();
+            if !busy.is_empty() {
+                return Err(CommandError::SessionStillCleaningUp {
+                    session: *id,
+                    tasks: busy,
                 });
             }
         }
@@ -473,7 +492,8 @@ mod tests {
             Err(CommandError::SessionNotFound(SessionId(9)))
         );
         s.tasks.get_mut(&TaskId(2)).unwrap().cancelled = Some(false);
-        // S1's T1 is still going; S2's only task is cancelled.
+        s.tasks.get_mut(&TaskId(2)).unwrap().cleaned = true;
+        // S1's T1 is still going; S2's only task is cancelled and cleaned up.
         let err = validate(&del(1), &s).unwrap_err();
         assert_eq!(
             err.to_string(),
@@ -490,6 +510,12 @@ mod tests {
             review_decision: None,
             head_sha: String::new(),
         });
+        // merged, but its worktree is not cleaned up yet
+        assert_eq!(
+            validate(&del(1), &s).unwrap_err().to_string(),
+            "session S1 is still cleaning up T1; try again in a moment"
+        );
+        s.tasks.get_mut(&TaskId(1)).unwrap().cleaned = true;
         assert_eq!(validate(&del(1), &s), Ok(()));
         // An empty session can go too.
         s.tasks.clear();
@@ -512,5 +538,51 @@ mod tests {
             err.to_string(),
             "session S1 still has unfinished tasks (T1, T3); cancel them first"
         );
+    }
+
+    #[test]
+    fn cancelled_but_not_cleaned_up_cannot_be_deleted() {
+        let mut s = state(true);
+        let t = s.tasks.get_mut(&TaskId(2)).unwrap();
+        t.cancelled = Some(true);
+        let del = Command::DeleteSession {
+            session: SessionId(2),
+        };
+        assert_eq!(
+            validate(&del, &s).unwrap_err().to_string(),
+            "session S2 is still cleaning up T2; try again in a moment"
+        );
+        s.tasks.get_mut(&TaskId(2)).unwrap().cleaned = true;
+        assert_eq!(validate(&del, &s), Ok(()));
+    }
+
+    #[test]
+    fn a_cleaned_task_with_a_run_still_ending_cannot_be_deleted() {
+        use crate::event::{Purpose, Role};
+        let mut s = state(true);
+        let t = s.tasks.get_mut(&TaskId(2)).unwrap();
+        t.cancelled = Some(false);
+        t.cleaned = true;
+        s.apply(&ev(
+            50,
+            Some(2),
+            Some(2),
+            EventKind::RunStarted {
+                run: crate::ids::RunId(1),
+                role: Role::Builder,
+                purpose: Purpose::Initial,
+                provider: Provider::Claude,
+                model: "m".into(),
+                effort: crate::settings::Effort::Medium,
+                resume_of: None,
+            },
+        ));
+        let del = Command::DeleteSession {
+            session: SessionId(2),
+        };
+        assert!(matches!(
+            validate(&del, &s),
+            Err(CommandError::SessionStillCleaningUp { .. })
+        ));
     }
 }

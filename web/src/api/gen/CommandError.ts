@@ -3,4 +3,4 @@ import type { Level } from "./Level";
 import type { SessionId } from "./SessionId";
 import type { TaskId } from "./TaskId";
 
-export type CommandError = { "SessionNotFound": SessionId } | { "RepoNotInSession": { session: SessionId, repo: string, } } | { "NoGithubRemote": string } | { "NoProjectFacts": string } | { "BlockedByNotInSession": TaskId } | { "TaskNotFound": TaskId } | { "TaskFinished": TaskId } | { "LevelNotHigher": { current: Level, requested: Level, } } | "NoRepos" | { "SessionHasUnfinishedTasks": { session: SessionId, unfinished: Array<TaskId>, } };
+export type CommandError = { "SessionNotFound": SessionId } | { "RepoNotInSession": { session: SessionId, repo: string, } } | { "NoGithubRemote": string } | { "NoProjectFacts": string } | { "BlockedByNotInSession": TaskId } | { "TaskNotFound": TaskId } | { "TaskFinished": TaskId } | { "LevelNotHigher": { current: Level, requested: Level, } } | "NoRepos" | { "SessionHasUnfinishedTasks": { session: SessionId, unfinished: Array<TaskId>, } } | { "SessionStillCleaningUp": { session: SessionId, tasks: Array<TaskId>, } };
