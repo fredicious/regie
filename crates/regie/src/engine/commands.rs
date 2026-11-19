@@ -1,4 +1,5 @@
-//! Commands from Frédéric (and, later, the lead), turned into events.
+//! Commands from Frédéric (and, later, the lead), turned into events. The
+//! controls (pause, stop, cancel, retry) are in `control.rs`.
 
 use std::path::Path;
 
@@ -33,13 +34,13 @@ impl Engine {
                 self.emit(Some(session), Some(id), actor, kind).map(|_| CommandResult::Task(id))
             }
             Command::MessageAgent { task, text, level } => self.message(task, text, level, actor),
-            Command::RetryTask { task } => {
-                self.emit_task(task, actor, EventKind::TaskRetried).map(|_| CommandResult::Ok)
-            }
-            other => {
-                let _ = reply.send(Err(format!("{other:?} is not supported yet")));
-                return;
-            }
+            Command::StopAgent { task } => self.stop_agent(task),
+            Command::CancelTask { task, close_pr } => self.cancel(task, close_pr, actor),
+            Command::RetryTask { task } => self.retry(task, actor),
+            Command::PauseSession { session } => self.pause(Some(session), actor),
+            Command::ResumeSession { session } => self.resume(Some(session), actor),
+            Command::PauseAll => self.pause(None, actor),
+            Command::ResumeAll => self.resume(None, actor),
         };
         let _ = reply.send(result.map_err(|e| format!("{e:#}")));
     }

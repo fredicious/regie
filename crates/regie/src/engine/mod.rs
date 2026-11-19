@@ -4,8 +4,10 @@
 //! tasks that report back through `Input`, so the loop never waits on it.
 
 mod commands;
+mod control;
 mod input;
 mod poll;
+mod recover;
 mod runs;
 mod start;
 
@@ -30,6 +32,7 @@ use crate::paths::DataDir;
 use crate::store::Store;
 
 pub use input::{Input, Polled, Reply};
+pub use recover::{prune_run_files, recover};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -71,6 +74,13 @@ impl EngineHandle {
         rx.await.map_err(|_| stopped())?
     }
 
+    /// Stops the loop without finishing the runs it started (the next start recovers them).
+    pub async fn shutdown(&self) {
+        if self.tx.send(Input::Shutdown).await.is_ok() {
+            self.tx.closed().await;
+        }
+    }
+
     pub fn board(&self, s: SessionId) -> Option<BoardView> {
         let snap = self.snapshot.read().unwrap();
         board(&snap.state, &snap.live, s, &snap.settings, (self.clock)())
@@ -84,11 +94,18 @@ impl EngineHandle {
     }
 }
 
-/// Opens the store, replays it and spawns the loop and its 5-second tick.
+/// Opens the store, replays it, ends the runs a previous Régie left unfinished,
+/// prunes old run files, and spawns the loop and its 5-second tick.
 pub async fn start(data: DataDir, settings: Settings, deps: Deps) -> anyhow::Result<EngineHandle> {
     data.ensure()?;
-    let store = Store::open(&data.db())?;
-    let state = State::replay(&store.load_all()?);
+    let mut store = Store::open(&data.db())?;
+    let mut state = State::replay(&store.load_all()?);
+    let now = (deps.clock)();
+    for e in recover(&state, now).await {
+        let e = store.append(e)?;
+        state.apply(&e);
+    }
+    prune_run_files(&data.runs(), settings.output_retention_days, now);
     let snapshot = Arc::new(RwLock::new(Snapshot { state: state.clone(), live: LiveView::default(), settings: settings.clone() }));
     let (tx, rx) = mpsc::channel(1024);
     let bus = Bus::default();
@@ -112,6 +129,7 @@ pub async fn start(data: DataDir, settings: Settings, deps: Deps) -> anyhow::Res
         probing: false,
         probe_retry_at: Millis(0),
         polls: poll::Polls::default(),
+        prune_at: recover::next_prune(now),
     };
     tokio::spawn(engine.run(rx));
     tokio::spawn(async move {
@@ -147,22 +165,29 @@ struct Engine {
     probing: bool,
     probe_retry_at: Millis,
     polls: poll::Polls,
+    /// When old run files are next pruned.
+    prune_at: Millis,
     caffeinate: Caffeinate,
 }
 
 impl Engine {
+    /// Acts on what the store holds at once (recovered runs resume), then on each
+    /// input. `Shutdown` ends the loop and records nothing for the runs still going.
     async fn run(mut self, mut rx: mpsc::Receiver<Input>) {
-        while let Some(input) = rx.recv().await {
-            if matches!(input, Input::Shutdown) {
-                break;
-            }
-            for result in [self.handle(input), self.advance()] {
+        let mut input = None;
+        loop {
+            let handled = input.take().map_or(Ok(()), |i| self.handle(i));
+            for result in [handled, self.advance()] {
                 if let Err(e) = result {
                     eprintln!("regie: {e:#}");
                 }
             }
             self.snapshot.write().unwrap().live = self.live.clone();
             self.caffeinate.set_running(self.runs.len());
+            match rx.recv().await {
+                Some(Input::Shutdown) | None => break,
+                Some(i) => input = Some(i),
+            }
         }
     }
 
@@ -182,7 +207,10 @@ impl Engine {
                 let _ = reply.send(result);
             }
             Input::Agent(run, event) => self.on_agent(run, event)?,
-            Input::Tick => self.on_tick(),
+            Input::Tick => {
+                self.on_tick();
+                self.prune_if_due();
+            }
             Input::Shutdown => {}
             Input::WorktreeReady { task, result } => self.on_worktree(task, result)?,
             Input::SetupDone { task, ok, output } => {

@@ -21,9 +21,9 @@ use super::github::FakeGitHub;
 use super::repo::{git, TempRepo};
 
 pub const MINUTE: i64 = 60_000;
-const HOUR: i64 = 60 * MINUTE;
+pub const HOUR: i64 = 60 * MINUTE;
 /// 2026-11-19T00:00:00Z.
-const START: i64 = 1_795_046_400_000;
+pub const START: i64 = 1_795_046_400_000;
 
 pub struct Harness {
     pub repo: TempRepo,
@@ -36,7 +36,10 @@ pub struct Harness {
     /// The five-hour use the probe reports.
     pub probe_five_hour: Arc<Mutex<f64>>,
     pub engine: EngineHandle,
+    probe: Probe,
 }
+
+type Probe = Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<Reading>> + Send + Sync>;
 
 impl Harness {
     /// `script` decides each run; it can change the fake GitHub as the agent would.
@@ -51,7 +54,7 @@ impl Harness {
         let now = Arc::new(AtomicI64::new(START));
         let probe_calls = Arc::new(AtomicUsize::new(0));
         let probe_five_hour = Arc::new(Mutex::new(0.10));
-        let probe = {
+        let probe: Probe = {
             let (now, calls, used) = (now.clone(), probe_calls.clone(), probe_five_hour.clone());
             Arc::new(move || -> BoxFuture<'static, anyhow::Result<Reading>> {
                 calls.fetch_add(1, Ordering::SeqCst);
@@ -60,13 +63,15 @@ impl Harness {
                 Box::pin(async move { Ok(reading(used, at)) })
             })
         };
-        let clock = {
-            let now = now.clone();
-            Arc::new(move || Millis(now.load(Ordering::SeqCst)))
-        };
-        let deps = Deps { runner: claude.clone(), github: gh.clone(), probe, clock, caffeinate: false };
-        let engine = engine::start(data.clone(), Settings::default(), deps).await.unwrap();
-        Harness { repo, _data_dir: data_dir, data, claude, gh, now, probe_calls, probe_five_hour, engine }
+        let engine = start(&data, &claude, &gh, &probe, &now).await;
+        Harness { repo, _data_dir: data_dir, data, claude, gh, now, probe_calls, probe_five_hour, engine, probe }
+    }
+
+    /// Stops the engine (as when Régie is killed: runs are left unfinished) and
+    /// starts a new one on the same data dir, with the same fakes.
+    pub async fn restart(&mut self) {
+        self.engine.shutdown().await;
+        self.engine = start(&self.data, &self.claude, &self.gh, &self.probe, &self.now).await;
     }
 
     pub fn repo_path(&self) -> String {
@@ -193,6 +198,15 @@ impl Harness {
             .filter(|s| s.env.iter().any(|(k, v)| k == "REGIE_TASK" && *v == tag))
             .collect()
     }
+}
+
+async fn start(data: &DataDir, claude: &Arc<FakeClaude>, gh: &Arc<FakeGitHub>, probe: &Probe, now: &Arc<AtomicI64>) -> EngineHandle {
+    let clock = {
+        let now = now.clone();
+        Arc::new(move || Millis(now.load(Ordering::SeqCst)))
+    };
+    let deps = Deps { runner: claude.clone(), github: gh.clone(), probe: probe.clone(), clock, caffeinate: false };
+    engine::start(data.clone(), Settings::default(), deps).await.unwrap()
 }
 
 /// Origin looks like `git@github.com:o/r.git`, but fetches come from the local bare repo.
