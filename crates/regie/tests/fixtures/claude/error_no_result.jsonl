@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","cwd":"/tmp/rec","session_id":"4f6c2f8e-1d2a-4b7c-9e0a-6a1b2c3d4e5f","model":"claude-haiku-5-5","permissionMode":"auto","claude_code_version":"2.1.328","tools":["Bash","Edit","Read","Write"]}
+{"type":"assistant","message":{"model":"claude-haiku-5-5","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"cargo test --workspace","description":"Run the tests"}}]},"parent_tool_use_id":null,"session_id":"4f6c2f8e-1d2a-4b7c-9e0a-6a1b2c3d4e5f"}

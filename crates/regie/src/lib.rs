@@ -1,5 +1,6 @@
 //! Régie server and CLI library. Modules are added as they are built.
 
+pub mod agents;
 pub mod git;
 pub mod github;
 pub mod paths;
