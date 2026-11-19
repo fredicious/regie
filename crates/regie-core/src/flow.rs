@@ -272,6 +272,7 @@ mod tests {
                 paths: vec![],
                 created_at: Millis(0),
                 worktree: None,
+                worktree_created_at: None,
                 setup_ok: None,
                 setup_output: String::new(),
                 builder_native_session: None,

@@ -3,8 +3,6 @@
 //! seconds apart before a requested PR counts as missing.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-
 use regie_core::{Actor, EventKind, Millis, PrLifecycle, Task, TaskId};
 
 use super::{Engine, Input, Polled};
@@ -12,6 +10,8 @@ use super::{Engine, Input, Polled};
 const EVERY_MS: i64 = 30_000;
 const CHECK_EVERY_MS: i64 = 10_000;
 const CHECKS: u32 = 3;
+/// How far GitHub's clock may be behind ours when comparing a PR's creation time.
+const CLOCK_SKEW_MS: i64 = 60_000;
 
 #[derive(Default)]
 pub(super) struct Polls {
@@ -94,12 +94,15 @@ impl Engine {
             c.next_at = None;
         }
         let task = &self.state.tasks[&id];
-        let repo = PathBuf::from(&task.repo);
+        let repo = self.gh_repo(id);
         let branch = task.worktree.as_ref().map(|w| w.branch.clone()).unwrap_or_default();
+        // A PR opened before the worktree is from an earlier task on a branch of the same name.
+        let not_before = task.worktree_created_at.map_or(i64::MIN, |at| at.0 - CLOCK_SKEW_MS);
         let (github, tx) = (self.deps.github.clone(), self.tx.clone());
         tokio::spawn(async move {
             let look = async {
-                let pr = github.pr_for_branch(&repo, &branch).await?;
+                let prs = github.prs_for_branch(&repo, &branch).await?;
+                let pr = prs.into_iter().filter(|p| p.created_at.0 >= not_before).max_by_key(|p| p.created_at).map(|p| p.pr);
                 let comments = match &pr {
                     Some(pr) if pr.lifecycle == PrLifecycle::Open => github.pr_activity(&repo, pr.number).await?,
                     _ => Vec::new(),

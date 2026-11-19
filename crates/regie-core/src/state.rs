@@ -81,6 +81,9 @@ pub struct Task {
     pub paths: Vec<String>,
     pub created_at: Millis,
     pub worktree: Option<Worktree>,
+    /// When the worktree was made: a PR on the branch older than this belongs
+    /// to an earlier task with the same branch name.
+    pub worktree_created_at: Option<Millis>,
     pub setup_ok: Option<bool>,
     pub setup_output: String,
     pub builder_native_session: Option<String>,
@@ -164,6 +167,7 @@ impl State {
                         paths: paths.clone(),
                         created_at: e.at,
                         worktree: None,
+                        worktree_created_at: None,
                         setup_ok: None,
                         setup_output: String::new(),
                         builder_native_session: None,
@@ -264,7 +268,7 @@ impl State {
             EventKind::RunUsage { .. } => {}
             kind => {
                 if let Some(t) = e.task.and_then(|id| self.tasks.get_mut(&id)) {
-                    t.apply(kind);
+                    t.apply(kind, e.at);
                 }
             }
         }
@@ -380,12 +384,13 @@ impl Task {
         }
     }
 
-    /// Events that touch only this task.
-    fn apply(&mut self, kind: &EventKind) {
+    /// Events that touch only this task, recorded at `at`.
+    fn apply(&mut self, kind: &EventKind, at: Millis) {
         match kind {
             EventKind::LevelRaised { level } => self.level = *level,
             EventKind::WorktreeCreated { path, branch, port_base } => {
                 self.worktree = Some(Worktree { path: path.clone(), branch: branch.clone(), port_base: *port_base });
+                self.worktree_created_at = Some(at);
             }
             EventKind::SetupFinished { ok, output_tail } => {
                 self.setup_ok = Some(*ok);

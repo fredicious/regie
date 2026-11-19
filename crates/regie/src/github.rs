@@ -7,11 +7,27 @@ use anyhow::Context;
 use regie_core::{Checks, MergeState, Millis, PrComment, PrLifecycle, PrState, ReviewDecision};
 use serde::Deserialize;
 
+/// A repo as `gh` is pointed at it: the local folder, and `owner/name` on
+/// GitHub when known (passed as `--repo`, so `gh` never guesses from remotes).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GhRepo {
+    pub path: PathBuf,
+    pub github: Option<String>,
+}
+
+/// A PR found for a branch, with when GitHub says it was opened.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BranchPr {
+    pub pr: PrState,
+    pub created_at: Millis,
+}
+
 #[async_trait::async_trait]
 pub trait GitHub: Send + Sync {
-    async fn pr_for_branch(&self, repo: &Path, branch: &str) -> anyhow::Result<Option<PrState>>;
-    async fn pr_activity(&self, repo: &Path, number: u64) -> anyhow::Result<Vec<PrComment>>;
-    async fn close_pr(&self, repo: &Path, number: u64) -> anyhow::Result<()>;
+    /// Every PR ever opened from `branch`, newest first.
+    async fn prs_for_branch(&self, repo: &GhRepo, branch: &str) -> anyhow::Result<Vec<BranchPr>>;
+    async fn pr_activity(&self, repo: &GhRepo, number: u64) -> anyhow::Result<Vec<PrComment>>;
+    async fn close_pr(&self, repo: &GhRepo, number: u64) -> anyhow::Result<()>;
 }
 
 /// `gh` gives `null` for fields GitHub has not computed yet; every such field is optional.
@@ -31,11 +47,23 @@ struct RawPr {
     status_check_rollup: Option<Vec<serde_json::Value>>,
     #[serde(default)]
     head_ref_oid: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
 }
 
-pub fn parse_pr_list(json: &str) -> anyhow::Result<Option<PrState>> {
+/// The PRs `gh pr list` gave, newest first.
+pub fn parse_pr_list(json: &str) -> anyhow::Result<Vec<BranchPr>> {
     let raw: Vec<RawPr> = serde_json::from_str(json).context("parsing `gh pr list` output")?;
-    Ok(raw.into_iter().next().map(|r| PrState {
+    let mut prs: Vec<BranchPr> = raw.into_iter().map(|r| BranchPr {
+        created_at: Millis(r.created_at.as_deref().and_then(parse_rfc3339).unwrap_or(0)),
+        pr: raw_pr(r),
+    }).collect();
+    prs.sort_by_key(|p| std::cmp::Reverse(p.created_at));
+    Ok(prs)
+}
+
+fn raw_pr(r: RawPr) -> PrState {
+    PrState {
         number: r.number,
         url: r.url,
         lifecycle: match r.state.as_str() {
@@ -60,7 +88,7 @@ pub fn parse_pr_list(json: &str) -> anyhow::Result<Option<PrState>> {
             _ => None,
         },
         head_sha: r.head_ref_oid.unwrap_or_default(),
-    }))
+    }
 }
 
 #[derive(Deserialize)]
@@ -208,37 +236,36 @@ impl GhCli {
     }
 }
 
+/// `--repo owner/name` when the repo is on GitHub.
+fn repo_args(repo: &GhRepo) -> Vec<&str> {
+    repo.github.as_deref().map(|g| vec!["--repo", g]).unwrap_or_default()
+}
+
 #[async_trait::async_trait]
 impl GitHub for GhCli {
-    async fn pr_for_branch(&self, repo: &Path, branch: &str) -> anyhow::Result<Option<PrState>> {
-        let json = self.gh(
-            repo,
-            &[
-                "pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json",
-                "number,url,state,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid",
-            ],
-        )
-        .await?;
+    async fn prs_for_branch(&self, repo: &GhRepo, branch: &str) -> anyhow::Result<Vec<BranchPr>> {
+        let mut args = vec![
+            "pr", "list", "--head", branch, "--state", "all", "--limit", "10", "--json",
+            "number,url,state,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid,createdAt",
+        ];
+        args.extend(repo_args(repo));
+        let json = self.gh(&repo.path, &args).await?;
         parse_pr_list(&json)
     }
 
-    async fn pr_activity(&self, repo: &Path, number: u64) -> anyhow::Result<Vec<PrComment>> {
-        let json = self.gh(
-            repo,
-            &[
-                "pr",
-                "view",
-                &number.to_string(),
-                "--json",
-                "comments,reviews",
-            ],
-        )
-        .await?;
+    async fn pr_activity(&self, repo: &GhRepo, number: u64) -> anyhow::Result<Vec<PrComment>> {
+        let number = number.to_string();
+        let mut args = vec!["pr", "view", &number, "--json", "comments,reviews"];
+        args.extend(repo_args(repo));
+        let json = self.gh(&repo.path, &args).await?;
         parse_activity(&json)
     }
 
-    async fn close_pr(&self, repo: &Path, number: u64) -> anyhow::Result<()> {
-        self.gh(repo, &["pr", "close", &number.to_string()]).await?;
+    async fn close_pr(&self, repo: &GhRepo, number: u64) -> anyhow::Result<()> {
+        let number = number.to_string();
+        let mut args = vec!["pr", "close", &number];
+        args.extend(repo_args(repo));
+        self.gh(&repo.path, &args).await?;
         Ok(())
     }
 }
@@ -255,7 +282,7 @@ mod tests {
     const ACTIVITY: &str = include_str!("../tests/fixtures/gh/pr_view_activity.json");
 
     fn pr(json: &str) -> PrState {
-        parse_pr_list(json).unwrap().unwrap()
+        parse_pr_list(json).unwrap().remove(0).pr
     }
 
     #[test]
@@ -306,7 +333,7 @@ mod tests {
 
     #[test]
     fn no_pr_is_none() {
-        assert_eq!(parse_pr_list("[]").unwrap(), None);
+        assert_eq!(parse_pr_list("[]").unwrap(), vec![]);
     }
 
     #[test]
@@ -384,9 +411,35 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let gh = fake_gh(&dir, "sleep 30", std::time::Duration::from_millis(300));
         let t = std::time::Instant::now();
-        let err = gh.pr_activity(dir.path(), 3).await.unwrap_err();
+        let repo = GhRepo { path: dir.path().into(), github: None };
+        let err = gh.pr_activity(&repo, 3).await.unwrap_err();
         assert!(format!("{err:#}").contains("timed out"), "{err:#}");
         assert!(t.elapsed() < std::time::Duration::from_secs(5), "took {:?}", t.elapsed());
+    }
+
+    #[test]
+    fn pr_list_newest_first_with_creation_time() {
+        let json = r#"[
+            {"number":3,"url":"u3","state":"MERGED","createdAt":"2026-01-02T00:00:00Z"},
+            {"number":9,"url":"u9","state":"OPEN","createdAt":"2026-11-19T10:00:00Z"}
+        ]"#;
+        let prs = parse_pr_list(json).unwrap();
+        let got: Vec<(u64, Millis)> = prs.iter().map(|p| (p.pr.number, p.created_at)).collect();
+        assert_eq!(got, [(9, Millis(1_795_082_400_000)), (3, Millis(1_767_312_000_000))]);
+    }
+
+    #[tokio::test]
+    async fn gh_is_pointed_at_the_github_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = dir.path().join("args.txt");
+        let body = format!("printf '%s\\n' \"$@\" >> '{}'\necho '[]'", args.display());
+        let gh = fake_gh(&dir, &body, std::time::Duration::from_secs(10));
+        let repo = GhRepo { path: dir.path().into(), github: Some("o/r".into()) };
+        gh.prs_for_branch(&repo, "regie/t1-x").await.unwrap();
+        let seen = std::fs::read_to_string(&args).unwrap();
+        let seen: Vec<&str> = seen.lines().collect();
+        assert!(seen.windows(2).any(|w| w == ["--repo", "o/r"]), "{seen:?}");
+        assert!(seen.iter().any(|a| a.contains("createdAt")), "{seen:?}");
     }
 
     #[test]

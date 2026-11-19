@@ -400,6 +400,57 @@ async fn pr_missing_after_open_pr_needs_me() {
 }
 
 #[tokio::test]
+async fn old_pr_of_an_earlier_life_of_the_branch_is_ignored() {
+    // Task ids restart at 1 in a fresh data dir: `regie/t1-...` may already
+    // have a merged PR on GitHub from an earlier Régie.
+    let h = Harness::new(|spec, _| match (spec.role, spec.purpose) {
+        (Role::Builder, Purpose::Initial) => builds("a.txt", "a\n"),
+        (Role::Reviewer, Purpose::Review) => says(CLEAN_REVIEW),
+        (Role::Builder, Purpose::OpenPr) => says("Pushed; GitHub is slow to list the PR.\n\nStatus: done"),
+        other => panic!("unexpected run {other:?}"),
+    })
+    .await;
+    let mut old = pr(3, "old", Checks::Success, MergeState::Clean);
+    old.lifecycle = regie_core::PrLifecycle::Merged;
+    let branch = regie::git::branch_name(regie_core::TaskId(1), "Same name");
+    h.gh.set_created(&branch, old, regie_core::Millis(support::harness::START - 30 * 24 * support::harness::HOUR));
+    let t = h.create_session_and_task("Same name").await;
+    h.wait_for("PR asked for", SECS, |h| h.state().tasks[&t].open_pr_requested && h.state().active_run(t).is_none())
+        .await;
+    h.tick_until("PR missing", 10_000, SECS, |h| needs_me(h, t, HumanReason::PrNotFound) || h.state().tasks[&t].pr.is_some())
+        .await;
+    let state = h.state();
+    assert_eq!(state.tasks[&t].pr, None, "took the old PR for this task's");
+    assert!(!state.tasks[&t].cleaned);
+    // The new PR, once listed, is the task's.
+    h.gh.set(&branch, pr(8, "new", Checks::Pending, MergeState::Blocked));
+    h.tick_until("new PR seen", 30_000, SECS, |h| h.state().tasks[&t].pr.as_ref().is_some_and(|p| p.number == 8)).await;
+    assert_eq!(h.lane(t), Lane::Ci);
+    assert!(h.gh.repos().iter().all(|r| r.as_deref() == Some("o/r")), "{:?}", h.gh.repos());
+}
+
+#[tokio::test]
+async fn failed_polls_do_not_stop_polling() {
+    let h = Harness::new(|spec, gh| match (spec.role, spec.purpose) {
+        (Role::Builder, Purpose::Initial) => builds("a.txt", "a\n"),
+        (Role::Reviewer, Purpose::Review) => says(CLEAN_REVIEW),
+        (Role::Builder, Purpose::OpenPr) => {
+            gh.set(&branch_of(spec), pr(7, "sha1", Checks::Pending, MergeState::Blocked));
+            says("Opened the PR.\n\nStatus: done")
+        }
+        other => panic!("unexpected run {other:?}"),
+    })
+    .await;
+    let t = h.create_session_and_task("Flaky gh").await;
+    h.wait_for("PR seen", SECS, |h| h.state().tasks[&t].pr.is_some()).await;
+    // gh times out a few times in a row, then answers again.
+    h.gh.fail_next(3);
+    let branch = h.state().tasks[&t].worktree.clone().unwrap().branch;
+    h.gh.set(&branch, pr(7, "sha1", Checks::Success, MergeState::Clean));
+    h.tick_until("ready to merge", 30_000, SECS, |h| h.lane(t) == Lane::ReadyToMerge).await;
+}
+
+#[tokio::test]
 async fn crash_needs_me_then_retry() {
     let h = Harness::new(|spec, _| match spec.purpose {
         Purpose::Initial => FakeOutcome { final_message: String::new(), actions: vec![FakeAction::Crash] },

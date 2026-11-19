@@ -48,10 +48,10 @@ impl Harness {
         fake_github_origin(&repo);
         let data_dir = tempfile::tempdir().unwrap();
         let data = DataDir { root: data_dir.path().join(".regie") };
-        let gh = Arc::new(FakeGitHub::new());
+        let now = Arc::new(AtomicI64::new(START));
+        let gh = Arc::new(FakeGitHub::with_clock(now.clone()));
         let gh_for_script = gh.clone();
         let claude = Arc::new(FakeClaude::new(move |spec| script(spec, &gh_for_script)));
-        let now = Arc::new(AtomicI64::new(START));
         let probe_calls = Arc::new(AtomicUsize::new(0));
         let probe_five_hour = Arc::new(Mutex::new(0.10));
         let probe: Probe = {

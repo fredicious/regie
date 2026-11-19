@@ -13,7 +13,12 @@ import type { TaskId } from "./TaskId";
 import type { VerifyOutcome } from "./VerifyOutcome";
 import type { Worktree } from "./Worktree";
 
-export type Task = { id: TaskId, session: SessionId, repo: string, title: string, instruction: string, tickets: Array<string>, blocked_by: Array<TaskId>, level: Level, paths: Array<string>, created_at: Millis, worktree: Worktree | null, setup_ok: boolean | null, setup_output: string, builder_native_session: string | null, last_builder_status: BuilderStatus | null, pending_messages: Array<string>, reviews: Array<ReviewRecord>, verify: VerifyOutcome | null, open_pr_requested: boolean, pr: PrState | null, pr_missing: boolean, comments: Array<PrComment>, loops: LoopCounts, fixed_shas: { [key in LoopKind]?: string }, 
+export type Task = { id: TaskId, session: SessionId, repo: string, title: string, instruction: string, tickets: Array<string>, blocked_by: Array<TaskId>, level: Level, paths: Array<string>, created_at: Millis, worktree: Worktree | null, 
+/**
+ * When the worktree was made: a PR on the branch older than this belongs
+ * to an earlier task with the same branch name.
+ */
+worktree_created_at: Millis | null, setup_ok: boolean | null, setup_output: string, builder_native_session: string | null, last_builder_status: BuilderStatus | null, pending_messages: Array<string>, reviews: Array<ReviewRecord>, verify: VerifyOutcome | null, open_pr_requested: boolean, pr: PrState | null, pr_missing: boolean, comments: Array<PrComment>, loops: LoopCounts, fixed_shas: { [key in LoopKind]?: string }, 
 /**
  * `Some(close_pr)` once cancelled.
  */

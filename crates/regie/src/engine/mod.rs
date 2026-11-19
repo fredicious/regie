@@ -371,10 +371,22 @@ impl Engine {
         Ok(())
     }
 
+    /// The task's repo as `gh` sees it, with `owner/name` from its session.
+    fn gh_repo(&self, id: TaskId) -> crate::github::GhRepo {
+        let task = &self.state.tasks[&id];
+        let github = self
+            .state
+            .sessions
+            .get(&task.session)
+            .and_then(|s| s.repos.iter().find(|r| r.path == task.repo))
+            .and_then(|r| r.github.clone());
+        crate::github::GhRepo { path: std::path::PathBuf::from(&task.repo), github }
+    }
+
     fn close_pr(&mut self, id: TaskId) {
         let task = &self.state.tasks[&id];
         let Some(number) = task.pr.as_ref().map(|pr| pr.number) else { return };
-        let repo = std::path::PathBuf::from(&task.repo);
+        let repo = self.gh_repo(id);
         let (github, tx) = (self.deps.github.clone(), self.tx.clone());
         self.busy.insert(id);
         tokio::spawn(async move {
