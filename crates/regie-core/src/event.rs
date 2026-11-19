@@ -52,7 +52,7 @@ pub enum RunOutcome {
     Interrupted,
 }
 
-#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[ts(export)]
 pub enum LoopKind {
     Ci,
