@@ -90,7 +90,7 @@ async fn rejects_copy_paths_outside_the_repo() {
     let outside = r.root.parent().unwrap().join("x");
     std::fs::write(&outside, "keep\n").unwrap();
     for bad in ["../x".to_string(), "../../x".to_string(), abs] {
-        let res = create_worktree(&locks, &r.work, &r.root, TaskId(3), "bad", &[bad.clone()], 41000).await;
+        let res = create_worktree(&locks, &r.work, &r.root, TaskId(3), "bad", std::slice::from_ref(&bad), 41000).await;
         assert!(res.is_err(), "{bad}");
         assert!(!git(&r.work, &["branch", "--list"]).contains("regie/"), "no git call before validation");
     }
