@@ -146,6 +146,8 @@ struct Progress {
     /// The outcome asked for by `Interrupt` or `Stop` before any result.
     requested: Option<RunOutcome>,
     result: Option<Option<String>>,
+    /// The result said `is_error` (an API error, an expired login, a bad model id).
+    is_error: bool,
     rejected: Option<Millis>,
 }
 
@@ -154,6 +156,7 @@ impl Progress {
         match (self.requested, self.rejected, &self.result) {
             (Some(o), _, _) => o,
             (None, Some(_), _) => RunOutcome::LimitHit,
+            (None, None, Some(_)) if self.is_error => RunOutcome::Crashed,
             (None, None, Some(_)) => RunOutcome::Finished,
             (None, None, None) => RunOutcome::Crashed,
         }
@@ -261,7 +264,7 @@ async fn drive(
         }
     }
     let outcome = p.outcome();
-    if outcome == RunOutcome::Crashed {
+    if outcome == RunOutcome::Crashed && p.result.is_none() {
         let msg = match status {
             Ok(s) => format!("claude exited without a result ({s})"),
             Err(e) => format!("claude exited without a result ({e})"),
@@ -299,10 +302,11 @@ async fn handle_item(
             p.rejected = Some(resets_at);
             return;
         }
-        StreamItem::Result { text, is_error: _, usage, duration_ms } => {
+        StreamItem::Result { text, is_error, usage, duration_ms } => {
             // The turn is over: closing stdin lets the process exit.
             *stdin = None;
             p.result = Some(text);
+            p.is_error = is_error;
             AgentEvent::Usage {
                 input_tokens: usage.0,
                 output_tokens: usage.1,
@@ -331,10 +335,12 @@ const PROBE_ARGS: [&str; 14] = [
     "1",
 ];
 
-/// One tiny Haiku call with no tools, for its usage reading.
-pub async fn probe(bin: &Path) -> anyhow::Result<Reading> {
+/// One tiny Haiku call with no tools, for its usage reading. It runs in `cwd`
+/// (Régie's data folder), so no project's CLAUDE.md or history is involved.
+pub async fn probe(bin: &Path, cwd: &Path) -> anyhow::Result<Reading> {
     let mut child = Command::new(bin)
         .args(PROBE_ARGS)
+        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -597,10 +603,23 @@ done"#;
     }
 
     #[tokio::test]
+    async fn error_result_is_a_crash_with_its_text() {
+        // An expired login, a bad model id or an API error ends in a result
+        // with `is_error`, and no `rejected` rate-limit event.
+        let env = Env::new();
+        let cli = env.cli(&format!("cat '{}'\ncat > /dev/null", fixture("result_is_error.jsonl")));
+        let events = run(&cli, env.spec(), vec![]).await;
+        assert_eq!(
+            finished(&events),
+            (Some("Invalid API key · Please run /login".into()), RunOutcome::Crashed, None)
+        );
+    }
+
+    #[tokio::test]
     async fn probe_returns_the_first_reading() {
         let env = Env::new();
         let cli = env.cli(&format!("printf '%s\\n' \"$@\" > args.txt\ncat '{}'", fixture("basic.jsonl")));
-        let r = probe(&cli.bin).await.unwrap();
+        let r = probe(&cli.bin, env.dir.path()).await.unwrap();
         assert_eq!((r.five_hour.used, r.seven_day.used), (0.12, 0.79));
         assert_eq!(r.seven_day.resets_at, Millis(1_795_273_200_000));
         let args = std::fs::read_to_string(env.path("args.txt")).unwrap();
@@ -625,6 +644,20 @@ done"#;
         );
 
         let cli = env.cli(&format!("cat '{}'", fixture("error_no_result.jsonl")));
-        assert!(probe(&cli.bin).await.is_err());
+        assert!(probe(&cli.bin, env.dir.path()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn probe_runs_in_the_given_folder() {
+        // Not in Régie's own cwd: that project's CLAUDE.md and history stay out of it.
+        let env = Env::new();
+        let quiet = tempfile::tempdir().unwrap();
+        let bin = env.path("probe.sh");
+        let script = format!("#!/bin/sh\npwd -P > '{}'\ncat '{}'\n", env.path("cwd.txt").display(), fixture("basic.jsonl"));
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        probe(&bin, quiet.path()).await.unwrap();
+        let cwd = std::fs::read_to_string(env.path("cwd.txt")).unwrap();
+        assert_eq!(cwd.trim(), quiet.path().canonicalize().unwrap().to_str().unwrap());
     }
 }

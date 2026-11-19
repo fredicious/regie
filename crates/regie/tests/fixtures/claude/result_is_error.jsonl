@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","cwd":"/tmp/rec","session_id":"4f6c2f8e-1d2a-4b7c-9e0a-6a1b2c3d4e5f","model":"claude-opus-5-5","permissionMode":"auto","claude_code_version":"2.1.328","tools":["Bash","Edit","Read","Write"]}
+{"type":"result","subtype":"success","is_error":true,"result":"Invalid API key · Please run /login","duration_ms":120,"num_turns":1,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0},"session_id":"4f6c2f8e-1d2a-4b7c-9e0a-6a1b2c3d4e5f"}

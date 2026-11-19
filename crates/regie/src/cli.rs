@@ -424,6 +424,7 @@ pub async fn serve_command(data: DataDir, port: u16, no_open: bool) -> anyhow::R
     // Held until the process ends; the engine must not start (and recover) under a live server.
     let _lock = lock_data_dir(&data)?;
     let claude = PathBuf::from("claude");
+    let probe_dir = data.root.clone();
     let deps = Deps {
         runner: Arc::new(ClaudeCli {
             bin: claude.clone(),
@@ -432,8 +433,8 @@ pub async fn serve_command(data: DataDir, port: u16, no_open: bool) -> anyhow::R
         github: Arc::new(GhCli),
         probe: Arc::new(
             move || -> BoxFuture<'static, anyhow::Result<regie_core::Reading>> {
-                let bin = claude.clone();
-                Box::pin(async move { probe(&bin).await })
+                let (bin, dir) = (claude.clone(), probe_dir.clone());
+                Box::pin(async move { probe(&bin, &dir).await })
             },
         ),
         clock: Arc::new(|| {
