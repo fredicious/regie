@@ -215,7 +215,7 @@ mod tests {
     }
 
     fn worktree(id: i64, task: i64) -> Event {
-        ev(id, Some(task), EventKind::WorktreeCreated { path: "/w".into(), branch: "b".into(), port_base: 41000 })
+        ev(id, Some(task), EventKind::WorktreeCreated { path: "/w".into(), branch: "b".into(), port_base: 41000, base: "main".into() })
     }
 
     #[test]

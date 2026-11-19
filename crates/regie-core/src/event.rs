@@ -105,7 +105,14 @@ pub enum EventKind {
         provider: Option<Provider>,
     },
     LevelRaised { level: Level },
-    WorktreeCreated { path: String, branch: String, port_base: u16 },
+    WorktreeCreated {
+        path: String,
+        branch: String,
+        port_base: u16,
+        /// The default branch the worktree was cut from (empty in older logs).
+        #[serde(default)]
+        base: String,
+    },
     SetupFinished { ok: bool, output_tail: String },
     RunStarted {
         run: RunId,

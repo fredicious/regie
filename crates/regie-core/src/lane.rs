@@ -154,7 +154,7 @@ mod tests {
     }
 
     fn with_worktree(mut t: Task) -> Task {
-        t.worktree = Some(Worktree { path: "/w".into(), branch: "b".into(), port_base: 41000 });
+        t.worktree = Some(Worktree { path: "/w".into(), branch: "b".into(), port_base: 41000, base: "main".into() });
         t
     }
 

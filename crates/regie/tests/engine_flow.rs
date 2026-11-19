@@ -68,6 +68,8 @@ async fn one_task_happy_path() {
     let native = Some("fake-session-1");
     assert_eq!(resumes, [None, None, native, None, native]);
     assert!(specs[2].prompt.contains("panics on empty input"), "{}", specs[2].prompt);
+    // the reviewer diffs against the branch the worktree was cut from
+    assert!(specs[1].prompt.contains("git merge-base HEAD origin/main"), "{}", specs[1].prompt);
     let state = h.state();
     let task = &state.tasks[&t];
     let wt = task.worktree.clone().unwrap();

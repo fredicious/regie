@@ -19,7 +19,7 @@ Tickets:
 
 ## What to look for
 
-Compare this branch with the repo's default branch: `git diff $(git merge-base HEAD origin/HEAD)`. Run the checks. Look for bugs, security problems, missing tests, acceptance criteria that are not met, and design problems that will cause real trouble. Skip style preferences.
+Compare this branch with the repo's default branch, `{{default_branch}}`: `git diff $(git merge-base HEAD origin/{{default_branch}})`. Run the checks. Look for bugs, security problems, missing tests, acceptance criteria that are not met, and design problems that will cause real trouble. Skip style preferences.
 
 Mark a finding blocking only if it must be fixed before this ships, and give evidence: a command that shows the problem, a failing test, or the criterion it misses with the file and line. A blocking finding without evidence counts as advisory.
 

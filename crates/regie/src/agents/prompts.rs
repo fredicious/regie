@@ -81,7 +81,8 @@ pub fn prompt_for(
         .set("definition_of_done", or(&facts.definition_of_done, "Nothing beyond the task itself."))
         .set("port_base", port_base.to_string())
         .set("model", model.model.as_str())
-        .set("level", level_name(task.level));
+        .set("level", level_name(task.level))
+        .set("default_branch", default_branch(task));
     let template = match input {
         PromptInput::Message { text } => return Ok(text.clone()),
         PromptInput::Initial => Template::BuilderInitial,
@@ -109,6 +110,12 @@ pub fn prompt_for(
         }
     };
     render(template, &v)
+}
+
+/// The branch the worktree was cut from; `HEAD` (so `origin/HEAD`) when not recorded.
+fn default_branch(task: &Task) -> String {
+    let base = task.worktree.as_ref().map(|w| w.base.trim()).unwrap_or_default();
+    if base.is_empty() { "HEAD".into() } else { base.into() }
 }
 
 fn or(s: &str, empty: &str) -> String {
@@ -206,6 +213,7 @@ mod tests {
             "failed_checks",
             "note",
             "round",
+            "default_branch",
         ];
         PromptVars(names.into_iter().map(|n| (n, format!("<{n}>"))).collect())
     }
@@ -369,6 +377,25 @@ mod tests {
             regie_core::ReviewOutcome::Findings(f) if f.len() == 1 && f[0].blocking
         ));
         assert!(!p.contains("Status: done"), "{p}");
+    }
+
+    #[test]
+    fn reviewer_diffs_against_the_default_branch() {
+        // `origin/HEAD` is missing in many clones: the engine names the branch.
+        let mut t = task();
+        t.worktree = Some(regie_core::Worktree {
+            path: "/w".into(),
+            branch: "regie/t7-x".into(),
+            port_base: 41010,
+            base: "trunk".into(),
+        });
+        let p = prompt_for(&t, &facts(), &PromptInput::Review { round: 1 }, &opus(), 41010).unwrap();
+        assert!(p.contains("git merge-base HEAD origin/trunk"), "{p}");
+        assert!(!p.contains("origin/HEAD"), "{p}");
+        // a worktree recorded before the base was kept falls back to origin/HEAD
+        t.worktree.as_mut().unwrap().base = String::new();
+        let p = prompt_for(&t, &facts(), &PromptInput::Review { round: 1 }, &opus(), 41010).unwrap();
+        assert!(p.contains("git merge-base HEAD origin/HEAD"), "{p}");
     }
 
     #[test]

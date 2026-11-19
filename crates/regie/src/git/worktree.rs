@@ -123,10 +123,10 @@ pub async fn create_worktree(
     let branch = branch_name(task, title);
     let path = root.join(format!("t{}-{}", task.0, slug(title)));
     git(repo, &["fetch", "origin"]).await?;
-    let base = format!("origin/{}", default_branch(repo).await?);
+    let default = default_branch(repo).await?;
     tokio::fs::create_dir_all(root).await?;
     let path_str = path.to_str().context("worktree path is not UTF-8")?;
-    git(repo, &["worktree", "add", "--no-track", "-b", &branch, path_str, &base]).await?;
+    git(repo, &["worktree", "add", "--no-track", "-b", &branch, path_str, &format!("origin/{default}")]).await?;
     for f in copy_files {
         let src = repo.join(f);
         if tokio::fs::metadata(&src).await.map(|m| m.is_file()).unwrap_or(false) {
@@ -137,7 +137,7 @@ pub async fn create_worktree(
             tokio::fs::copy(&src, &dst).await.with_context(|| format!("copying {f}"))?;
         }
     }
-    Ok(Worktree { path: path_str.to_string(), branch, port_base })
+    Ok(Worktree { path: path_str.to_string(), branch, port_base, base: default })
 }
 
 /// Runs `sh -c cmd` in the worktree; returns success and the last 4,000 characters of output.

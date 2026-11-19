@@ -159,7 +159,12 @@ impl Engine {
                 return self.emit_task(id, Actor::Regie, EventKind::SetupFinished { ok: false, output_tail });
             }
         };
-        let kind = EventKind::WorktreeCreated { path: wt.path.clone(), branch: wt.branch.clone(), port_base: wt.port_base };
+        let kind = EventKind::WorktreeCreated {
+            path: wt.path.clone(),
+            branch: wt.branch.clone(),
+            port_base: wt.port_base,
+            base: wt.base.clone(),
+        };
         self.emit_task(id, Actor::Regie, kind)?;
         let repo = &self.state.tasks[&id].repo;
         match self.state.project_facts.get(repo).and_then(|f| f.setup.clone()) {

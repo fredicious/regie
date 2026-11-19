@@ -14,6 +14,7 @@ async fn creates_worktree_from_fresh_origin() {
         .unwrap();
     assert_eq!(wt.branch, "regie/t7-add-csv-export-v2");
     assert_eq!(wt.port_base, 41020);
+    assert_eq!(wt.base, "main");
     assert_eq!(Path::new(&wt.path), r.root.join("t7-add-csv-export-v2"));
     assert_eq!(git(Path::new(&wt.path), &["rev-parse", "HEAD"]), sha);
     assert_eq!(std::fs::read_to_string(Path::new(&wt.path).join(".env")).unwrap(), "SECRET=1\n");

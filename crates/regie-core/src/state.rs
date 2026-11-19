@@ -29,6 +29,9 @@ pub struct Worktree {
     pub path: String,
     pub branch: String,
     pub port_base: u16,
+    /// The repo's default branch, which the worktree was cut from.
+    #[serde(default)]
+    pub base: String,
 }
 
 /// One review round: the reviewer's outcome, the rulings on it, and whether the fix ran.
@@ -388,8 +391,9 @@ impl Task {
     fn apply(&mut self, kind: &EventKind, at: Millis) {
         match kind {
             EventKind::LevelRaised { level } => self.level = *level,
-            EventKind::WorktreeCreated { path, branch, port_base } => {
-                self.worktree = Some(Worktree { path: path.clone(), branch: branch.clone(), port_base: *port_base });
+            EventKind::WorktreeCreated { path, branch, port_base, base } => {
+                let (path, branch, base) = (path.clone(), branch.clone(), base.clone());
+                self.worktree = Some(Worktree { path, branch, port_base: *port_base, base });
                 self.worktree_created_at = Some(at);
             }
             EventKind::SetupFinished { ok, output_tail } => {
@@ -535,7 +539,7 @@ mod tests {
 
     fn script() -> Vec<Event> {
         let kinds = base().into_iter().chain([
-            EventKind::WorktreeCreated { path: "/w/t1".into(), branch: "regie/t1-t".into(), port_base: 41000 },
+            EventKind::WorktreeCreated { path: "/w/t1".into(), branch: "regie/t1-t".into(), port_base: 41000, base: "main".into() },
             EventKind::SetupFinished { ok: true, output_tail: "ok".into() },
             started(1, Role::Builder, Purpose::Initial),
             EventKind::RunAttached { run: RunId(1), native_session: "n1".into(), pid: Some(42) },
@@ -824,7 +828,7 @@ mod tests {
 
     fn built() -> Vec<EventKind> {
         vec![
-            EventKind::WorktreeCreated { path: "/w/t1".into(), branch: "regie/t1-t".into(), port_base: 41000 },
+            EventKind::WorktreeCreated { path: "/w/t1".into(), branch: "regie/t1-t".into(), port_base: 41000, base: "main".into() },
             started(1, Role::Builder, Purpose::Initial),
             finished(1, RunOutcome::Finished, "Status: done"),
         ]
@@ -951,5 +955,17 @@ mod tests {
         let s = State::replay(&script());
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<State>(&j).unwrap(), s);
+    }
+
+    #[test]
+    fn worktree_records_its_base_and_time() {
+        // A log written before `base` was recorded still reads.
+        let old: EventKind =
+            serde_json::from_str(r#"{"type":"WorktreeCreated","path":"/w","branch":"b","port_base":41000}"#).unwrap();
+        assert_eq!(old, EventKind::WorktreeCreated { path: "/w".into(), branch: "b".into(), port_base: 41000, base: String::new() });
+        let s = State::replay(&script());
+        let t = &s.tasks[&TaskId(1)];
+        assert_eq!(t.worktree.as_ref().map(|w| w.base.as_str()), Some("main"));
+        assert!(t.worktree_created_at.is_some());
     }
 }
