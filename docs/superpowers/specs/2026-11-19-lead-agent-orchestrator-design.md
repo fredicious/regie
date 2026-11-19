@@ -227,6 +227,12 @@ Opus 5.5 at high effort, as a setting with a per-session override (R4).
 - **Provider is Régie's call:** quota and the "review by the other provider" rule decide. The lead may state a preference, honoured when that provider is open.
 - Each card shows its level, model and effort.
 
+**Revisited on 2026-11-19, after milestone 1 (decided):** the lead keeps choosing levels, not models. Frédéric owns the map from level to model and effort:
+- **Editable map:** from milestone 2, `regie settings set level.<light|standard|hard>.<claude|codex> "<model> <effort>"` changes it. Each change is a versioned setting, so it shows in the log and can be reverted. This is how he points a level at a new model, or downgrades when usage runs low. The settings page comes in milestone 4.
+- **No separate "enabled models" list:** the map is the list of models in use. Régie refuses a model id the provider's CLI rejects (the run ends crashed with the error shown).
+- **Per-task override by Frédéric:** from the CLI or the inspector, he can pin a task to a model and effort ("run this one on Fable"). It applies to the task's next runs and wins over the level.
+- **Why not let the lead pick models:** the lead is good at judging how hard a task is, but quota and price are Frédéric's calls, and a single map makes downgrading or adopting a new model a one-line change.
+
 ## 3. Data model
 
 ### One log, plus tables kept from it
@@ -490,7 +496,7 @@ Vite's dev server proxies API calls to the running binary. A release build runs 
 Five milestones (decided: the lead before Codex). Each ends with green tests, a live run on a real repo and a short demo. Each gets its own implementation plan when it starts.
 
 1. **One task, started by hand.** The workspace, store, server with token and origin check, event stream, and the Board view with the inspector. One task's whole path: worktree and setup, a Claude builder that builds, checks and commits, a fresh Claude reviewer with fix rounds and the verify pass, the builder pushing and opening the PR, `gh` polling for CI, Ready to merge, merge detection, cleanup. A simple usage guard: Claude readings, both thresholds, fixed caps. Pause and resume. Restart recovery. Tasks are started through the CLI or the API, and the builder's questions are answered there too.
-2. **The lead.** The lead conversation, its MCP tools, the wake rules and replacement. The Lead view, the talkback queue, escalations, browser notifications. Onboarding, preflight and Jira updates. Several sessions. **Daily use starts here, on Claude only.**
+2. **The lead.** The lead conversation, its MCP tools, the wake rules and replacement. The Lead view, the talkback queue, escalations, browser notifications. Onboarding, preflight and Jira updates. Several sessions. `regie settings` for the level map, and the per-task model override. **Daily use starts here, on Claude only.**
 3. **Codex.** The app-server client, Codex builders, review by the other provider, Codex usage polling, adaptive slots, run anyway, the handover after a real limit.
 4. **Memory and the log.** Lessons, how they reach prompts, the freshness job, reflection, the log page and the settings page.
 5. **Done.** The full acceptance scenario with fakes plus one live run, the bench adapter, and the Python code deleted.
