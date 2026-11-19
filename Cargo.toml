@@ -14,11 +14,11 @@ thiserror = "2"
 rusqlite = { version = "0.37", features = ["bundled"] }
 anyhow = "1"
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "fs", "time", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "fs", "time", "io-util", "signal"] }
 
 # Declared here as each crate first uses it (the milestone-1 stack):
-# clap = { version = "4", features = ["derive"] }
-# reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 # tracing = "0.1"
 axum = "0.8"
 tower = { version = "0.5", features = ["util"] }

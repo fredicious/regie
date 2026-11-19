@@ -3,6 +3,8 @@
 pub mod agents;
 pub mod bus;
 pub mod caffeinate;
+pub mod cli;
+pub mod client;
 pub mod engine;
 pub mod git;
 pub mod github;

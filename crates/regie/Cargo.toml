@@ -17,6 +17,8 @@ axum.workspace = true
 rust-embed.workspace = true
 rand.workspace = true
 tokio-stream.workspace = true
+clap.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -13,6 +13,8 @@ pub enum Input {
     Agent(RunId, AgentEvent),
     Tick,
     Shutdown,
+    /// Ends every run `Interrupted`, stops the agents, then ends the loop and replies.
+    Quit(oneshot::Sender<()>),
     /// A new session's repos, made canonical and with their GitHub remotes.
     SessionReady { name: String, repos: Result<Vec<RepoInfo>, String>, actor: Actor, reply: Reply },
     WorktreeReady { task: TaskId, result: Result<Worktree, String> },

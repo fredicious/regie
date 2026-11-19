@@ -40,6 +40,9 @@ const TICK: Duration = Duration::from_secs(5);
 /// How long to wait before retrying a cleanup or PR close that failed.
 const RETRY_MS: i64 = 60_000;
 
+/// How long a quitting engine waits for agent processes to end.
+const QUIT_WAIT: Duration = Duration::from_secs(8);
+
 /// What the engine needs from the outside world; tests pass fakes.
 pub struct Deps {
     pub runner: Arc<dyn AgentRunner>,
@@ -77,6 +80,16 @@ impl EngineHandle {
     /// Stops the loop without finishing the runs it started (the next start recovers them).
     pub async fn shutdown(&self) {
         if self.tx.send(Input::Shutdown).await.is_ok() {
+            self.tx.closed().await;
+        }
+    }
+
+    /// What `regie serve` does on SIGINT/SIGTERM: stops every agent, records each
+    /// run as `Interrupted` (so the next start resumes it) and ends the loop.
+    pub async fn stop_all_and_shutdown(&self) {
+        let (reply, rx) = oneshot::channel();
+        if self.tx.send(Input::Quit(reply)).await.is_ok() {
+            let _ = rx.await;
             self.tx.closed().await;
         }
     }
@@ -186,9 +199,45 @@ impl Engine {
             self.caffeinate.set_running(self.runs.len());
             match rx.recv().await {
                 Some(Input::Shutdown) | None => break,
+                Some(Input::Quit(reply)) => {
+                    self.quit(&mut rx).await;
+                    let _ = reply.send(());
+                    break;
+                }
                 Some(i) => input = Some(i),
             }
         }
+    }
+
+    /// Records every live run as `Interrupted` and stops its agent, waiting (a
+    /// few seconds at most) for the processes to go.
+    async fn quit(&mut self, rx: &mut mpsc::Receiver<Input>) {
+        let runs: Vec<_> = self.runs.drain().collect();
+        let mut pending = BTreeSet::new();
+        for (run, ctl) in runs {
+            let kind = EventKind::RunFinished { run, outcome: regie_core::RunOutcome::Interrupted, final_message: None };
+            if let Err(e) = self.emit_task(ctl.task, Actor::Regie, kind) {
+                eprintln!("regie: {e:#}");
+            }
+            self.live.active.remove(&ctl.task);
+            let _ = ctl.control.try_send(crate::agents::AgentControl::Stop);
+            pending.insert(run);
+        }
+        // Each runner ends with `Finished` once its process is gone; nothing else is acted on.
+        let wait = async {
+            while !pending.is_empty() {
+                match rx.recv().await {
+                    Some(Input::Agent(run, crate::agents::AgentEvent::Finished { .. })) => {
+                        pending.remove(&run);
+                    }
+                    Some(_) => {}
+                    None => break,
+                }
+            }
+        };
+        let _ = tokio::time::timeout(QUIT_WAIT, wait).await;
+        self.snapshot.write().unwrap().live = self.live.clone();
+        self.caffeinate.set_running(0);
     }
 
     fn handle(&mut self, input: Input) -> anyhow::Result<()> {
@@ -211,7 +260,7 @@ impl Engine {
                 self.on_tick();
                 self.prune_if_due();
             }
-            Input::Shutdown => {}
+            Input::Shutdown | Input::Quit(_) => {}
             Input::WorktreeReady { task, result } => self.on_worktree(task, result)?,
             Input::SetupDone { task, ok, output } => {
                 self.prep.remove(&task);
