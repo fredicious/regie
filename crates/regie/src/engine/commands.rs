@@ -44,8 +44,11 @@ impl Engine {
         let _ = reply.send(result.map_err(|e| format!("{e:#}")));
     }
 
-    /// Queues the message; a running builder gets it at once. It counts as
-    /// delivered (`MessageDelivered`) only when the agent answers: see `runs.rs`.
+    /// Queues the message; a running builder gets it at once if every older
+    /// queued message is already out to that run. `MessageDelivered` carries no
+    /// text and pops the oldest queued message, so live sends must stay in queue
+    /// order; an older message still waiting goes first, as a `Message` run, and
+    /// this one follows it. Delivery is confirmed when the agent answers (`runs.rs`).
     fn message(
         &mut self,
         task: TaskId,
@@ -56,9 +59,10 @@ impl Engine {
         if let Some(level) = level {
             self.emit_task(task, actor, EventKind::LevelRaised { level })?;
         }
+        let older = self.state.tasks[&task].pending_messages.len();
         self.emit_task(task, actor, EventKind::MessageQueued { text: text.clone() })?;
         let running = self.state.active_run(task).filter(|r| r.role == Role::Builder).map(|r| r.id);
-        if let Some(ctl) = running.and_then(|run| self.runs.get_mut(&run)) {
+        if let Some(ctl) = running.and_then(|run| self.runs.get_mut(&run)).filter(|ctl| ctl.awaiting == older) {
             if ctl.control.try_send(AgentControl::Message(text)).is_ok() {
                 ctl.awaiting += 1;
             }

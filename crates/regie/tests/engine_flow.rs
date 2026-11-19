@@ -2,6 +2,9 @@
 mod support;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+use tokio::sync::Semaphore;
 
 use regie::agents::AgentControl;
 use regie::bus::BusMsg;
@@ -116,6 +119,52 @@ async fn message_to_running_builder_is_delivered_live() {
     assert_eq!(h.specs_for(t).len(), 1);
     assert_eq!(h.lane(t), Lane::Working);
     assert_eq!(h.card(t).last_output.as_deref(), Some("message received: Also add a test."));
+    // two in a row both go live, in order
+    h.message(t, "First.").await;
+    h.message(t, "Second.").await;
+    h.wait_for("both delivered", SECS, |h| h.state().tasks[&t].pending_messages.is_empty()).await;
+    let sent: Vec<AgentControl> = h.claude.controls().into_iter().skip(1).map(|(_, c)| c).collect();
+    assert_eq!(sent, [AgentControl::Message("First.".into()), AgentControl::Message("Second.".into())]);
+    assert_eq!(h.events().iter().filter(|e| e.kind == EventKind::MessageDelivered).count(), 3);
+    assert_eq!(h.specs_for(t).len(), 1);
+}
+
+#[tokio::test]
+async fn message_queued_before_start_is_not_overtaken() {
+    let gate = Arc::new(Semaphore::new(0));
+    let g = gate.clone();
+    let h = Harness::new(move |spec, _| match (spec.role, spec.purpose) {
+        (Role::Builder, Purpose::Initial) => FakeOutcome {
+            final_message: "Status: done".into(),
+            actions: vec![FakeAction::WaitFor(g.clone())],
+        },
+        (Role::Builder, Purpose::Message) => says("Done.\nStatus: done"),
+        (Role::Reviewer, Purpose::Review) => hangs(),
+        other => panic!("unexpected run {other:?}"),
+    })
+    .await;
+    // A is sent while the task waits for quota, B while the first builder run works.
+    *h.probe_five_hour.lock().unwrap() = 0.80;
+    let t = h.create_session_and_task("Ordered").await;
+    h.wait_for("held for quota", SECS, |h| h.card(t).flags == [Flag::Waiting(QueuedReason::Quota)]).await;
+    h.message(t, "A").await;
+    *h.probe_five_hour.lock().unwrap() = 0.20;
+    h.tick_until("builder started", MINUTE, SECS, |h| h.state().active_run(t).is_some()).await;
+    h.message(t, "B").await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    gate.add_permits(1);
+    h.wait_for("review", SECS, |h| h.specs_for(t).iter().any(|s| s.role == Role::Reviewer)).await;
+
+    // every way a message reaches a builder: live, or as a Message run's prompt
+    let live = h.claude.controls().into_iter().filter_map(|(_, c)| match c {
+        AgentControl::Message(text) => Some(text),
+        _ => None,
+    });
+    let runs = h.specs_for(t).into_iter().filter(|s| s.purpose == Purpose::Message).map(|s| s.prompt);
+    let mut reached: Vec<String> = live.chain(runs).collect();
+    reached.sort();
+    assert_eq!(reached, ["A", "B"]);
+    assert!(h.state().tasks[&t].pending_messages.is_empty());
 }
 
 #[tokio::test]

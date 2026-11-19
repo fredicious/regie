@@ -4,7 +4,7 @@
 //! finishes with the script's final message. `HangUntilControl` waits for a
 //! control message: `Interrupt` ends the run `Paused`, `Stop` ends it
 //! `Stopped`, and `Message` is recorded and answered with an output line while
-//! the run keeps waiting.
+//! the run keeps waiting. `WaitFor` does the same until the test opens its gate.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,6 +23,8 @@ pub enum FakeAction {
     /// Ends the run `Crashed` with no final message; later actions are skipped.
     Crash,
     HangUntilControl,
+    /// Waits for a permit on the gate, answering messages like `HangUntilControl`.
+    WaitFor(Arc<tokio::sync::Semaphore>),
 }
 
 pub struct FakeOutcome {
@@ -132,6 +134,27 @@ impl AgentRunner for FakeClaude {
                         end = RunOutcome::Crashed;
                         break;
                     }
+                    FakeAction::WaitFor(gate) => loop {
+                        tokio::select! {
+                            permit = gate.acquire() => {
+                                permit.unwrap().forget();
+                                break;
+                            }
+                            c = pass_rx.recv() => match c {
+                                Some(AgentControl::Message(text)) => {
+                                    send(AgentEvent::Output(format!("message received: {text}"))).await;
+                                }
+                                Some(AgentControl::Interrupt) => {
+                                    end = RunOutcome::Paused;
+                                    break 'actions;
+                                }
+                                Some(AgentControl::Stop) | None => {
+                                    end = RunOutcome::Stopped;
+                                    break 'actions;
+                                }
+                            },
+                        }
+                    },
                     FakeAction::HangUntilControl => loop {
                         match pass_rx.recv().await {
                             // Claude answers a message it got mid-run; so does the fake.
