@@ -12,7 +12,11 @@ Régie is a local lead-agent orchestrator: one lead agent plans and delegates to
 
 ## Commands
 
-- `make test`: `cargo test`, then `pnpm -C web test && pnpm -C web typecheck` once `web/package.json` exists
-- `make web`: install and build the web page
-- `make build`: web, then `cargo build --release`
-- `make dev`: run the server
+- `make test`: `cargo test`, `pnpm -C web test`, `pnpm -C web typecheck`
+- `make web`: `pnpm -C web install --frozen-lockfile && pnpm -C web build` (writes `web/dist`)
+- `make build`: `make web`, then `cargo build --release`. The release binary embeds `web/dist`; run `./target/release/regie serve`.
+- `make dev`: prints the dev loop (below)
+
+## Dev loop
+
+Two terminals: `cargo run -p regie -- serve --no-open` (API on 127.0.0.1:7317; debug builds read `web/dist` from disk, so no rebuild after `make web`) and `pnpm -C web dev` (Vite with hot reload, proxying the API). Without `web/dist` the server serves a "run `make web`" note and the server tests that need the page skip.

@@ -1,6 +1,6 @@
 //! The web page, embedded in the binary from `web/dist` (built by `make web`).
 
-use axum::http::{header, StatusCode, Uri};
+use axum::http::{header, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
 
@@ -15,12 +15,23 @@ pub async fn asset(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
     match Assets::get(path) {
-        Some(file) => ([(header::CONTENT_TYPE, content_type(path))], file.data.into_owned()).into_response(),
-        None if path == "index.html" => {
-            ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], MISSING).into_response()
-        }
+        Some(file) => with_security_headers(
+            ([(header::CONTENT_TYPE, content_type(path))], file.data.into_owned()).into_response(),
+        ),
+        None if path == "index.html" => with_security_headers(
+            ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], MISSING).into_response(),
+        ),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// The page must not be framed, and must not leak its URL (which can carry the token) as a referrer.
+fn with_security_headers(mut r: Response) -> Response {
+    let h = r.headers_mut();
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("frame-ancestors 'none'"));
+    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    r
 }
 
 fn content_type(path: &str) -> &'static str {

@@ -129,12 +129,47 @@ async fn token_query_sets_cookie() {
     assert!(r.headers().get(header::SET_COOKIE).is_none());
 }
 
+fn web_is_built() -> bool {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/dist/index.html").exists()
+}
+
 #[tokio::test]
 async fn root_says_how_to_build_the_web_page_when_it_is_missing() {
+    if web_is_built() {
+        eprintln!("skipped: web/dist is built");
+        return;
+    }
     let (_h, app) = app().await;
     let r = app.oneshot(get("/").body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     assert!(String::from_utf8(body(r).await.to_vec()).unwrap().contains("make web"));
+}
+
+#[tokio::test]
+async fn serves_embedded_index_when_built() {
+    if !web_is_built() {
+        eprintln!("skipped: web/dist is not built (run `make web`)");
+        return;
+    }
+    let (_h, app) = app().await;
+    let r = app.clone().oneshot(get("/").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(r.headers()[header::CONTENT_TYPE], "text/html; charset=utf-8");
+    assert_eq!(r.headers()[header::X_FRAME_OPTIONS], "DENY");
+    assert_eq!(r.headers()[header::CONTENT_SECURITY_POLICY], "frame-ancestors 'none'");
+    assert_eq!(r.headers()[header::REFERRER_POLICY], "no-referrer");
+    let html = String::from_utf8(body(r).await.to_vec()).unwrap();
+    assert!(html.contains("<title>Régie</title>"), "{html}");
+
+    // The page itself ("RÉGIE" is in the bundle): fetch the script the index points at.
+    let src = html.split("src=\"").nth(1).and_then(|t| t.split('"').next()).expect("a script tag").to_string();
+    let r = app.oneshot(get(&src).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(r.headers()[header::CONTENT_TYPE], "text/javascript; charset=utf-8");
+    assert_eq!(r.headers()[header::X_FRAME_OPTIONS], "DENY");
+    assert_eq!(r.headers()[header::CONTENT_SECURITY_POLICY], "frame-ancestors 'none'");
+    assert_eq!(r.headers()[header::REFERRER_POLICY], "no-referrer");
+    assert!(String::from_utf8(body(r).await.to_vec()).unwrap().contains("RÉGIE"));
 }
 
 #[tokio::test]
