@@ -12,6 +12,7 @@ pub mod usage;
 pub use command::{Command, CommandError, CommandResult};
 pub use event::{Actor, Event, EventKind, LoopKind, NewEvent, Purpose, RepoInfo, Role, RunOutcome};
 pub use facts::ProjectFacts;
+pub use findings::*;
 pub use github::{Checks, MergeState, PrComment, PrLifecycle, PrState, ReviewDecision};
 pub use ids::{EventId, Millis, RunId, SessionId, TaskId};
 pub use settings::{Caps, Effort, Level, LoopCaps, ModelChoice, Provider, Settings, Thresholds};
