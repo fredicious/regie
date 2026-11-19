@@ -25,7 +25,13 @@ pub struct BranchPr {
 #[async_trait::async_trait]
 pub trait GitHub: Send + Sync {
     /// Every PR ever opened from `branch`, newest first.
-    async fn prs_for_branch(&self, repo: &GhRepo, branch: &str) -> anyhow::Result<Vec<BranchPr>>;
+    /// `now` is the engine's clock, used to tell "no CI" from "CI not registered yet".
+    async fn prs_for_branch(
+        &self,
+        repo: &GhRepo,
+        branch: &str,
+        now: Millis,
+    ) -> anyhow::Result<Vec<BranchPr>>;
     async fn pr_activity(&self, repo: &GhRepo, number: u64) -> anyhow::Result<Vec<PrComment>>;
     async fn close_pr(&self, repo: &GhRepo, number: u64) -> anyhow::Result<()>;
 }
@@ -51,14 +57,27 @@ struct RawPr {
     created_at: Option<String>,
 }
 
+/// How long after a PR is opened an empty check rollup still means "CI has not
+/// registered yet" rather than "this repo has no CI".
+pub const CHECKS_GRACE_MS: i64 = 3 * 60_000;
+
+/// A PR with no checks that is younger than `CHECKS_GRACE_MS` has checks pending.
+pub fn apply_checks_grace(pr: &mut PrState, created_at: Millis, now: Millis) {
+    if pr.checks == Checks::None && now.0 - created_at.0 < CHECKS_GRACE_MS {
+        pr.checks = Checks::Pending;
+    }
+}
+
 /// The PRs `gh pr list` gave, newest first.
-pub fn parse_pr_list(json: &str) -> anyhow::Result<Vec<BranchPr>> {
+pub fn parse_pr_list(json: &str, now: Millis) -> anyhow::Result<Vec<BranchPr>> {
     let raw: Vec<RawPr> = serde_json::from_str(json).context("parsing `gh pr list` output")?;
     let mut prs: Vec<BranchPr> = raw
         .into_iter()
-        .map(|r| BranchPr {
-            created_at: Millis(r.created_at.as_deref().and_then(parse_rfc3339).unwrap_or(0)),
-            pr: raw_pr(r),
+        .map(|r| {
+            let created_at = Millis(r.created_at.as_deref().and_then(parse_rfc3339).unwrap_or(0));
+            let mut pr = raw_pr(r);
+            apply_checks_grace(&mut pr, created_at, now);
+            BranchPr { pr, created_at }
         })
         .collect();
     prs.sort_by_key(|p| std::cmp::Reverse(p.created_at));
@@ -257,14 +276,19 @@ fn repo_args(repo: &GhRepo) -> Vec<&str> {
 
 #[async_trait::async_trait]
 impl GitHub for GhCli {
-    async fn prs_for_branch(&self, repo: &GhRepo, branch: &str) -> anyhow::Result<Vec<BranchPr>> {
+    async fn prs_for_branch(
+        &self,
+        repo: &GhRepo,
+        branch: &str,
+        now: Millis,
+    ) -> anyhow::Result<Vec<BranchPr>> {
         let mut args = vec![
             "pr", "list", "--head", branch, "--state", "all", "--limit", "10", "--json",
             "number,url,state,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid,createdAt",
         ];
         args.extend(repo_args(repo));
         let json = self.gh(&repo.path, &args).await?;
-        parse_pr_list(&json)
+        parse_pr_list(&json, now)
     }
 
     async fn pr_activity(&self, repo: &GhRepo, number: u64) -> anyhow::Result<Vec<PrComment>> {
@@ -295,8 +319,11 @@ mod tests {
     const MERGED: &str = include_str!("../tests/fixtures/gh/pr_list_merged.json");
     const ACTIVITY: &str = include_str!("../tests/fixtures/gh/pr_view_activity.json");
 
+    /// Long after any fixture PR was opened.
+    const LATER: Millis = Millis(4_000_000_000_000);
+
     fn pr(json: &str) -> PrState {
-        parse_pr_list(json).unwrap().remove(0).pr
+        parse_pr_list(json, LATER).unwrap().remove(0).pr
     }
 
     #[test]
@@ -347,7 +374,7 @@ mod tests {
 
     #[test]
     fn no_pr_is_none() {
-        assert_eq!(parse_pr_list("[]").unwrap(), vec![]);
+        assert_eq!(parse_pr_list("[]", LATER).unwrap(), vec![]);
     }
 
     #[test]
@@ -480,7 +507,7 @@ mod tests {
             {"number":3,"url":"u3","state":"MERGED","createdAt":"2026-01-02T00:00:00Z"},
             {"number":9,"url":"u9","state":"OPEN","createdAt":"2026-11-19T10:00:00Z"}
         ]"#;
-        let prs = parse_pr_list(json).unwrap();
+        let prs = parse_pr_list(json, LATER).unwrap();
         let got: Vec<(u64, Millis)> = prs.iter().map(|p| (p.pr.number, p.created_at)).collect();
         assert_eq!(
             got,
@@ -501,11 +528,40 @@ mod tests {
             path: dir.path().into(),
             github: Some("o/r".into()),
         };
-        gh.prs_for_branch(&repo, "regie/t1-x").await.unwrap();
+        gh.prs_for_branch(&repo, "regie/t1-x", Millis(0))
+            .await
+            .unwrap();
         let seen = std::fs::read_to_string(&args).unwrap();
         let seen: Vec<&str> = seen.lines().collect();
         assert!(seen.windows(2).any(|w| w == ["--repo", "o/r"]), "{seen:?}");
         assert!(seen.iter().any(|a| a.contains("createdAt")), "{seen:?}");
+    }
+
+    #[test]
+    fn fresh_pr_without_checks_is_pending_until_the_grace_passes() {
+        let json = r#"[{"number":5,"url":"u","state":"OPEN","mergeStateStatus":"CLEAN",
+            "statusCheckRollup":[],"createdAt":"2026-11-19T10:00:00Z"}]"#;
+        let opened = 1_795_082_400_000;
+        let at = |ms: i64| {
+            parse_pr_list(json, Millis(opened + ms))
+                .unwrap()
+                .remove(0)
+                .pr
+        };
+        assert_eq!(at(0).checks, Checks::Pending);
+        assert_eq!(at(CHECKS_GRACE_MS - 1).checks, Checks::Pending);
+        assert_eq!(at(CHECKS_GRACE_MS).checks, Checks::None);
+    }
+
+    #[test]
+    fn fresh_pr_with_checks_keeps_them() {
+        let json = r#"[{"number":5,"url":"u","state":"OPEN",
+            "statusCheckRollup":[{"__typename":"CheckRun","name":"b","status":"COMPLETED","conclusion":"SUCCESS"}],
+            "createdAt":"2026-11-19T10:00:00Z"}]"#;
+        let p = parse_pr_list(json, Millis(1_795_082_400_000))
+            .unwrap()
+            .remove(0);
+        assert_eq!(p.pr.checks, Checks::Success);
     }
 
     #[test]

@@ -117,9 +117,10 @@ impl Engine {
             .worktree_created_at
             .map_or(i64::MIN, |at| at.0 - CLOCK_SKEW_MS);
         let (github, tx) = (self.deps.github.clone(), self.tx.clone());
+        let now = self.now();
         tokio::spawn(async move {
             let look = async {
-                let prs = github.prs_for_branch(&repo, &branch).await?;
+                let prs = github.prs_for_branch(&repo, &branch, now).await?;
                 let pr = prs
                     .into_iter()
                     .filter(|p| p.created_at.0 >= not_before)

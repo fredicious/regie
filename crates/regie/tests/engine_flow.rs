@@ -745,3 +745,38 @@ async fn raise_level_only_records_the_new_level() {
     assert_eq!(h.card(t).level, regie_core::Level::Hard);
     assert!(h.card(t).active.is_some());
 }
+
+#[tokio::test]
+async fn fresh_pr_without_checks_shows_ci_until_three_minutes_pass() {
+    // GitHub takes a moment to register checks: an empty rollup right after
+    // the PR opens is not "no CI".
+    let h = Harness::new(|spec, gh| match (spec.role, spec.purpose) {
+        (Role::Builder, Purpose::Initial) => builds("a.txt", "a\n"),
+        (Role::Reviewer, Purpose::Review) => says(CLEAN_REVIEW),
+        (Role::Builder, Purpose::OpenPr) => {
+            gh.set(
+                &branch_of(spec),
+                pr(7, "sha1", Checks::None, MergeState::Clean),
+            );
+            says("Opened the PR.\n\nStatus: done")
+        }
+        other => panic!("unexpected run {other:?}"),
+    })
+    .await;
+    let t = h.create_session_and_task("No CI yet").await;
+    h.wait_lane(t, Lane::Ci, SECS).await;
+    for _ in 0..4 {
+        h.advance_clock(30_000);
+        h.tick().await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(
+            h.lane(t),
+            Lane::Ci,
+            "ready to merge before CI could register"
+        );
+    }
+    h.tick_until("ready to merge", 30_000, SECS, |h| {
+        h.lane(t) == Lane::ReadyToMerge
+    })
+    .await;
+}

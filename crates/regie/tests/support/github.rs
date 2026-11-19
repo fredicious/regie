@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use regie::github::{BranchPr, GhRepo, GitHub};
+use regie::github::{apply_checks_grace, BranchPr, GhRepo, GitHub};
 use regie_core::{Millis, PrComment, PrLifecycle, PrState};
 
 #[derive(Default)]
@@ -100,7 +100,12 @@ impl FakeGitHub {
 
 #[async_trait::async_trait]
 impl GitHub for FakeGitHub {
-    async fn prs_for_branch(&self, repo: &GhRepo, branch: &str) -> anyhow::Result<Vec<BranchPr>> {
+    async fn prs_for_branch(
+        &self,
+        repo: &GhRepo,
+        branch: &str,
+        now: Millis,
+    ) -> anyhow::Result<Vec<BranchPr>> {
         self.call(repo)?;
         let mut list = self
             .prs
@@ -110,6 +115,9 @@ impl GitHub for FakeGitHub {
             .cloned()
             .unwrap_or_default();
         list.reverse();
+        for p in &mut list {
+            apply_checks_grace(&mut p.pr, p.created_at, now);
+        }
         Ok(list)
     }
 
