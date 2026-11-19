@@ -353,3 +353,21 @@ async fn sse_ends_when_the_store_cannot_be_read() {
     let next = tokio::time::timeout(Duration::from_secs(5), stream.next()).await.expect("stream should end, not hang");
     assert!(next.is_none(), "a failed replay must not look like an empty one: {next:?}");
 }
+
+#[tokio::test]
+async fn task_read_error_is_an_error_not_an_empty_timeline() {
+    let (h, app) = app().await;
+    let t = h.create_session_and_task("Readable").await;
+    // the engine has written the task's events: the timeline is not empty
+    let r = app.clone().oneshot(get(&format!("/api/tasks/{}", t.0)).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert!(!json(r).await["timeline"].as_array().unwrap().is_empty());
+    for ext in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{ext}", h.data.db().display()));
+    }
+    let r = app.oneshot(get(&format!("/api/tasks/{}", t.0)).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(json(r).await["error"].as_str().unwrap().contains("timeline"));
+    // no stray empty database was made in its place
+    assert!(!h.data.db().exists());
+}

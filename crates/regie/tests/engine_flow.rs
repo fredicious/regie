@@ -79,7 +79,7 @@ async fn one_task_happy_path() {
     assert_eq!(task.reviews.len(), 2);
     let ruled = h.events().into_iter().find(|e| matches!(e.kind, EventKind::FindingsRuled { round: 1, .. })).unwrap();
     assert_eq!(ruled.actor, Actor::Regie);
-    let detail = h.engine.task(t).unwrap();
+    let detail = h.engine.task(t).unwrap().unwrap();
     assert_eq!(detail.runs.len(), 5);
     assert!(detail.timeline.iter().all(|e| e.task == Some(t)));
     assert!(detail.timeline.iter().any(|e| matches!(e.kind, EventKind::WorktreeCreated { .. })));

@@ -43,8 +43,11 @@ pub async fn board(State(s): State<AppState>, Query(q): Query<BoardQuery>) -> Re
 
 pub async fn task(State(s): State<AppState>, Path(id): Path<i64>) -> Response {
     match s.engine.task(TaskId(id)) {
-        Some(t) => Json(t).into_response(),
-        None => not_found(&format!("task {id}")),
+        Ok(Some(t)) => Json(t).into_response(),
+        Ok(None) => not_found(&format!("task {id}")),
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e:#}")}))).into_response()
+        }
     }
 }
 

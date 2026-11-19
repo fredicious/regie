@@ -1,8 +1,13 @@
 import type { Event } from "./api/gen/Event";
+import type { Finding } from "./api/gen/Finding";
+import type { FindingKind } from "./api/gen/FindingKind";
 import type { Flag } from "./api/gen/Flag";
+import type { HumanReason } from "./api/gen/HumanReason";
 import type { Lane } from "./api/gen/Lane";
 import type { Openness } from "./api/gen/Openness";
 import type { TaskCard } from "./api/gen/TaskCard";
+import type { TaskDetail } from "./api/gen/TaskDetail";
+import type { VerifyResult } from "./api/gen/VerifyResult";
 
 export const LANES: { lane: Lane; label: string }[] = [
   { lane: "Queued", label: "Queued" },
@@ -88,4 +93,65 @@ export function eventText(e: Event): string {
     case "LimitHit": return `${k.provider} limit hit`;
     default: return words(k.type);
   }
+}
+
+const KIND: Record<FindingKind, string> = {
+  Bug: "bug", Security: "security", MissingTest: "missing test", UnmetCriterion: "unmet criterion", Design: "design", Other: "other",
+};
+
+/** `1. Title (bug, blocking)` and, on the next line, the evidence. */
+export function findingText(f: Finding): string {
+  let s = `${f.id}. ${f.title} (${KIND[f.kind]}, ${f.blocking ? "blocking" : "advisory"})`;
+  if (f.evidence) {
+    const where = f.evidence.file ? ` at ${f.evidence.file}${f.evidence.line !== null ? `:${f.evidence.line}` : ""}` : "";
+    s += `\nEvidence (${f.evidence.type.toLowerCase()}): ${f.evidence.detail}${where}`;
+  }
+  return s;
+}
+
+/** `Finding 1: not fixed. The note.` */
+export function verifyText(r: VerifyResult): string {
+  return `Finding ${r.finding}: ${words(r.status)}${r.note ? `. ${r.note}` : ""}`;
+}
+
+/** The longer text an event carries, shown when its timeline line is opened. */
+export function eventBody(e: Event): string | null {
+  const k = e.kind;
+  const text = (s: string | null | undefined) => (s && s.trim() !== "" ? s : null);
+  switch (k.type) {
+    case "RunFinished": return text(k.final_message);
+    case "SetupFinished": return k.ok ? null : text(k.output_tail);
+    case "ReviewReported": return "Unparsed" in k.outcome ? text(k.outcome.Unparsed.raw) : null;
+    case "VerifyReported": return "Unparsed" in k.outcome ? text(k.outcome.Unparsed.raw) : null;
+    case "PrCommentObserved": return text(`${k.comment.author}: ${k.comment.body}`);
+    default: return null;
+  }
+}
+
+const reason = (flags: Flag[]): HumanReason | null => {
+  for (const f of flags) if (typeof f === "object" && "NeedsMe" in f) return f.NeedsMe;
+  return null;
+};
+
+/** What Frédéric is asked to answer: the text behind the card's Needs me flag. */
+export function askedText(d: TaskDetail): { title: string; text: string } | null {
+  const r = reason(d.card.flags);
+  if (r === null) return null;
+  const last = <K extends Event["kind"]["type"]>(type: K) =>
+    [...d.timeline].reverse().find((e) => e.kind.type === type)?.kind as Extract<Event["kind"], { type: K }> | undefined;
+  if (r === "SetupFailed") {
+    const s = last("SetupFinished");
+    if (s && !s.ok && s.output_tail.trim() !== "") return { title: "Setup output", text: s.output_tail };
+  }
+  if (r === "ChangesRequested") {
+    const c = last("PrCommentObserved");
+    if (c) return { title: "Changes requested on the PR", text: `${c.comment.author}: ${c.comment.body}` };
+  }
+  if (r === "ReviewUnparsed") {
+    const rev = last("ReviewReported");
+    if (rev && "Unparsed" in rev.outcome) return { title: "The review Régie could not read", text: rev.outcome.Unparsed.raw };
+  }
+  const run = [...d.runs].reverse().find((x) => x.final_message && x.final_message.trim() !== "");
+  if (run && run.final_message) return { title: `Last message from the ${run.role.toLowerCase()}`, text: run.final_message };
+  return null;
 }

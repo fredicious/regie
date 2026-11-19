@@ -17,6 +17,7 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use anyhow::Context;
 use regie_core::{
     auto_rule, board, next_step, task_detail, Actor, BoardView, Command, CommandResult, Event, EventKind, LiveView,
     Millis, NewEvent, NextStep, Reading, ReviewOutcome, SessionId, Settings, State, TaskDetail, TaskId,
@@ -102,11 +103,18 @@ impl EngineHandle {
         board(&snap.state, &snap.live, s, &snap.settings, (self.clock)())
     }
 
-    /// The task with its timeline (read from the store on a second connection).
-    pub fn task(&self, t: TaskId) -> Option<TaskDetail> {
-        let events = Store::open(&self.data.db()).and_then(|s| s.load_task(t)).unwrap_or_default();
+    /// The task with its timeline, read from the store on a read-only second
+    /// connection. `Ok(None)` when there is no such task; a store that cannot be
+    /// read is an error, not an empty timeline.
+    pub fn task(&self, t: TaskId) -> anyhow::Result<Option<TaskDetail>> {
+        if !self.snapshot.read().unwrap().state.tasks.contains_key(&t) {
+            return Ok(None);
+        }
+        let events = Store::open_reader(&self.data.db())
+            .and_then(|s| s.load_task(t))
+            .with_context(|| format!("reading the timeline of {t}"))?;
         let snap = self.snapshot.read().unwrap();
-        task_detail(&snap.state, &snap.live, &events, t, &snap.settings, (self.clock)())
+        Ok(task_detail(&snap.state, &snap.live, &events, t, &snap.settings, (self.clock)()))
     }
 }
 

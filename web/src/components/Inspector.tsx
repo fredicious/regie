@@ -2,11 +2,67 @@ import { useState } from "preact/hooks";
 import type { Command } from "../api/gen/Command";
 import type { Level } from "../api/gen/Level";
 import type { TaskDetail } from "../api/gen/TaskDetail";
-import { eventText, flagText, laneLabel, needsMe, tally } from "../describe";
+import type { Event } from "../api/gen/Event";
+import { askedText, eventBody, eventText, findingText, flagText, laneLabel, needsMe, tally, verifyText } from "../describe";
 
 type Props = { detail: TaskDetail; lines: string[]; send: (c: Command) => void; onClose: () => void };
 
 const NEXT: Record<Level, Level | null> = { Light: "Standard", Standard: "Hard", Hard: null };
+
+/** Agent and tool text, always rendered as text (Preact escapes it), never as HTML. */
+function Said({ text }: { text: string }) {
+  return <pre class="said">{text}</pre>;
+}
+
+/** One review or verify report from the timeline. */
+function Report({ e }: { e: Event }) {
+  const k = e.kind;
+  if (k.type === "ReviewReported") {
+    return (
+      <div class="report">
+        <b>Round {k.round}</b>
+        {"Unparsed" in k.outcome ? (
+          <>
+            <p class="muted">Régie could not read this review. What the reviewer wrote:</p>
+            <Said text={k.outcome.Unparsed.raw} />
+          </>
+        ) : k.outcome.Findings.length === 0 ? (
+          <p class="muted">No findings.</p>
+        ) : (
+          <ul class="findings">
+            {k.outcome.Findings.map((f) => (
+              <li key={f.id}>
+                <Said text={findingText(f)} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+  if (k.type === "VerifyReported") {
+    return (
+      <div class="report">
+        <b>Verify</b>
+        {"Unparsed" in k.outcome ? (
+          <>
+            <p class="muted">Régie could not read this answer. What the verify run wrote:</p>
+            <Said text={k.outcome.Unparsed.raw} />
+          </>
+        ) : (
+          <ul class="findings">
+            {k.outcome.Results.map((r) => (
+              <li key={r.finding}>
+                <Said text={verifyText(r)} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+  return null;
+}
 
 export function Inspector({ detail, lines, send, onClose }: Props) {
   const { card: c } = detail;
@@ -16,6 +72,8 @@ export function Inspector({ detail, lines, send, onClose }: Props) {
   const t = tally(c);
   const finished = c.lane === "Merged" || c.lane === "Cancelled";
   const next = finished ? null : NEXT[c.level];
+  const asked = askedText(detail);
+  const reports = detail.timeline.filter((e) => e.kind.type === "ReviewReported" || e.kind.type === "VerifyReported");
   const usage = new Map<number, string>();
   for (const e of detail.timeline) {
     if (e.kind.type === "RunUsage") {
@@ -87,17 +145,46 @@ export function Inspector({ detail, lines, send, onClose }: Props) {
         ))}
       </ul>
 
+      {reports.length > 0 && (
+        <section aria-labelledby="review-h">
+          <h3 class="h" id="review-h">
+            Review
+          </h3>
+          {reports.map((e) => (
+            <Report key={e.id} e={e} />
+          ))}
+        </section>
+      )}
+
       <h3 class="h">Timeline</h3>
       <div class="tlx">
-        {detail.timeline.map((e) => (
-          <div key={e.id}>{eventText(e)}</div>
-        ))}
+        {detail.timeline.map((e) => {
+          const body = eventBody(e);
+          return body === null ? (
+            <div key={e.id}>{eventText(e)}</div>
+          ) : (
+            <details key={e.id}>
+              <summary>{eventText(e)}</summary>
+              <Said text={body} />
+            </details>
+          );
+        })}
       </div>
 
       <h3 class="h">Live output</h3>
       <pre class="term" aria-label="Live output">
         {lines.length > 0 ? lines.join("\n") : "(nothing yet)"}
       </pre>
+
+      {asked && (
+        <section class="asked" aria-labelledby="asked-h">
+          <h3 class="h" id="asked-h">
+            What you are asked
+          </h3>
+          <p class="muted">{asked.title}</p>
+          <Said text={asked.text} />
+        </section>
+      )}
 
       {needsMe(c.flags) && (
         <div class="reply">
