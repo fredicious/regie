@@ -1,0 +1,16 @@
+[
+  {
+    "number": 12,
+    "url": "https://github.com/acme/app/pull/12",
+    "state": "OPEN",
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "UNSTABLE",
+    "reviewDecision": "",
+    "headRefOid": "abc123def456",
+    "statusCheckRollup": [
+      {"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"FAILURE"},
+      {"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"},
+      {"__typename":"StatusContext","context":"ci/lint","state":"FAILURE"}
+    ]
+  }
+]

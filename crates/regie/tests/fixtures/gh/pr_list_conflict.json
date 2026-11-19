@@ -1,0 +1,12 @@
+[
+  {
+    "number": 14,
+    "url": "https://github.com/acme/app/pull/14",
+    "state": "OPEN",
+    "mergeable": "CONFLICTING",
+    "mergeStateStatus": "DIRTY",
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "abc123def456",
+    "statusCheckRollup": []
+  }
+]

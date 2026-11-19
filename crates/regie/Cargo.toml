@@ -9,6 +9,8 @@ rusqlite.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+serde.workspace = true
+async-trait.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

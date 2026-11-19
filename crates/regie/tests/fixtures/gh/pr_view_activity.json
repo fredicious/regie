@@ -1,0 +1,9 @@
+{
+  "comments": [
+    {"id": "IC_2", "author": {"login": "bob"}, "body": "Looks odd here.", "createdAt": "2026-11-19T10:05:00Z"}
+  ],
+  "reviews": [
+    {"id": "PRR_3", "author": {"login": "carol"}, "body": "", "state": "CHANGES_REQUESTED", "submittedAt": "2026-11-19T10:10:00Z"},
+    {"id": "PRR_1", "author": {"login": "alice"}, "body": "LGTM so far", "state": "COMMENTED", "submittedAt": "2026-11-19T10:00:00Z"}
+  ]
+}
