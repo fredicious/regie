@@ -51,6 +51,12 @@ pub struct Thresholds {
     pub weekly_ahead_max: f64,
 }
 
+impl Default for Thresholds {
+    fn default() -> Self {
+        Thresholds { five_hour_max: 0.75, weekly_floor: 0.20, weekly_ahead_max: 0.10 }
+    }
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[ts(export)]
 pub struct LoopCaps {
@@ -77,7 +83,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             caps: Caps { overall: 4, per_session: 2 },
-            thresholds: Thresholds { five_hour_max: 0.75, weekly_floor: 0.20, weekly_ahead_max: 0.10 },
+            thresholds: Thresholds::default(),
             loops: LoopCaps { review_rounds: 2, ci: 3, conflict: 3, pr_feedback: 3 },
             probe_after_ms: 600_000,
             output_retention_days: 14,

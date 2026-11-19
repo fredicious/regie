@@ -7,6 +7,8 @@ pub mod findings;
 pub mod flow;
 pub mod github;
 pub mod ids;
+pub mod ports;
+pub mod scheduler;
 pub mod settings;
 pub mod state;
 pub mod usage;
@@ -20,7 +22,9 @@ pub use github::{Checks, MergeState, PrComment, PrLifecycle, PrState, ReviewDeci
 pub use ids::{EventId, Millis, RunId, SessionId, TaskId};
 pub use settings::{Caps, Effort, Level, LoopCaps, ModelChoice, Provider, Settings, Thresholds};
 pub use state::{LoopCounts, ReviewRecord, Run, Session, State, Task, Worktree};
-pub use usage::{Reading, Window};
+pub use ports::allocate_port_base;
+pub use scheduler::{pick, Candidate, Capacity, QueuedReason};
+pub use usage::{needs_probe, openness, week_elapsed, Openness, Reading, Window, WindowKind};
 
 #[cfg(test)]
 mod tests {
