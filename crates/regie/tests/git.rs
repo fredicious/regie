@@ -81,3 +81,33 @@ async fn github_remote_parsing() {
         assert_eq!(github_remote(&r.work).await.as_deref(), want, "{url}");
     }
 }
+
+#[tokio::test]
+async fn rejects_copy_paths_outside_the_repo() {
+    let r = TempRepo::new();
+    let locks = RepoLocks::default();
+    let abs = r.work.join(".env").to_str().unwrap().to_string();
+    let outside = r.root.parent().unwrap().join("x");
+    std::fs::write(&outside, "keep\n").unwrap();
+    for bad in ["../x".to_string(), "../../x".to_string(), abs] {
+        let res = create_worktree(&locks, &r.work, &r.root, TaskId(3), "bad", &[bad.clone()], 41000).await;
+        assert!(res.is_err(), "{bad}");
+        assert!(!git(&r.work, &["branch", "--list"]).contains("regie/"), "no git call before validation");
+    }
+    assert_eq!(std::fs::read_to_string(r.work.join(".env")).unwrap(), "SECRET=1\n");
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep\n");
+    assert!(!r.root.join("x").exists());
+}
+
+#[tokio::test]
+async fn task_branch_has_no_upstream() {
+    let r = TempRepo::new();
+    let locks = RepoLocks::default();
+    let wt = create_worktree(&locks, &r.work, &r.root, TaskId(4), "solo", &[], 41000).await.unwrap();
+    let out = std::process::Command::new("git")
+        .current_dir(&r.work)
+        .args(["rev-parse", "--abbrev-ref", &format!("{}@{{upstream}}", wt.branch)])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+}

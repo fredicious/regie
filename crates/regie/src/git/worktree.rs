@@ -1,7 +1,7 @@
 use super::locks::RepoLocks;
 use anyhow::{bail, Context};
 use regie_core::{TaskId, Worktree};
-use std::path::Path;
+use std::path::{Component, Path};
 use tokio::process::Command;
 
 /// Lowercase ASCII, other characters to `-`, runs collapsed, trimmed, at most 40 characters.
@@ -84,6 +84,14 @@ pub async fn create_worktree(
     copy_files: &[String],
     port_base: u16,
 ) -> anyhow::Result<Worktree> {
+    for f in copy_files {
+        let p = Path::new(f);
+        if p.is_absolute()
+            || p.components().any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)))
+        {
+            bail!("copy file {f:?} must be a relative path inside the repo");
+        }
+    }
     let _guard = locks.lock(repo).await;
     let branch = branch_name(task, title);
     let path = root.join(format!("t{}-{}", task.0, slug(title)));
@@ -91,7 +99,7 @@ pub async fn create_worktree(
     let base = format!("origin/{}", default_branch(repo).await?);
     tokio::fs::create_dir_all(root).await?;
     let path_str = path.to_str().context("worktree path is not UTF-8")?;
-    git(repo, &["worktree", "add", "-b", &branch, path_str, &base]).await?;
+    git(repo, &["worktree", "add", "--no-track", "-b", &branch, path_str, &base]).await?;
     for f in copy_files {
         let src = repo.join(f);
         if tokio::fs::metadata(&src).await.map(|m| m.is_file()).unwrap_or(false) {
