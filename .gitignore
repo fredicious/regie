@@ -3,3 +3,6 @@ __pycache__/
 .venv/
 .pytest_cache/
 .superpowers/
+target/
+web/node_modules/
+web/dist/
