@@ -55,6 +55,8 @@ pub enum Sub {
     Pause(Scope),
     /// Resume one session, or everything with --all.
     Resume(Scope),
+    /// Stop the running Régie: its agents are recorded as interrupted and resume on the next start.
+    Stop,
     /// Print one line per task card.
     Board {
         #[arg(long, value_parser = parse_session)]
@@ -192,7 +194,7 @@ impl Cli {
             return Ok(None);
         };
         let cmd = match sub {
-            Sub::Serve { .. } | Sub::Board { .. } => return Ok(None),
+            Sub::Serve { .. } | Sub::Board { .. } | Sub::Stop => return Ok(None),
             Sub::Session {
                 action: SessionSub::New { name, repos },
             } => Command::CreateSession {
@@ -278,6 +280,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     match &cli.command {
         None => open_dashboard(&data).await,
         Some(Sub::Serve { port, no_open }) => serve_command(data, *port, *no_open).await,
+        Some(Sub::Stop) => {
+            let stopped = stop_server(&data, STOP_WAIT).await?;
+            println!("{}", if stopped { "stopped" } else { "not running" });
+            Ok(())
+        }
         Some(Sub::Board { session }) => {
             let client = Client::from_data_dir(&data)?;
             let sessions: Vec<SessionId> = match session {
@@ -380,6 +387,44 @@ fn open_browser(url: &str) {
     if let Err(e) = std::process::Command::new("open").arg(url).status() {
         eprintln!("regie: could not open the browser: {e}; open {url}");
     }
+}
+
+/// How long `regie stop` waits for the server to finish stopping its agents.
+const STOP_WAIT: Duration = Duration::from_secs(15);
+
+/// Stops the server of this data dir. `Ok(false)` when none is running. Only a
+/// server that answers health with the token in `server.json` is signalled, so a
+/// stale file never makes this kill an unrelated process.
+pub async fn stop_server(data: &DataDir, wait: Duration) -> anyhow::Result<bool> {
+    let Some(client) = live_client(data).await else {
+        return Ok(false);
+    };
+    let path = data.server_json();
+    let info: crate::server::ServerInfo = serde_json::from_str(&std::fs::read_to_string(&path)?)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let pid = i32::try_from(info.pid)
+        .ok()
+        .filter(|p| *p > 0)
+        .context("server.json has no usable pid")?;
+    drop(client);
+    // SAFETY: plain kill(2) on a pid whose server just answered health.
+    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
+        anyhow::bail!(
+            "could not signal Régie (pid {pid}): {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    let deadline = std::time::Instant::now() + wait;
+    while path.exists() {
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "Régie (pid {pid}) did not stop within {} seconds",
+                wait.as_secs()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(true)
 }
 
 /// A client for a server that answers health, if one does.

@@ -16,6 +16,8 @@ Régie is a local lead-agent orchestrator: one lead agent plans and delegates to
 - `make web`: `pnpm -C web install --frozen-lockfile && pnpm -C web build` (writes `web/dist`)
 - `make build`: `make web`, then `cargo build --release`. The release binary embeds `web/dist`; run `./target/release/regie serve`.
 - `make dev`: prints the dev loop (below)
+- `regie stop`: stops the running Régie (SIGTERM to the pid in `server.json`, only if the server answers `/api/health`); agents are recorded as interrupted and resume on the next start
+- `regie session delete <S2|2>`: forget a session whose tasks are all merged or cancelled
 
 ## Dev loop
 

@@ -401,3 +401,45 @@ async fn a_second_serve_on_a_live_data_dir_fails_and_touches_nothing() {
     assert_eq!(h.events().len(), events_before);
     assert!(h.state().active_run(t).is_some());
 }
+
+#[tokio::test]
+async fn stop_ends_a_running_server_and_says_when_none_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = regie::paths::DataDir {
+        root: tmp.path().join(".regie"),
+    };
+    let wait = Duration::from_secs(15);
+    // nothing running, and a stale server.json that nobody answers
+    assert!(!regie::cli::stop_server(&data, wait).await.unwrap());
+    data.ensure().unwrap();
+    std::fs::write(
+        data.server_json(),
+        format!(r#"{{"port":1,"token":"x","pid":{}}}"#, std::process::id()),
+    )
+    .unwrap();
+    assert!(!regie::cli::stop_server(&data, wait).await.unwrap());
+    std::fs::remove_file(data.server_json()).unwrap();
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_regie"))
+        .args(["serve", "--no-open", "--port", "0", "--data-dir"])
+        .arg(&data.root)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    regie::cli::wait_for_server(&data, &mut child, Duration::from_secs(20))
+        .await
+        .unwrap();
+    assert!(regie::cli::stop_server(&data, wait).await.unwrap());
+    assert!(!data.server_json().exists());
+    let status = tokio::task::spawn_blocking(move || child.wait().unwrap())
+        .await
+        .unwrap();
+    assert!(status.success(), "{status:?}");
+    assert!(!regie::cli::stop_server(&data, wait).await.unwrap());
+}
+
+#[test]
+fn stop_sends_no_command() {
+    assert_eq!(parse(&["stop"]).to_command().unwrap(), None);
+}
