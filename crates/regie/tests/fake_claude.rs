@@ -79,7 +79,10 @@ async fn fake_hangs_until_interrupt_and_records_controls() {
     let events = drain(&mut h).await;
     assert_eq!(
         events,
-        [AgentEvent::Finished { final_message: None, outcome: RunOutcome::Paused, limit_resets_at: None }]
+        [
+            AgentEvent::Output("message received: also this".into()),
+            AgentEvent::Finished { final_message: None, outcome: RunOutcome::Paused, limit_resets_at: None }
+        ]
     );
     assert_eq!(
         fake.controls(),

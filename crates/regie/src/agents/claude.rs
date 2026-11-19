@@ -23,6 +23,9 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 const DRAIN_AFTER_EXIT: Duration = Duration::from_secs(2);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// The output line a run reports when a message could not reach the agent.
+pub const MESSAGE_NOT_DELIVERED: &str = "message not delivered: the run has already ended";
+
 /// Runs `bin` (normally `claude` from `PATH`) and appends every stdout line to
 /// `runs_dir/<run id>.jsonl`.
 #[derive(Clone, Debug)]
@@ -205,8 +208,7 @@ async fn drive(
                 None => control_open = false,
                 Some(AgentControl::Message(text)) => {
                     if !send_line(&mut stdin, &user_line(&text)).await {
-                        let note = "message not delivered: the run has already ended".to_string();
-                        let _ = events.send(AgentEvent::Output(note)).await;
+                        let _ = events.send(AgentEvent::Output(MESSAGE_NOT_DELIVERED.to_string())).await;
                     }
                 }
                 Some(AgentControl::Interrupt) => {

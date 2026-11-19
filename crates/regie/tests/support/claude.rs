@@ -3,7 +3,8 @@
 //! Each run asks the script what to do, then performs the actions in order and
 //! finishes with the script's final message. `HangUntilControl` waits for a
 //! control message: `Interrupt` ends the run `Paused`, `Stop` ends it
-//! `Stopped`, and `Message` is recorded while the run keeps waiting.
+//! `Stopped`, and `Message` is recorded and answered with an output line while
+//! the run keeps waiting.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -133,7 +134,10 @@ impl AgentRunner for FakeClaude {
                     }
                     FakeAction::HangUntilControl => loop {
                         match pass_rx.recv().await {
-                            Some(AgentControl::Message(_)) => continue,
+                            // Claude answers a message it got mid-run; so does the fake.
+                            Some(AgentControl::Message(text)) => {
+                                send(AgentEvent::Output(format!("message received: {text}"))).await;
+                            }
                             Some(AgentControl::Interrupt) => {
                                 end = RunOutcome::Paused;
                                 break 'actions;

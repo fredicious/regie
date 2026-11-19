@@ -72,6 +72,13 @@ impl Store {
         let rows = stmt.query_map([after.0], read_row)?;
         rows.map(|r| r?).collect()
     }
+
+    /// The task's events, in order.
+    pub fn load_task(&self, task: TaskId) -> anyhow::Result<Vec<Event>> {
+        let mut stmt = self.conn.prepare(&format!("SELECT {COLUMNS} FROM events WHERE task = ?1 ORDER BY id"))?;
+        let rows = stmt.query_map([task.0], read_row)?;
+        rows.map(|r| r?).collect()
+    }
 }
 
 fn read_row(row: &Row) -> rusqlite::Result<anyhow::Result<Event>> {
@@ -158,6 +165,17 @@ mod tests {
         let newer = store.load_after(EventId(2)).unwrap();
         assert_eq!(newer.iter().map(|e| e.id).collect::<Vec<_>>(), vec![EventId(3), EventId(4)]);
         assert!(store.load_after(EventId(4)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn load_task_returns_only_that_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("regie.db")).unwrap();
+        for (i, t) in [Some(1), None, Some(2), Some(1)].into_iter().enumerate() {
+            store.append(ev(EventKind::PrMissing, None, t.map(TaskId), i as i64)).unwrap();
+        }
+        let ids: Vec<EventId> = store.load_task(TaskId(1)).unwrap().iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec![EventId(1), EventId(4)]);
     }
 
     #[test]
