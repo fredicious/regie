@@ -67,7 +67,16 @@ export async function refreshDetail() {
 export async function refreshSessions() {
   try {
     sessions.value = await getSessions();
-    if (currentSession.value === null && sessions.value.length > 0) selectSession(sessions.value[0].id);
+    const current = currentSession.value;
+    if (current === null || !sessions.value.some((x) => x.id === current)) {
+      // First load, or the selected session was deleted: the first one left, or none.
+      if (sessions.value.length > 0) selectSession(sessions.value[0].id);
+      else if (current !== null) {
+        currentSession.value = null;
+        board.value = null;
+        selectTask(null);
+      }
+    }
   } catch {
     /* unauthorized is shown by the client */
   }

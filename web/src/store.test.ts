@@ -1,7 +1,12 @@
 import type { BoardView } from "./api/gen/BoardView";
 
 const getBoard = vi.fn();
-vi.mock("./api/client", () => ({ getBoard: (s: number) => getBoard(s), getSessions: vi.fn(), getTask: vi.fn() }));
+const getSessions = vi.fn();
+vi.mock("./api/client", () => ({
+  getBoard: (s: number) => getBoard(s),
+  getSessions: () => getSessions(),
+  getTask: vi.fn(),
+}));
 
 let store: typeof import("./store");
 
@@ -19,6 +24,7 @@ beforeEach(async () => {
   store = await import("./store");
   vi.useFakeTimers();
   getBoard.mockReset();
+  getSessions.mockReset();
   store.board.value = null;
   store.currentSession.value = 1;
 });
@@ -41,5 +47,25 @@ test("a board that arrives after a session switch is dropped", async () => {
   store.currentSession.value = 2;
   resolve(view(1));
   await vi.advanceTimersByTimeAsync(0);
+  expect(store.board.value).toBeNull();
+});
+
+const session = (id: number) => ({ id, name: `S${id}`, repos: [], paused: false });
+
+test("when the selected session is deleted the first remaining one is shown", async () => {
+  getBoard.mockResolvedValue(view(2));
+  getSessions.mockResolvedValue([session(2), session(3)]);
+  store.board.value = view(1);
+  await store.refreshSessions();
+  expect(store.currentSession.value).toBe(2);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(store.board.value).toEqual(view(2));
+});
+
+test("when the last session is deleted there is no board and no selection", async () => {
+  getSessions.mockResolvedValue([]);
+  store.board.value = view(1);
+  await store.refreshSessions();
+  expect(store.currentSession.value).toBeNull();
   expect(store.board.value).toBeNull();
 });

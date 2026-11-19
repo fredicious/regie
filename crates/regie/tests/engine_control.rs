@@ -692,3 +692,55 @@ async fn recover_leaves_a_reused_pid_alone() {
     a.kill().await.unwrap();
     b.kill().await.unwrap();
 }
+
+#[tokio::test]
+async fn deleted_session_is_gone_but_the_log_keeps_it() {
+    let h = hanging_builder().await;
+    let t = h.create_session_and_task("Soon cancelled").await;
+    let s = h.state().tasks[&t].session;
+    h.wait_for("builder running", SECS, |h| {
+        h.state().active_run(t).is_some()
+    })
+    .await;
+    let err = h
+        .engine
+        .command(Command::DeleteSession { session: s }, Actor::Frederic)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!("session {s} still has unfinished tasks ({t}); cancel them first")
+    );
+    assert!(h.engine.board(s).is_some());
+
+    h.command(Command::CancelTask {
+        task: t,
+        close_pr: false,
+    })
+    .await;
+    h.wait_for("cleaned up", SECS, |h| h.state().tasks[&t].cleaned)
+        .await;
+    h.command(Command::DeleteSession { session: s }).await;
+    assert!(h.engine.board(s).is_none());
+    assert!(h.engine.task(t).unwrap().is_none());
+    assert!(h.state().sessions.is_empty() && h.state().tasks.is_empty());
+    // the log keeps everything
+    let events = h.events();
+    assert!(events
+        .iter()
+        .any(|e| matches!(e.kind, EventKind::TaskCreated { .. })));
+    assert!(events
+        .iter()
+        .any(|e| e.kind == EventKind::SessionDeleted && e.session == Some(s)));
+    // and a new session does not take the old id
+    let regie_core::CommandResult::Session(next) = h
+        .command(Command::CreateSession {
+            name: "again".into(),
+            repos: vec![h.repo_path()],
+        })
+        .await
+    else {
+        panic!("no session id")
+    };
+    assert_ne!(next, s);
+}

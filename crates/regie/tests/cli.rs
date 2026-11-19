@@ -184,6 +184,19 @@ fn pause_and_resume_scopes() {
 }
 
 #[test]
+fn session_delete_takes_s2_or_2() {
+    for arg in ["S2", "2"] {
+        assert_eq!(
+            parse(&["session", "delete", arg]).to_command().unwrap(),
+            Some(Command::DeleteSession {
+                session: SessionId(2)
+            })
+        );
+    }
+    assert!(Cli::try_parse_from(["regie", "session", "delete", "x"]).is_err());
+}
+
+#[test]
 fn session_new_and_project_set_canonicalise_repos() {
     let repo = tempfile::tempdir().unwrap();
     let real = std::fs::canonicalize(repo.path())

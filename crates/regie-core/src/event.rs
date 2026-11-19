@@ -192,6 +192,8 @@ pub enum EventKind {
     WorktreeCleaned,
     SessionPaused,
     SessionResumed,
+    /// The session and its tasks leave the state; the log keeps them.
+    SessionDeleted,
     AllPaused,
     AllResumed,
     UsageReading {

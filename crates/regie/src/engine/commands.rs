@@ -76,6 +76,9 @@ impl Engine {
             Command::RetryTask { task } => self.retry(task, actor),
             Command::PauseSession { session } => self.pause(Some(session), actor),
             Command::ResumeSession { session } => self.resume(Some(session), actor),
+            Command::DeleteSession { session } => self
+                .emit(Some(session), None, actor, EventKind::SessionDeleted)
+                .map(|_| CommandResult::Ok),
             Command::PauseAll => self.pause(None, actor),
             Command::ResumeAll => self.resume(None, actor),
         };

@@ -70,6 +70,11 @@ pub enum SessionSub {
         #[arg(required = true)]
         repos: Vec<String>,
     },
+    /// Forget a session whose tasks are all merged or cancelled.
+    Delete {
+        #[arg(value_parser = parse_session)]
+        session: SessionId,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -197,6 +202,9 @@ impl Cli {
                     .map(|r| canonical(r))
                     .collect::<anyhow::Result<_>>()?,
             },
+            Sub::Session {
+                action: SessionSub::Delete { session },
+            } => Command::DeleteSession { session: *session },
             Sub::Project {
                 action: ProjectSub::Set { repo, file },
             } => {
@@ -295,7 +303,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             match client.command(&cmd).await? {
                 CommandResult::Session(s) => println!("session {}", s.0),
                 CommandResult::Task(t) => println!("{t}"),
-                CommandResult::Ok => {}
+                CommandResult::Ok => {
+                    if let Command::DeleteSession { session } = cmd {
+                        println!("deleted session {}", session.0);
+                    }
+                }
             }
             Ok(())
         }

@@ -88,6 +88,7 @@ export function eventText(e: Event): string {
     case "WorktreeCleaned": return "Worktree cleaned";
     case "SessionPaused": return "Studio on standby";
     case "SessionResumed": return "Studio resumed";
+    case "SessionDeleted": return "Studio removed";
     case "AllPaused": return "Faded to black";
     case "AllResumed": return "Faded in";
     case "LimitHit": return `${k.provider} limit hit`;

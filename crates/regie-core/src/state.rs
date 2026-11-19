@@ -134,6 +134,29 @@ pub struct State {
     pub paused_all: bool,
     pub readings: BTreeMap<Provider, Reading>,
     pub blocked_until: BTreeMap<Provider, Millis>,
+    /// The highest ids ever seen in the log, so a deleted session's, task's or
+    /// run's id is never handed out again.
+    #[serde(default)]
+    #[ts(skip)]
+    last_ids: LastIds,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct LastIds {
+    session: i64,
+    task: i64,
+    run: i64,
+}
+
+impl Task {
+    /// Merged or cancelled.
+    pub fn is_finished(&self) -> bool {
+        self.cancelled.is_some()
+            || self
+                .pr
+                .as_ref()
+                .is_some_and(|pr| pr.lifecycle == crate::github::PrLifecycle::Merged)
+    }
 }
 
 impl State {
@@ -146,7 +169,24 @@ impl State {
     }
 
     pub fn apply(&mut self, e: &Event) {
+        if let Some(s) = e.session {
+            self.last_ids.session = self.last_ids.session.max(s.0);
+        }
+        if let Some(t) = e.task {
+            self.last_ids.task = self.last_ids.task.max(t.0);
+        }
+        if let EventKind::RunStarted { run, .. } = &e.kind {
+            self.last_ids.run = self.last_ids.run.max(run.0);
+        }
         match &e.kind {
+            EventKind::SessionDeleted => {
+                if let Some(id) = e.session {
+                    self.sessions.remove(&id);
+                    self.tasks.retain(|_, t| t.session != id);
+                    let tasks = &self.tasks;
+                    self.runs.retain(|_, r| tasks.contains_key(&r.task));
+                }
+            }
             EventKind::SessionCreated { name, repos } => {
                 if let Some(id) = e.session {
                     let session = Session {
@@ -318,15 +358,15 @@ impl State {
     }
 
     pub fn next_session_id(&self) -> SessionId {
-        SessionId(self.sessions.keys().next_back().map_or(1, |k| k.0 + 1))
+        SessionId(self.last_ids.session + 1)
     }
 
     pub fn next_task_id(&self) -> TaskId {
-        TaskId(self.tasks.keys().next_back().map_or(1, |k| k.0 + 1))
+        TaskId(self.last_ids.task + 1)
     }
 
     pub fn next_run_id(&self) -> RunId {
-        RunId(self.runs.keys().next_back().map_or(1, |k| k.0 + 1))
+        RunId(self.last_ids.run + 1)
     }
 
     /// The task's run that has started and not finished.
@@ -543,6 +583,7 @@ mod tests {
             | EventKind::ProjectFactsSet { .. }
             | EventKind::SessionPaused
             | EventKind::SessionResumed
+            | EventKind::SessionDeleted
             | EventKind::AllPaused
             | EventKind::AllResumed
             | EventKind::UsageReading { .. }
@@ -765,6 +806,73 @@ mod tests {
         assert_eq!(replayed.blocked_until[&Provider::Claude], Millis(77));
         assert!(replayed.readings.contains_key(&Provider::Claude));
         assert!(replayed.project_facts.contains_key("/r"));
+    }
+
+    #[test]
+    fn deleting_a_session_drops_it_from_state_but_replay_agrees() {
+        let mut events = script();
+        let before = State::replay(&events);
+        assert!(!before.runs.is_empty());
+        let n = events.len() as i64;
+        events.push(Event {
+            id: EventId(n + 1),
+            at: Millis(5000),
+            session: Some(S),
+            task: None,
+            actor: Actor::Regie,
+            kind: EventKind::SessionDeleted,
+        });
+        let mut inc = State::default();
+        for e in &events {
+            inc.apply(e);
+        }
+        let replayed = State::replay(&events);
+        assert_eq!(inc, replayed);
+        assert!(replayed.sessions.is_empty());
+        assert!(replayed.tasks.is_empty());
+        assert!(replayed.runs.is_empty());
+        // ids of what was deleted are not reused
+        assert_eq!(
+            (
+                replayed.next_session_id(),
+                replayed.next_task_id(),
+                replayed.next_run_id()
+            ),
+            (
+                before.next_session_id(),
+                before.next_task_id(),
+                before.next_run_id()
+            )
+        );
+    }
+
+    #[test]
+    fn deleting_one_session_keeps_the_others() {
+        let mut events = script();
+        let other = |id: i64, session: i64, task: Option<i64>, kind| Event {
+            id: EventId(id),
+            at: Millis(6000 + id),
+            session: Some(SessionId(session)),
+            task: task.map(TaskId),
+            actor: Actor::Regie,
+            kind,
+        };
+        events.push(other(
+            100,
+            2,
+            None,
+            EventKind::SessionCreated {
+                name: "other".into(),
+                repos: vec![],
+            },
+        ));
+        events.push(other(101, 1, None, EventKind::SessionDeleted));
+        let s = State::replay(&events);
+        assert_eq!(
+            s.sessions.keys().copied().collect::<Vec<_>>(),
+            [SessionId(2)]
+        );
+        assert!(s.tasks.is_empty());
     }
 
     #[test]

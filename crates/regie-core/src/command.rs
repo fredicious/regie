@@ -57,6 +57,10 @@ pub enum Command {
     ResumeSession {
         session: SessionId,
     },
+    /// Forget a session whose tasks are all merged or cancelled.
+    DeleteSession {
+        session: SessionId,
+    },
     PauseAll,
     ResumeAll,
 }
@@ -90,6 +94,11 @@ pub enum CommandError {
     LevelNotHigher { current: Level, requested: Level },
     #[error("a session needs at least one repo")]
     NoRepos,
+    #[error("session {session} still has unfinished tasks ({}); cancel them first", unfinished.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "))]
+    SessionHasUnfinishedTasks {
+        session: SessionId,
+        unfinished: Vec<TaskId>,
+    },
 }
 
 /// Checks a command against the state before it is turned into events.
@@ -171,6 +180,21 @@ pub fn validate(cmd: &Command, state: &State) -> Result<(), CommandError> {
         }
         Command::PauseSession { session: id } | Command::ResumeSession { session: id } => {
             session(id)?;
+        }
+        Command::DeleteSession { session: id } => {
+            session(id)?;
+            let unfinished: Vec<TaskId> = state
+                .tasks
+                .values()
+                .filter(|t| t.session == *id && !t.is_finished())
+                .map(|t| t.id)
+                .collect();
+            if !unfinished.is_empty() {
+                return Err(CommandError::SessionHasUnfinishedTasks {
+                    session: *id,
+                    unfinished,
+                });
+            }
         }
         Command::SetProjectFacts { .. } | Command::PauseAll | Command::ResumeAll => {}
     }
@@ -436,5 +460,57 @@ mod tests {
             Err(CommandError::NoRepos)
         );
         assert_eq!(validate(&Command::PauseAll, &s), Ok(()));
+    }
+
+    #[test]
+    fn delete_session_needs_every_task_finished() {
+        let mut s = state(true);
+        let del = |n| Command::DeleteSession {
+            session: SessionId(n),
+        };
+        assert_eq!(
+            validate(&del(9), &s),
+            Err(CommandError::SessionNotFound(SessionId(9)))
+        );
+        s.tasks.get_mut(&TaskId(2)).unwrap().cancelled = Some(false);
+        // S1's T1 is still going; S2's only task is cancelled.
+        let err = validate(&del(1), &s).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "session S1 still has unfinished tasks (T1); cancel them first"
+        );
+        assert_eq!(validate(&del(2), &s), Ok(()));
+        s.tasks.get_mut(&TaskId(1)).unwrap().pr = Some(crate::github::PrState {
+            number: 1,
+            url: String::new(),
+            lifecycle: PrLifecycle::Merged,
+            checks: crate::github::Checks::Success,
+            conflicting: false,
+            merge_state: crate::github::MergeState::Unknown,
+            review_decision: None,
+            head_sha: String::new(),
+        });
+        assert_eq!(validate(&del(1), &s), Ok(()));
+        // An empty session can go too.
+        s.tasks.clear();
+        assert_eq!(validate(&del(1), &s), Ok(()));
+    }
+
+    #[test]
+    fn unfinished_tasks_are_all_named() {
+        let mut s = state(true);
+        s.tasks.insert(TaskId(3), s.tasks[&TaskId(1)].clone());
+        s.tasks.get_mut(&TaskId(3)).unwrap().id = TaskId(3);
+        let err = validate(
+            &Command::DeleteSession {
+                session: SessionId(1),
+            },
+            &s,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "session S1 still has unfinished tasks (T1, T3); cancel them first"
+        );
     }
 }
