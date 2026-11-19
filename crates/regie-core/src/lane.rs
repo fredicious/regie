@@ -68,8 +68,8 @@ fn place(
         Some(Role::Reviewer | Role::Verify) => return Lane::InReview,
         None => {}
     }
-    // 3. No builder run was ever started.
-    if task.worktree.is_none() {
+    // 3. No builder run was ever started (unless the task waits for Frédéric: R10).
+    if task.worktree.is_none() && !matches!(next, NextStep::AwaitHuman(_)) {
         flags.extend(waiting);
         return Lane::Queued;
     }
@@ -95,7 +95,11 @@ fn place(
         }
         _ => {}
     }
-    // 6. An open PR.
+    // 6. The PR was asked for and is not seen yet.
+    if task.open_pr_requested && pr.is_none() {
+        return Lane::Ci;
+    }
+    // 7. An open PR.
     if let Some(pr) = pr.filter(|pr| pr.lifecycle == PrLifecycle::Open) {
         let green = pr.checks == Checks::Success;
         return if green && !pr.conflicting && pr.merge_state == MergeState::Clean {
@@ -107,7 +111,7 @@ fn place(
             Lane::Ci
         };
     }
-    // 7. Otherwise.
+    // 8. Otherwise.
     Lane::Queued
 }
 
@@ -223,6 +227,26 @@ mod tests {
         for (name, t, role, next, paused, waiting, want_lane, want_flags) in rows {
             assert_eq!(lane(&t, role, &next, paused, waiting), (want_lane, want_flags), "{name}");
         }
+    }
+
+    #[test]
+    fn no_worktree_does_not_hide_a_human_wait() {
+        // R10: worktree creation failed, so the task never got a worktree.
+        let next = NextStep::AwaitHuman(HumanReason::SetupFailed);
+        assert_eq!(
+            lane(&task(), None, &next, false, None),
+            (Lane::Working, vec![Flag::NeedsMe(HumanReason::SetupFailed)])
+        );
+    }
+
+    #[test]
+    fn requested_pr_not_yet_seen_is_ci() {
+        let mut t = with_worktree(task());
+        t.open_pr_requested = true;
+        assert_eq!(lane(&t, None, &NextStep::Nothing, false, None), (Lane::Ci, vec![]));
+        // a missing PR waits for Frédéric instead
+        let next = NextStep::AwaitHuman(HumanReason::PrNotFound);
+        assert_eq!(lane(&t, None, &next, false, None).0, Lane::Working);
     }
 
     #[test]

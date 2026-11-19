@@ -286,7 +286,7 @@ impl State {
 
     /// A run's purpose, looking through `Resume` runs to the run they continue
     /// (the latest earlier non-resume run of the same task and role).
-    fn effective_purpose(&self, run: RunId) -> Option<Purpose> {
+    pub fn effective_purpose(&self, run: RunId) -> Option<Purpose> {
         let r = self.runs.get(&run)?;
         if r.purpose != Purpose::Resume {
             return Some(r.purpose);

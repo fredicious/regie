@@ -7,7 +7,7 @@ use crate::event::{LoopKind, Purpose, Role, RunOutcome};
 use crate::findings::{BuilderStatus, Decision, Finding, ReviewOutcome, VerifyOutcome, VerifyStatus};
 use crate::github::{Checks, PrLifecycle, PrState, ReviewDecision};
 use crate::settings::Settings;
-use crate::state::{State, Task};
+use crate::state::{ReviewRecord, State, Task};
 
 /// Why a task waits for Frédéric.
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,8 +83,18 @@ pub fn next_step(task: &Task, state: &State, settings: &Settings) -> NextStep {
     match task.last_run_outcome {
         Some(RunOutcome::Crashed) => return NextStep::AwaitHuman(HumanReason::RunCrashed),
         Some(RunOutcome::Interrupted | RunOutcome::Paused | RunOutcome::LimitHit) => {
-            let role = state.last_run(task.id).map_or(Role::Builder, |r| r.role);
-            return start(role, Purpose::Resume, PromptInput::Resume { note: RESUME_NOTE.into() });
+            // R11: reviewer and verify runs are always fresh agents, so they restart.
+            return match state.last_run(task.id).map_or(Role::Builder, |r| r.role) {
+                Role::Builder => start(Role::Builder, Purpose::Resume, PromptInput::Resume { note: RESUME_NOTE.into() }),
+                Role::Reviewer => {
+                    let round = task.reviews.last().map_or(1, |r| r.round + 1);
+                    start(Role::Reviewer, Purpose::Review, PromptInput::Review { round })
+                }
+                Role::Verify => {
+                    let findings = task.reviews.last().map(to_fix).unwrap_or_default();
+                    start(Role::Verify, Purpose::Verify, PromptInput::Verify { findings })
+                }
+            };
         }
         _ => {}
     }
@@ -168,11 +178,7 @@ fn review_step(task: &Task, rounds: u32) -> Option<NextStep> {
     if !rulings.iter().any(|r| r.decision == Decision::Fix) {
         return None;
     }
-    let to_fix: Vec<Finding> = findings
-        .iter()
-        .filter(|f| rulings.iter().any(|r| r.finding == f.id && r.decision == Decision::Fix))
-        .cloned()
-        .collect();
+    let to_fix = to_fix(latest);
     if !latest.fix_done {
         return Some(start(Role::Builder, Purpose::Fix, PromptInput::Fix { findings: to_fix }));
     }
@@ -181,6 +187,18 @@ fn review_step(task: &Task, rounds: u32) -> Option<NextStep> {
         Some(v) if verified(v, &to_fix) => None,
         Some(_) => Some(NextStep::AwaitHuman(HumanReason::VerifyFailed)),
     }
+}
+
+/// The round's findings ruled `Fix`.
+fn to_fix(review: &ReviewRecord) -> Vec<Finding> {
+    let (ReviewOutcome::Findings(findings), Some(rulings)) = (&review.outcome, &review.rulings) else {
+        return Vec::new();
+    };
+    findings
+        .iter()
+        .filter(|f| rulings.iter().any(|r| r.finding == f.id && r.decision == Decision::Fix))
+        .cloned()
+        .collect()
 }
 
 /// R8: every finding sent to verify has a result, and every result is `Fixed`.
@@ -642,12 +660,43 @@ mod tests {
             };
             let b = TaskB::new().run(Role::Builder, Purpose::Initial, Some(outcome));
             assert_eq!(step(b), resume(Role::Builder), "{outcome:?}");
-            let b = TaskB::new().built().run(Role::Reviewer, Purpose::Review, Some(outcome));
-            assert_eq!(step(b), resume(Role::Reviewer), "{outcome:?}");
         }
         assert_eq!(
             RESUME_NOTE,
             "You were interrupted. Continue where you left off; check the state of the worktree first."
         );
+    }
+
+    #[test]
+    fn unfinished_reviewer_restarts_fresh_for_the_same_round() {
+        for outcome in [RunOutcome::Interrupted, RunOutcome::Paused, RunOutcome::LimitHit] {
+            // round 1: nothing reported yet
+            let b = TaskB::new().built().run(Role::Reviewer, Purpose::Review, Some(outcome));
+            assert_eq!(step(b), review_round(1), "{outcome:?}");
+            // round 2: round 1 was reported, ruled and fixed
+            let b = TaskB::new()
+                .built()
+                .review(1, vec![finding(1, true)])
+                .ruled(&[(1, Decision::Fix)])
+                .fix_done()
+                .run(Role::Reviewer, Purpose::Review, Some(outcome));
+            assert_eq!(step(b), review_round(2), "{outcome:?}");
+        }
+    }
+
+    #[test]
+    fn unfinished_verify_restarts_fresh_with_the_findings() {
+        for outcome in [RunOutcome::Interrupted, RunOutcome::Paused, RunOutcome::LimitHit] {
+            let b = TaskB::new().two_rounds_fixed().run(Role::Verify, Purpose::Verify, Some(outcome));
+            assert_eq!(
+                step(b),
+                NextStep::StartRun {
+                    role: Role::Verify,
+                    purpose: Purpose::Verify,
+                    input: PromptInput::Verify { findings: vec![finding(1, true)] },
+                },
+                "{outcome:?}"
+            );
+        }
     }
 }
