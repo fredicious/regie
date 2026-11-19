@@ -1,0 +1,197 @@
+<style>
+  .rg { font-size: 12px; line-height: 1.35; color: var(--text-primary); margin-bottom: 22px; }
+  .rg * { box-sizing: border-box; }
+  .rg .top { display:flex; align-items:center; gap:12px; padding:8px 12px; background:#16161a; color:#e8e8ea; border-radius:8px 8px 0 0; flex-wrap:wrap; }
+  .rg .logo { font-weight:800; letter-spacing:.12em; }
+  .rg .studio { border:1px solid #444; border-radius:6px; padding:3px 8px; }
+  .rg .views { display:flex; border:1px solid #555; border-radius:6px; overflow:hidden; }
+  .rg .views span { padding:3px 10px; color:#bbb; }
+  .rg .views span.on { background:#e8e8ea; color:#111; font-weight:700; }
+  .rg .views .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#0a84ff; margin-left:5px; vertical-align:middle; }
+  .rg .vu { display:flex; gap:10px; margin-left:auto; }
+  .rg .meter { width:84px; }
+  .rg .meter .lbl { font-size:10px; color:#aaa; display:flex; justify-content:space-between; }
+  .rg .bar { position:relative; height:8px; background:#2a2a2e; border-radius:2px; overflow:hidden; }
+  .rg .fill { position:absolute; left:0; top:0; bottom:0; background:#2fbf55; }
+  .rg .fill.w { background:linear-gradient(90deg,#2fbf55 0%,#2fbf55 70%,#e0b400 100%); }
+  .rg .red { position:absolute; right:0; top:0; bottom:0; width:25%; background:rgba(255,59,48,.35); }
+  .rg .pace { position:absolute; top:-2px; bottom:-2px; width:2px; background:#fff; }
+  .rg .onair { background:#d92b2b; color:#fff; font-weight:800; letter-spacing:.1em; padding:4px 8px; border-radius:4px; box-shadow:0 0 10px rgba(217,43,43,.7); }
+  .rg .btn { border:1px solid #555; border-radius:6px; padding:3px 8px; background:#222; color:#eee; }
+  .rg .btn.fade { background:#000; border-color:#888; }
+  .rg .body { display:grid; grid-template-columns: 190px 1fr; border:1px solid var(--border); border-top:none; border-radius:0 0 8px 8px; min-height:360px; position:relative; overflow:hidden; }
+  .rg .rail { border-right:1px solid var(--border); padding:8px; background:var(--bg-primary); }
+  .rg .h { font-size:10px; font-weight:700; letter-spacing:.08em; color:var(--text-secondary); text-transform:uppercase; margin:6px 0 4px; }
+  .rg .st { display:flex; justify-content:space-between; padding:4px 6px; border-radius:5px; }
+  .rg .st.cur { background:var(--bg-tertiary); font-weight:600; }
+  .rg .cnt { background:#e0a000; color:#000; border-radius:8px; padding:0 6px; font-weight:700; }
+  .rg .tb { border:1px solid var(--border); border-left:4px solid #e0a000; border-radius:5px; padding:5px 6px; margin-bottom:6px; background:var(--bg-secondary); }
+  .rg .tb.g { border-left-color:#2fbf55; } .rg .tb.n { border-left-color:#8e8e93; }
+  .rg .tb .k { font-size:9px; font-weight:700; letter-spacing:.06em; color:var(--text-secondary); }
+  .rg .mini { display:inline-block; font-size:10px; border:1px solid var(--border); border-radius:4px; padding:0 5px; margin-top:3px; margin-right:3px; }
+  .rg .mini.p { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .rg .call { display:inline-block; width:8px; height:8px; border-radius:50%; background:#e0a000; box-shadow:0 0 6px #e0a000; margin-right:4px; }
+  .rg .center { padding:8px 10px; }
+  .rg .lanes { display:grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap:8px; }
+  .rg .lane .lh { font-size:10px; font-weight:700; color:var(--text-secondary); text-transform:uppercase; border-bottom:1px solid var(--border); padding-bottom:3px; margin-bottom:6px; display:flex; justify-content:space-between; }
+  .rg .mon { background:#111114; color:#e6e6e6; border:2px solid #2a2a2e; border-radius:6px; padding:6px; margin-bottom:7px; position:relative; }
+  .rg .mon.sel { border-color:var(--accent); }
+  .rg .mon .tl { position:absolute; top:6px; right:6px; width:9px; height:9px; border-radius:50%; }
+  .rg .tl.red { background:#ff3b30; box-shadow:0 0 6px #ff3b30; } .rg .tl.green { background:#34c759; box-shadow:0 0 6px #34c759; }
+  .rg .tl.amber { background:#ffb000; box-shadow:0 0 6px #ffb000; } .rg .tl.off { background:#444; }
+  .rg .mon .t { font-weight:600; padding-right:12px; }
+  .rg .mon .m { font-size:10px; color:#9a9aa0; }
+  .rg .mon .out { font-family: ui-monospace, Menlo, monospace; font-size:9.5px; color:#7fd18b; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rg .mon.needs { border-color:#ffb000; }
+  .rg .flag { font-size:9px; background:#ffb000; color:#000; border-radius:3px; padding:0 4px; font-weight:700; }
+  .rg .drawer { position:absolute; top:0; right:0; bottom:0; width:330px; background:var(--bg-secondary); border-left:1px solid var(--border); box-shadow:-8px 0 20px rgba(0,0,0,.18); padding:10px; overflow:hidden; }
+  .rg .drawer .tl2 { display:inline-block; width:9px; height:9px; border-radius:50%; background:#ff3b30; box-shadow:0 0 6px #ff3b30; margin-right:5px; }
+  .rg .kv { display:grid; grid-template-columns: 80px 1fr; gap:2px 8px; font-size:11px; margin:6px 0; }
+  .rg .kv span:nth-child(odd) { color:var(--text-secondary); }
+  .rg .tlx { border-left:2px solid var(--border); margin-left:4px; padding-left:8px; font-size:11px; }
+  .rg .tlx div { margin-bottom:4px; }
+  .rg .tlx b { font-size:9.5px; letter-spacing:.04em; color:var(--text-secondary); }
+  .rg .term { background:#111114; color:#7fd18b; font-family: ui-monospace, Menlo, monospace; font-size:10px; border-radius:5px; padding:6px; margin-top:6px; }
+  .rg .chatw { display:grid; grid-template-columns: 1fr 230px; }
+  .rg .conv { padding:10px 14px; display:flex; flex-direction:column; gap:7px; max-width:640px; }
+  .rg .msg { border-radius:8px; padding:6px 8px; background:var(--bg-primary); border:1px solid var(--border); }
+  .rg .msg.me { align-self:flex-end; background:var(--accent); color:#fff; border:none; max-width:80%; }
+  .rg .ev { font-size:10.5px; color:var(--text-secondary); padding-left:4px; }
+  .rg .esc { border:1px solid #e0a000; background:rgba(224,160,0,.08); border-radius:8px; padding:7px; }
+  .rg .inp { margin-top:6px; border:1px solid var(--border); border-radius:6px; padding:7px; color:var(--text-tertiary); background:var(--bg-secondary); }
+  .rg .side { border-left:1px solid var(--border); padding:10px; background:var(--bg-primary); font-size:11px; }
+  .rg .side ol { margin:4px 0 8px 16px; padding:0; }
+  .rg .strip { display:flex; gap:5px; flex-wrap:wrap; margin-top:4px; }
+  .rg .chip { background:#111114; color:#ddd; border-radius:4px; padding:2px 5px; font-size:10px; display:flex; align-items:center; gap:4px; }
+  .rg .chip i { width:7px; height:7px; border-radius:50%; display:inline-block; }
+</style>
+
+<h2>Two views, never side by side</h2>
+<p class="subtitle">A toggle in the top bar switches between the Board and the Lead (keys 1 and 2). The talkback queue stays pinned on the left in both. A blue dot on "Lead" means it said something new.</p>
+
+<h3>1. Board view: lanes as columns, full width, with a monitor's inspector open</h3>
+<div class="rg">
+  <div class="top">
+    <span class="logo">RÉGIE</span>
+    <span class="studio">Studio: ABC backend ▾</span>
+    <span class="views"><span class="on">Board</span><span>Lead<i class="dot"></i></span></span>
+    <span class="onair">ON AIR · 3</span>
+    <div class="vu">
+      <div class="meter"><div class="lbl"><span>Claude 5h</span><span>30%</span></div><div class="bar"><div class="fill" style="width:30%"></div><div class="red"></div></div></div>
+      <div class="meter"><div class="lbl"><span>Claude 7d</span><span>76%</span></div><div class="bar"><div class="fill w" style="width:76%"></div><div class="red"></div><div class="pace" style="left:71%"></div></div></div>
+      <div class="meter"><div class="lbl"><span>Codex 5h</span><span>12%</span></div><div class="bar"><div class="fill" style="width:12%"></div><div class="red"></div></div></div>
+      <div class="meter"><div class="lbl"><span>Codex 7d</span><span>40%</span></div><div class="bar"><div class="fill" style="width:40%"></div><div class="red"></div><div class="pace" style="left:71%"></div></div></div>
+    </div>
+    <span class="btn">⏸ Standby</span><span class="btn fade">■ Fade to black</span>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <div class="h">Studios</div>
+      <div class="st cur"><span>ABC backend</span><span class="cnt">2</span></div>
+      <div class="st"><span>Player web</span><span class="cnt">1</span></div>
+      <div class="st" style="color:var(--text-secondary)">+ New studio</div>
+      <div class="h" style="margin-top:12px"><span class="call"></span>Talkback · 4</div>
+      <div class="tb"><div class="k">ESCALATION · ABC · T4</div>Export: include archived items?<br><span class="mini p">Accept: exclude</span><span class="mini">Reply</span></div>
+      <div class="tb"><div class="k">CONFIRM · PLAYER WEB</div>Project onboarding<br><span class="mini">Review</span></div>
+      <div class="tb g"><div class="k">READY TO MERGE · ABC · T2</div>Add CSV export endpoint<br><span class="mini">Open PR #482</span></div>
+      <div class="tb n"><div class="k">HELD · CLAUDE 7D PACE</div>1 task waiting<br><span class="mini">Run anyway</span></div>
+    </div>
+    <div class="center">
+      <div class="lanes">
+        <div class="lane"><div class="lh"><span>Queued</span><span>1</span></div>
+          <div class="mon"><span class="tl off"></span><div class="t">T5 Paginate export</div><div class="m">waits for T2 · standard · ABC-12</div></div>
+        </div>
+        <div class="lane"><div class="lh"><span>Working</span><span>2</span></div>
+          <div class="mon needs"><span class="tl amber"></span><div class="t">T4 Export filters</div><div class="m">Cam 3 · Codex · standard · ABC-13</div><span class="flag">NEEDS ME</span></div>
+          <div class="mon"><span class="tl red"></span><div class="t">T3 Retry on 429</div><div class="m">Cam 1 · Codex · hard · ABC-14</div><div class="out">› cargo test retry::backoff</div><div class="out">  test backoff_caps … ok</div></div>
+        </div>
+        <div class="lane"><div class="lh"><span>In review</span><span>1</span></div>
+          <div class="mon sel"><span class="tl red"></span><div class="t">T6 Fix date parsing</div><div class="m">Cam 2 · Codex reviewing · round 1</div><div class="out">› reading src/date.rs</div></div>
+        </div>
+        <div class="lane"><div class="lh"><span>CI</span><span>1</span></div>
+          <div class="mon"><span class="tl off"></span><div class="t">T1 Bump deps</div><div class="m">PR #480 · checks 3/5</div></div>
+        </div>
+        <div class="lane"><div class="lh"><span>Ready</span><span>1</span></div>
+          <div class="mon"><span class="tl green"></span><div class="t">T2 CSV export</div><div class="m">PR #482 · ABC-12</div></div>
+        </div>
+        <div class="lane"><div class="lh"><span>Merged</span><span>1</span></div>
+          <div class="mon" style="opacity:.55"><span class="tl off"></span><div class="t">T0 Healthcheck</div><div class="m">PR #476</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="drawer">
+      <div style="display:flex;justify-content:space-between"><b><span class="tl2"></span>T6 Fix date parsing</b><span style="color:var(--text-secondary)">✕</span></div>
+      <div class="kv">
+        <span>Lane</span><span>In review · round 1 of 2</span>
+        <span>Builder</span><span>Claude · Sonnet 5.5 high · light</span>
+        <span>Reviewer</span><span>Codex · gpt-6.1-sol · light</span>
+        <span>Tickets</span><span>ABC-15</span>
+        <span>Branch</span><span>regie/t6-fix-date-parsing</span>
+        <span>Usage</span><span>182k tokens · 14 min</span>
+        <span>Lessons</span><span>2 given (dates are UTC; use chrono)</span>
+      </div>
+      <div class="h">Timeline</div>
+      <div class="tlx">
+        <div><b>LEAD → BUILDER</b><br>Parse ISO dates with offsets; keep UTC.</div>
+        <div><b>BUILDER REPORT</b> done · 3 files changed</div>
+        <div><b>CHECKS</b> build ✓ test ✓ lint ✓</div>
+        <div><b>REVIEW</b> started on Codex</div>
+      </div>
+      <div class="h">Live output</div>
+      <div class="term">› rg "parse_date" src<br>› reading src/date.rs<br>› cargo test date:: …</div>
+      <div style="margin-top:8px"><span class="mini">Stop agent</span><span class="mini">Retry</span><span class="mini">Cancel task</span><span class="mini">Raise level</span></div>
+    </div>
+  </div>
+</div>
+
+<h3>2. Lead view: the chat, full width, with the lead's plan beside it</h3>
+<div class="rg">
+  <div class="top">
+    <span class="logo">RÉGIE</span>
+    <span class="studio">Studio: ABC backend ▾</span>
+    <span class="views"><span>Board</span><span class="on">Lead</span></span>
+    <span class="onair">ON AIR · 3</span>
+    <div class="vu">
+      <div class="meter"><div class="lbl"><span>Claude 5h</span><span>30%</span></div><div class="bar"><div class="fill" style="width:30%"></div><div class="red"></div></div></div>
+      <div class="meter"><div class="lbl"><span>Claude 7d</span><span>76%</span></div><div class="bar"><div class="fill w" style="width:76%"></div><div class="red"></div><div class="pace" style="left:71%"></div></div></div>
+      <div class="meter"><div class="lbl"><span>Codex 5h</span><span>12%</span></div><div class="bar"><div class="fill" style="width:12%"></div><div class="red"></div></div></div>
+      <div class="meter"><div class="lbl"><span>Codex 7d</span><span>40%</span></div><div class="bar"><div class="fill" style="width:40%"></div><div class="red"></div><div class="pace" style="left:71%"></div></div></div>
+    </div>
+    <span class="btn">⏸ Standby</span><span class="btn fade">■ Fade to black</span>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <div class="h">Studios</div>
+      <div class="st cur"><span>ABC backend</span><span class="cnt">2</span></div>
+      <div class="st"><span>Player web</span><span class="cnt">1</span></div>
+      <div class="st" style="color:var(--text-secondary)">+ New studio</div>
+      <div class="h" style="margin-top:12px"><span class="call"></span>Talkback · 4</div>
+      <div class="tb"><div class="k">ESCALATION · ABC · T4</div>Export: include archived items?<br><span class="mini p">Accept: exclude</span><span class="mini">Reply</span></div>
+      <div class="tb"><div class="k">CONFIRM · PLAYER WEB</div>Project onboarding<br><span class="mini">Review</span></div>
+      <div class="tb g"><div class="k">READY TO MERGE · ABC · T2</div>Add CSV export endpoint<br><span class="mini">Open PR #482</span></div>
+      <div class="tb n"><div class="k">HELD · CLAUDE 7D PACE</div>1 task waiting<br><span class="mini">Run anyway</span></div>
+    </div>
+    <div class="chatw">
+      <div class="conv">
+        <div class="msg me">Work on the next 2 tickets of ABC</div>
+        <div class="msg">ABC-12 is two pieces: the export endpoint (T2) and pagination (T5, waits for T2 to merge). ABC-13 is T4. T2 starts on Claude, T4 on Codex, both at standard.</div>
+        <div class="ev">· T2 checks passed · review started on Codex · T6 created from your earlier note</div>
+        <div class="esc"><b>T4 needs you</b> · ABC-13 says "export all items" but the archive is 40× bigger. Include archived items?<br>Suggested: <b>exclude archived</b>; add a flag later if needed.<br><span class="mini p">Accept suggestion</span><span class="mini">Reply</span><span class="mini">Open T4</span></div>
+        <div class="ev">· T2 ready to merge (PR #482) · ABC-12 commented and moved to In review</div>
+        <div class="inp">Message the lead…</div>
+      </div>
+      <div class="side">
+        <div class="h">Instruction</div>
+        Next 2 tickets of ABC (1 of 2 ready)
+        <div class="h">Lead's plan</div>
+        <ol><li>Merge T2, then start T5</li><li>After your answer, finish T4</li><li>Stop after ABC-13</li></ol>
+        <div class="h">On the board</div>
+        <div class="strip">
+          <span class="chip"><i style="background:#ffb000"></i>T4</span><span class="chip"><i style="background:#ff3b30"></i>T3</span><span class="chip"><i style="background:#ff3b30"></i>T6</span><span class="chip"><i style="background:#444"></i>T1</span><span class="chip"><i style="background:#34c759"></i>T2</span><span class="chip"><i style="background:#444"></i>T5</span>
+        </div>
+        <div class="h">Lead</div>
+        Opus 5.5 · high · 64k of 200k<br><span class="mini">Fresh lead</span>
+      </div>
+    </div>
+  </div>
+</div>
