@@ -321,3 +321,24 @@ async fn shutdown_ends_runs_interrupted_and_removes_server_json() {
         .collect();
     assert_eq!(finishes, vec![(RunId(1), RunOutcome::Interrupted)]);
 }
+
+#[tokio::test]
+async fn a_second_serve_on_a_live_data_dir_fails_and_touches_nothing() {
+    let h = Harness::new(|_, _| hangs()).await;
+    let t = h.create_session_and_task("Long job").await;
+    h.wait_for("a run", 10, |h| h.state().active_run(t).is_some()).await;
+    // The live server: it holds the lock and has written its server.json.
+    h.data.ensure().unwrap();
+    let _live = regie::cli::lock_data_dir(&h.data).unwrap();
+    let info = r#"{"port":7317,"token":"live","pid":1}"#;
+    std::fs::write(h.data.server_json(), info).unwrap();
+    let events_before = h.events().len();
+
+    let cli = parse(&["serve", "--no-open", "--port", "0", "--data-dir", h.data.root.to_str().unwrap()]);
+    let err = regie::cli::run(cli).await.unwrap_err();
+    assert!(err.to_string().contains("already running"), "{err}");
+
+    assert_eq!(std::fs::read_to_string(h.data.server_json()).unwrap(), info);
+    assert_eq!(h.events().len(), events_before);
+    assert!(h.state().active_run(t).is_some());
+}

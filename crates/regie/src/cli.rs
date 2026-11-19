@@ -419,7 +419,10 @@ async fn open_dashboard(data: &DataDir) -> anyhow::Result<()> {
 
 /// Starts the engine with the real Claude and gh, serves the API, and stops
 /// cleanly on SIGINT or SIGTERM.
-async fn serve_command(data: DataDir, port: u16, no_open: bool) -> anyhow::Result<()> {
+pub async fn serve_command(data: DataDir, port: u16, no_open: bool) -> anyhow::Result<()> {
+    data.ensure()?;
+    // Held until the process ends; the engine must not start (and recover) under a live server.
+    let _lock = lock_data_dir(&data)?;
     let claude = PathBuf::from("claude");
     let deps = Deps {
         runner: Arc::new(ClaudeCli {
@@ -486,7 +489,32 @@ pub async fn serve_until(
     result.unwrap_or(Ok(()))
 }
 
+/// Takes the exclusive lock on `<data>/regie.lock`, or says that Régie already runs there.
+pub fn lock_data_dir(data: &DataDir) -> anyhow::Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    let path = data.root.join("regie.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    // SAFETY: flock on a file descriptor we own.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        anyhow::bail!("Régie is already running on {} (it holds {})", data.root.display(), path.display());
+    }
+    Ok(file)
+}
+
+/// Removes `server.json` only when it is ours (a live server's must stay).
 fn remove_server_json(path: &Path) {
+    let ours = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<crate::server::ServerInfo>(&t).ok())
+        .is_some_and(|i| i.pid == std::process::id());
+    if !ours {
+        return;
+    }
     if let Err(e) = std::fs::remove_file(path) {
         if e.kind() != std::io::ErrorKind::NotFound {
             eprintln!("regie: could not remove {}: {e}", path.display());
