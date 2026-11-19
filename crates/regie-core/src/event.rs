@@ -116,6 +116,8 @@ pub enum EventKind {
         effort: Effort,
         resume_of: Option<String>,
     },
+    /// The agent's process started (before it attached), so a restart can stop it.
+    RunSpawned { run: RunId, pid: u32 },
     RunAttached { run: RunId, native_session: String, pid: Option<u32> },
     RunFinished { run: RunId, outcome: RunOutcome, final_message: Option<String> },
     RunUsage {

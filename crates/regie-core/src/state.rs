@@ -208,13 +208,25 @@ impl State {
                     t.run_started(*purpose);
                 }
             }
+            EventKind::RunSpawned { run, pid } => {
+                if let Some(r) = self.runs.get_mut(run) {
+                    r.pid = Some(*pid);
+                }
+            }
             EventKind::RunAttached { run, native_session, pid } => {
+                // A Message run takes its message off the queue only once its chain
+                // first attaches: interrupted before that, the message was never sent.
+                let takes_message =
+                    !self.chain_attached(*run) && self.effective_purpose(*run) == Some(Purpose::Message);
                 let Some(r) = self.runs.get_mut(run) else { return };
                 r.native_session = Some(native_session.clone());
-                r.pid = *pid;
+                r.pid = pid.or(r.pid);
                 if r.role == Role::Builder {
                     if let Some(t) = self.tasks.get_mut(&r.task) {
                         t.builder_native_session = Some(native_session.clone());
+                        if takes_message && !t.pending_messages.is_empty() {
+                            t.pending_messages.remove(0);
+                        }
                     }
                 }
             }
@@ -288,16 +300,33 @@ impl State {
     /// A run's purpose, looking through `Resume` runs to the run they continue
     /// (the latest earlier non-resume run of the same task and role).
     pub fn effective_purpose(&self, run: RunId) -> Option<Purpose> {
+        self.runs.get(&self.chain_start(run)?).map(|r| r.purpose).filter(|p| *p != Purpose::Resume)
+    }
+
+    /// Whether the run, or an earlier run of the chain it continues, attached to
+    /// an agent session (so that session got the chain's prompt).
+    pub fn chain_attached(&self, run: RunId) -> bool {
+        let (Some(r), Some(start)) = (self.runs.get(&run), self.chain_start(run)) else { return false };
+        self.runs
+            .range(start..=run)
+            .map(|(_, p)| p)
+            .any(|p| p.task == r.task && p.role == r.role && p.native_session.is_some())
+    }
+
+    /// The run a chain of `Resume` runs continues: the run itself unless it is a
+    /// resume, else the latest earlier non-resume run of the same task and role.
+    fn chain_start(&self, run: RunId) -> Option<RunId> {
         let r = self.runs.get(&run)?;
         if r.purpose != Purpose::Resume {
-            return Some(r.purpose);
+            return Some(run);
         }
-        self.runs
+        let start = self
+            .runs
             .range(..run)
             .rev()
             .map(|(_, p)| p)
-            .find(|p| p.task == r.task && p.role == r.role && p.purpose != Purpose::Resume)
-            .map(|p| p.purpose)
+            .find(|p| p.task == r.task && p.role == r.role && p.purpose != Purpose::Resume);
+        Some(start.map_or(run, |p| p.id))
     }
 }
 
@@ -305,9 +334,7 @@ impl Task {
     fn run_started(&mut self, purpose: Purpose) {
         let fix_loop = match purpose {
             Purpose::Message => {
-                if !self.pending_messages.is_empty() {
-                    self.pending_messages.remove(0);
-                }
+                // The message leaves the queue when the run attaches (`RunAttached`).
                 let changes_requested = self
                     .pr
                     .as_ref()
@@ -681,13 +708,55 @@ mod tests {
         let q = |t: &str| EventKind::MessageQueued { text: t.into() };
         let s = state_of(vec![q("a"), q("b"), q("c")]);
         assert_eq!(s.tasks[&T].pending_messages, ["a", "b", "c"]);
+        // a Message run takes the first one once it attaches (before that it may never be sent)
         let s = state_of(vec![q("a"), q("b"), q("c"), started(1, Role::Builder, Purpose::Message)]);
-        assert_eq!(s.tasks[&T].pending_messages, ["b", "c"]);
+        assert_eq!(s.tasks[&T].pending_messages, ["a", "b", "c"]);
+        let attached = |run| EventKind::RunAttached { run: RunId(run), native_session: "n".into(), pid: None };
+        let s = state_of(vec![q("a"), q("b"), started(1, Role::Builder, Purpose::Message), attached(1)]);
+        assert_eq!(s.tasks[&T].pending_messages, ["b"]);
+        // interrupted before attaching: still queued; the run resent with it takes it
+        let s = state_of(vec![
+            q("a"),
+            q("b"),
+            started(1, Role::Builder, Purpose::Message),
+            finished(1, RunOutcome::Paused, ""),
+            started(2, Role::Builder, Purpose::Resume),
+            attached(2),
+        ]);
+        assert_eq!(s.tasks[&T].pending_messages, ["b"]);
+        // a resume of a Message run that had attached takes nothing more
+        let s = state_of(vec![
+            q("a"),
+            q("b"),
+            started(1, Role::Builder, Purpose::Message),
+            attached(1),
+            finished(1, RunOutcome::Paused, ""),
+            started(2, Role::Builder, Purpose::Resume),
+            attached(2),
+        ]);
+        assert_eq!(s.tasks[&T].pending_messages, ["b"]);
         let s = state_of(vec![q("a"), q("b"), EventKind::MessageDelivered]);
         assert_eq!(s.tasks[&T].pending_messages, ["b"]);
         // other purposes do not consume messages
         let s = state_of(vec![q("a"), started(1, Role::Builder, Purpose::Resume)]);
         assert_eq!(s.tasks[&T].pending_messages, ["a"]);
+    }
+
+    #[test]
+    fn spawned_run_records_its_pid() {
+        let s = state_of(vec![
+            started(1, Role::Builder, Purpose::Initial),
+            EventKind::RunSpawned { run: RunId(1), pid: 4242 },
+        ]);
+        assert_eq!(s.runs[&RunId(1)].pid, Some(4242));
+        assert_eq!(s.runs[&RunId(1)].native_session, None);
+        // attaching keeps it when the runner sends no pid
+        let s = state_of(vec![
+            started(1, Role::Builder, Purpose::Initial),
+            EventKind::RunSpawned { run: RunId(1), pid: 4242 },
+            EventKind::RunAttached { run: RunId(1), native_session: "n1".into(), pid: None },
+        ]);
+        assert_eq!(s.runs[&RunId(1)].pid, Some(4242));
     }
 
     #[test]
@@ -833,6 +902,7 @@ mod tests {
             .chain([
                 EventKind::MessageQueued { text: "fix the panic".into() },
                 started(7, Role::Builder, Purpose::Message),
+                EventKind::RunAttached { run: RunId(7), native_session: "n1".into(), pid: None },
                 finished(7, RunOutcome::Finished, "Status: done"),
             ])
             .collect();

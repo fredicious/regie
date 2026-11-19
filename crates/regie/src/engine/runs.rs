@@ -27,6 +27,10 @@ impl Engine {
         let task = ctl.task;
         let actor = Actor::Run(run);
         match event {
+            AgentEvent::Spawned { pid } => {
+                // Recorded before the agent attaches, so a restart can stop it (recover).
+                self.emit_task(task, actor, EventKind::RunSpawned { run, pid })?;
+            }
             AgentEvent::Attached { native_session, pid } => {
                 self.emit_task(task, actor, EventKind::RunAttached { run, native_session, pid })?;
             }

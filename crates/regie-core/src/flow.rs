@@ -86,8 +86,18 @@ pub fn next_step(task: &Task, state: &State, settings: &Settings) -> NextStep {
         Some(RunOutcome::Stopped) => return NextStep::AwaitHuman(HumanReason::AgentStopped),
         Some(RunOutcome::Interrupted | RunOutcome::Paused | RunOutcome::LimitHit) => {
             // R11: reviewer and verify runs are always fresh agents, so they restart.
-            return match state.last_run(task.id).map_or(Role::Builder, |r| r.role) {
-                Role::Builder => start(Role::Builder, Purpose::Resume, PromptInput::Resume { note: RESUME_NOTE.into() }),
+            let last = state.last_run(task.id);
+            return match last.map_or(Role::Builder, |r| r.role) {
+                Role::Builder => {
+                    // Interrupted before it attached, the agent never got its prompt:
+                    // send that prompt again rather than "continue".
+                    let again = last
+                        .filter(|r| !state.chain_attached(r.id))
+                        .and_then(|r| state.effective_purpose(r.id))
+                        .and_then(|p| original_input(task, p));
+                    let input = again.unwrap_or_else(|| PromptInput::Resume { note: RESUME_NOTE.into() });
+                    start(Role::Builder, Purpose::Resume, input)
+                }
                 Role::Reviewer => {
                     let round = task.reviews.last().map_or(1, |r| r.round + 1);
                     start(Role::Reviewer, Purpose::Review, PromptInput::Review { round })
@@ -144,6 +154,25 @@ pub fn next_step(task: &Task, state: &State, settings: &Settings) -> NextStep {
     }
     // 13.
     NextStep::Nothing
+}
+
+/// The input a builder run of this purpose was started with, from the state.
+fn original_input(task: &Task, purpose: Purpose) -> Option<PromptInput> {
+    Some(match purpose {
+        Purpose::Initial => PromptInput::Initial,
+        Purpose::Fix => PromptInput::Fix { findings: task.reviews.last().map(to_fix).unwrap_or_default() },
+        Purpose::OpenPr => PromptInput::OpenPr,
+        Purpose::CiFix => {
+            let failed = match task.pr.as_ref().map(|pr| &pr.checks) {
+                Some(Checks::Failure { failed }) => failed.clone(),
+                _ => Vec::new(),
+            };
+            PromptInput::CiFix { failed }
+        }
+        Purpose::ConflictFix => PromptInput::ConflictFix,
+        Purpose::Message => PromptInput::Message { text: task.pending_messages.first()?.clone() },
+        Purpose::Resume | Purpose::Review | Purpose::Verify => return None,
+    })
 }
 
 fn start(role: Role, purpose: Purpose, input: PromptInput) -> NextStep {
@@ -277,7 +306,8 @@ mod tests {
                     provider: Provider::Claude,
                     model: "m".into(),
                     effort: Effort::Medium,
-                    native_session: None,
+                    // runs attached to an agent session unless `unattached()` says otherwise
+                    native_session: Some(format!("n{}", id.0)),
                     pid: None,
                     started_at: Millis(0),
                     outcome,
@@ -287,6 +317,12 @@ mod tests {
             if outcome.is_some() {
                 self.task.last_run_outcome = outcome;
             }
+            self
+        }
+
+        /// The latest run never attached (interrupted before the agent's first line).
+        fn unattached(mut self) -> Self {
+            self.state.runs.values_mut().next_back().unwrap().native_session = None;
             self
         }
 
@@ -673,6 +709,54 @@ mod tests {
             RESUME_NOTE,
             "You were interrupted. Continue where you left off; check the state of the worktree first."
         );
+    }
+
+    #[test]
+    fn unattached_builder_run_is_reissued_with_its_input() {
+        // Interrupted before it attached, the run never got its prompt: the next run
+        // gets that prompt again (as a Resume, so loop counts are not bumped twice).
+        let again = |input| NextStep::StartRun { role: Role::Builder, purpose: Purpose::Resume, input };
+        let paused = Some(RunOutcome::Paused);
+        let b = TaskB::new().run(Role::Builder, Purpose::Initial, paused).unattached();
+        assert_eq!(step(b), again(PromptInput::Initial));
+        let b = TaskB::new()
+            .built()
+            .review(1, vec![finding(1, true), finding(2, false)])
+            .ruled(&[(1, Decision::Fix), (2, Decision::Advisory)])
+            .run(Role::Builder, Purpose::Fix, Some(RunOutcome::Interrupted))
+            .unattached();
+        assert_eq!(step(b), again(PromptInput::Fix { findings: vec![finding(1, true)] }));
+        let failing = |pr: &mut PrState| pr.checks = Checks::Failure { failed: vec!["lint".into()] };
+        let b = TaskB::new().with_pr(failing).run(Role::Builder, Purpose::CiFix, paused).unattached();
+        assert_eq!(step(b), again(PromptInput::CiFix { failed: vec!["lint".into()] }));
+        let b = TaskB::new().with_pr(|pr| pr.conflicting = true).run(Role::Builder, Purpose::ConflictFix, paused).unattached();
+        assert_eq!(step(b), again(PromptInput::ConflictFix));
+        let b = TaskB::new().built().review(1, vec![]).run(Role::Builder, Purpose::OpenPr, paused).unattached();
+        assert_eq!(step(b), again(PromptInput::OpenPr));
+        // the message waits in the queue until the run attaches
+        let b = TaskB::new().built().message("use sqlite").run(Role::Builder, Purpose::Message, paused).unattached();
+        assert_eq!(step(b), again(PromptInput::Message { text: "use sqlite".into() }));
+        // a stopped or crashed one is retried the same way
+        let b = TaskB::new()
+            .run(Role::Builder, Purpose::Initial, Some(RunOutcome::Stopped))
+            .unattached()
+            .with(|t| t.last_run_outcome = Some(RunOutcome::Interrupted));
+        assert_eq!(step(b), again(PromptInput::Initial));
+
+        // a resume that never attached, of a run that did: resume that session
+        let resume_note = again(PromptInput::Resume { note: RESUME_NOTE.into() });
+        let b = TaskB::new()
+            .run(Role::Builder, Purpose::Initial, paused)
+            .run(Role::Builder, Purpose::Resume, paused)
+            .unattached();
+        assert_eq!(step(b), resume_note);
+        // neither attached: the original input again
+        let b = TaskB::new()
+            .run(Role::Builder, Purpose::Initial, paused)
+            .unattached()
+            .run(Role::Builder, Purpose::Resume, paused)
+            .unattached();
+        assert_eq!(step(b), again(PromptInput::Initial));
     }
 
     #[test]

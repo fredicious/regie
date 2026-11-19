@@ -29,6 +29,8 @@ pub struct RunSpec {
 /// What a running agent reports.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentEvent {
+    /// The agent's process started; comes before `Attached`.
+    Spawned { pid: u32 },
     Attached { native_session: String, pid: Option<u32> },
     /// A line for people to read: text, a tool call, or an error line.
     Output(String),

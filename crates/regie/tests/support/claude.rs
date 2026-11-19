@@ -5,6 +5,8 @@
 //! control message: `Interrupt` ends the run `Paused`, `Stop` ends it
 //! `Stopped`, and `Message` is recorded and answered with an output line while
 //! the run keeps waiting. `WaitFor` does the same until the test opens its gate.
+//! The run attaches (`Attached`) just before its first action other than
+//! `Spawned` and `HangBeforeAttach`, or before finishing.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,6 +27,11 @@ pub enum FakeAction {
     HangUntilControl,
     /// Waits for a permit on the gate, answering messages like `HangUntilControl`.
     WaitFor(Arc<tokio::sync::Semaphore>),
+    /// Reports this pid as the agent's process (`AgentEvent::Spawned`).
+    Spawned(u32),
+    /// Hangs like `HangUntilControl` before the run attaches, as Claude does while
+    /// it loads its setup; ended by a control, the run never attaches.
+    HangBeforeAttach,
 }
 
 pub struct FakeOutcome {
@@ -111,10 +118,30 @@ impl AgentRunner for FakeClaude {
                     let _ = tx.send(e).await;
                 }
             };
-            send(AgentEvent::Attached { native_session: fake_session(&spec), pid: None }).await;
+            let attach = AgentEvent::Attached { native_session: fake_session(&spec), pid: None };
+            let mut attached = false;
             let mut end = RunOutcome::Finished;
             'actions: for action in outcome.actions {
+                if !attached && !matches!(action, FakeAction::Spawned(_) | FakeAction::HangBeforeAttach) {
+                    send(attach.clone()).await;
+                    attached = true;
+                }
                 match action {
+                    FakeAction::Spawned(pid) => send(AgentEvent::Spawned { pid }).await,
+                    FakeAction::HangBeforeAttach => loop {
+                        match pass_rx.recv().await {
+                            Some(AgentControl::Interrupt) => {
+                                end = RunOutcome::Paused;
+                                break 'actions;
+                            }
+                            // not attached yet: nothing answers a message
+                            Some(AgentControl::Message(_)) => {}
+                            Some(AgentControl::Stop) | None => {
+                                end = RunOutcome::Stopped;
+                                break 'actions;
+                            }
+                        }
+                    },
                     FakeAction::WriteFile(path, content) => {
                         let path = spec.cwd.join(path);
                         if let Some(dir) = path.parent() {
@@ -172,6 +199,9 @@ impl AgentRunner for FakeClaude {
                         }
                     },
                 }
+            }
+            if !attached && end == RunOutcome::Finished {
+                send(attach).await;
             }
             let final_message = match end {
                 RunOutcome::Finished => {

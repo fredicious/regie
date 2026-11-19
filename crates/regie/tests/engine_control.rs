@@ -14,6 +14,7 @@ use regie_core::{
     NewEvent, ProjectFacts, Provider, Purpose, QueuedReason, RepoInfo, Role, RunId, RunOutcome, SessionId, State,
     TaskId, RESUME_NOTE,
 };
+use support::claude::{FakeAction, FakeOutcome};
 use support::harness::{branch_of, builds, exists, hangs, pr, says, Harness, CLEAN_REVIEW, HOUR, MINUTE, START};
 use support::repo::git;
 
@@ -243,6 +244,100 @@ async fn restart_resumes_interrupted_run() {
     assert!(spec.prompt.contains("You were interrupted"), "{}", spec.prompt);
     h.wait_for("running again", SECS, |h| h.state().active_run(t).is_some_and(|r| r.id == RunId(2))).await;
     assert_eq!(h.lane(t), Lane::Working);
+}
+
+/// A run that hangs before it attaches (Claude still loading its setup).
+fn before_attach(pid: Option<u32>) -> FakeOutcome {
+    let spawned = pid.map(FakeAction::Spawned);
+    FakeOutcome { final_message: String::new(), actions: spawned.into_iter().chain([FakeAction::HangBeforeAttach]).collect() }
+}
+
+fn attached(h: &Harness, run: RunId) -> bool {
+    h.state().runs.get(&run).is_some_and(|r| r.native_session.is_some())
+}
+
+#[tokio::test]
+async fn pause_before_attach_sends_the_instruction_again() {
+    let h = Harness::new(|spec, _| match (spec.role, spec.purpose) {
+        (Role::Builder, Purpose::Initial) => before_attach(None),
+        (Role::Builder, Purpose::Resume) => hangs(),
+        other => panic!("unexpected run {other:?}"),
+    })
+    .await;
+    let t = h.create_session_and_task("Load slowly").await;
+    let s = h.state().tasks[&t].session;
+    h.wait_for("builder started", SECS, |h| h.state().active_run(t).is_some()).await;
+    h.command(Command::PauseSession { session: s }).await;
+    h.wait_for("run paused", SECS, |h| outcome(h, RunId(1)) == Some(RunOutcome::Paused)).await;
+    assert!(!attached(&h, RunId(1)));
+
+    h.command(Command::ResumeSession { session: s }).await;
+    h.wait_for("sent again", SECS, |h| h.specs_for(t).len() == 2).await;
+    let spec = &h.specs_for(t)[1];
+    assert_eq!((spec.role, spec.purpose), (Role::Builder, Purpose::Resume));
+    // nothing to continue: a fresh agent with the task's instruction, not "continue"
+    assert_eq!(spec.resume, None);
+    assert!(spec.prompt.contains("Please do: Load slowly"), "{}", spec.prompt);
+    assert!(!spec.prompt.contains(RESUME_NOTE), "{}", spec.prompt);
+    h.wait_for("attached", SECS, |h| attached(h, RunId(2))).await;
+}
+
+#[tokio::test]
+async fn message_run_stopped_before_attach_keeps_the_message() {
+    let h = Harness::new(|spec, _| match (spec.role, spec.purpose) {
+        (Role::Builder, Purpose::Initial) => says("Which database should I use?\nStatus: question"),
+        (Role::Builder, Purpose::Message) => before_attach(None),
+        (Role::Builder, Purpose::Resume) => hangs(),
+        other => panic!("unexpected run {other:?}"),
+    })
+    .await;
+    let t = h.create_session_and_task("Store things").await;
+    h.wait_for("question", SECS, |h| needs_me(h, t, HumanReason::BuilderQuestion)).await;
+    h.message(t, "Use SQLite.").await;
+    h.wait_for("message run", SECS, |h| h.state().active_run(t).is_some_and(|r| r.purpose == Purpose::Message)).await;
+    // queued until the run attaches
+    assert_eq!(h.state().tasks[&t].pending_messages, ["Use SQLite."]);
+    h.command(Command::StopAgent { task: t }).await;
+    h.wait_for("stopped", SECS, |h| needs_me(h, t, HumanReason::AgentStopped)).await;
+    assert_eq!(h.state().tasks[&t].pending_messages, ["Use SQLite."]);
+
+    h.command(Command::RetryTask { task: t }).await;
+    h.wait_for("sent again", SECS, |h| h.specs_for(t).len() == 3).await;
+    let spec = &h.specs_for(t)[2];
+    assert_eq!((spec.role, spec.purpose), (Role::Builder, Purpose::Resume));
+    assert_eq!(spec.prompt, "Use SQLite.");
+    assert_eq!(spec.resume.as_deref(), Some("fake-session-1"));
+    h.wait_for("taken off the queue", SECS, |h| h.state().tasks[&t].pending_messages.is_empty()).await;
+}
+
+#[tokio::test]
+async fn restart_stops_an_agent_that_never_attached() {
+    // the agent's process, left running by a Régie killed before the agent attached
+    let mut agent = tokio::process::Command::new("sleep")
+        .arg("60")
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let pid = agent.id().unwrap();
+    tokio::spawn(async move { agent.wait().await });
+    let mut h = Harness::new(move |spec, _| match (spec.role, spec.purpose) {
+        (Role::Builder, Purpose::Initial) => before_attach(Some(pid)),
+        (Role::Builder, Purpose::Resume) => hangs(),
+        other => panic!("unexpected run {other:?}"),
+    })
+    .await;
+    let t = h.create_session_and_task("Never attached").await;
+    h.wait_for("pid recorded", SECS, |h| h.state().runs.get(&RunId(1)).is_some_and(|r| r.pid == Some(pid))).await;
+    assert!(!attached(&h, RunId(1)));
+
+    h.restart().await;
+    wait_dead(pid as i32).await;
+    h.wait_for("sent again", SECS, |h| h.specs_for(t).len() == 2).await;
+    assert_eq!(outcome(&h, RunId(1)), Some(RunOutcome::Interrupted));
+    let spec = &h.specs_for(t)[1];
+    assert_eq!((spec.purpose, spec.resume.as_deref()), (Purpose::Resume, None));
+    assert!(spec.prompt.contains("Please do: Never attached"), "{}", spec.prompt);
 }
 
 #[tokio::test]

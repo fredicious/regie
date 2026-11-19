@@ -168,6 +168,9 @@ async fn drive(
     mut control: mpsc::Receiver<AgentControl>,
 ) {
     let pid = child.id();
+    if let Some(pid) = pid {
+        let _ = events.send(AgentEvent::Spawned { pid }).await;
+    }
     let mut stdin = child.stdin.take();
     let mut out = BufReader::new(child.stdout.take().expect("stdout is piped"));
     let stderr = child.stderr.take().map(|e| {
@@ -463,8 +466,10 @@ done"#;
         let env = Env::new();
         let cli = env.cli(&format!("cat '{}'\nexit 1", fixture("error_no_result.jsonl")));
         let events = run(&cli, env.spec(), vec![]).await;
+        // the pid comes first, before the agent's first line
+        assert!(matches!(&events[0], AgentEvent::Spawned { pid } if *pid > 0));
         assert!(matches!(
-            &events[0],
+            &events[1],
             AgentEvent::Attached { native_session, pid: Some(_) } if native_session == "4f6c2f8e-1d2a-4b7c-9e0a-6a1b2c3d4e5f"
         ));
         assert!(events.iter().any(|e| matches!(e, AgentEvent::Output(o) if o.contains("cargo test --workspace"))));
