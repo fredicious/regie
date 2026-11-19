@@ -501,7 +501,11 @@ pub fn lock_data_dir(data: &DataDir) -> anyhow::Result<std::fs::File> {
         .with_context(|| format!("opening {}", path.display()))?;
     // SAFETY: flock on a file descriptor we own.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        anyhow::bail!("Régie is already running on {} (it holds {})", data.root.display(), path.display());
+        anyhow::bail!(
+            "Régie is already running on {} (it holds {})",
+            data.root.display(),
+            path.display()
+        );
     }
     Ok(file)
 }
