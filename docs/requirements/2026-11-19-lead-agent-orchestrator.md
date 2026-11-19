@@ -3,7 +3,10 @@
 **Date:** 2026-11-19 (revision 3, after two reviews)
 **Source:** Frédéric's request in conversation, quoted where possible.
 **Purpose:** the yardstick for building the next version of Régie.
-**Status:** decisions from both reviews applied (see `2026-11-19-lead-agent-orchestrator-fable-review.md`). Next: a short spike, then design.
+**Status:**
+- Decisions from both reviews applied (see `2026-11-19-lead-agent-orchestrator-fable-review.md`).
+- Spike done (see "Spike results").
+- Next: design.
 
 ## Goal
 
@@ -203,6 +206,11 @@ Why these numbers: each running agent uses quota roughly in proportion to its ti
 ### R14. Isolation and permissions
 
 The tool enforces these limits; they don't depend on agents following instructions.
+
+How (from the spike):
+- **Agents run inside their CLI's sandbox:** writes only in their worktree, and no network route to GitHub.
+- **Connector tools are limited per agent profile:** an allowlist of what it may use, and write tools hidden.
+- **Rules on shell commands aren't relied on,** since they can be bypassed.
 
 - **Worktrees:**
   - Each task works in its own worktree and branch, created from a freshly fetched `origin/<default branch>`.
@@ -445,15 +453,13 @@ The tool needs two things for testing: a **usage source that can be overridden**
 - After 10 merged tasks, one reflection item appears in the Needs me queue. I accept one proposal, and the log shows it with its metric and a revert button. I revert it from the log, the old value is back, and the revert is logged too.
 - I edit a lesson in the log, and the next task's prompt uses the edited text.
 
-## Before design: a half-day spike
+## Spike results (2026-11-19)
 
-Already confirmed on this Mac: Claude's `rate_limit_event` carries the 5-hour and 7-day usage, and `codex exec resume` exists.
+Details in `docs/spikes/2026-11-19-lead-agent-spike.md`.
 
-Still to check:
-
-1. Headless `codex exec resume` works end to end, and so does resuming after the process is killed mid-turn.
-2. Several Codex runs at once on one login don't break each other's sign-in when the login refreshes.
-3. A headless Claude run can deny connector write tools while allowing reads, and allow only the Jira comment and status tools for ticket updates.
+1. **Headless Codex resume works**, including after the process is killed mid-turn. The context survives, and the prompt cache is reused.
+2. **Concurrent Codex runs on one login work.** A refresh race couldn't be provoked safely: the token lasts 240 hours. **Design choice:** run all Codex agents as threads of one `codex app-server`, which owns the login. It ran two turns at once, and its protocol also gives interrupt (R16), resume (R13), steering, and rate limits (R5).
+3. **Claude permissions:** `--permission-mode dontAsk` with an allowlist denies everything else, and `--disallowedTools` removes write tools (or whole connectors) from view. **Rules on shell commands are not a boundary:** `bash -c 'git push …'` got past a `git push` deny. The CLIs' sandboxes are: Claude's blocks network through an allowlist proxy, and Codex's workspace-write has no network. So R14 is enforced by sandboxing agents, with the tool doing git and GitHub work outside the sandbox.
 
 ## Constraints found on this machine
 
