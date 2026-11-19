@@ -7,6 +7,7 @@ use ts_rs::TS;
 
 use crate::event::{Event, EventKind, LoopKind, Purpose, RepoInfo, Role, RunOutcome};
 use crate::facts::ProjectFacts;
+use crate::flow;
 use crate::findings::{parse_builder_status, BuilderStatus, ReviewOutcome, Ruling, VerifyOutcome};
 use crate::github::{PrComment, PrState, ReviewDecision};
 use crate::ids::{Millis, RunId, SessionId, TaskId};
@@ -329,6 +330,29 @@ impl Task {
         }
     }
 
+    /// R9: a retry while the task waits on a review it could not read, or on a
+    /// verify that failed, runs that pass again. Only when nothing comes first:
+    /// an unfinished run to resume, a failed setup, a question or a message.
+    fn retry_review_or_verify(&mut self) {
+        let unfinished = !matches!(self.last_run_outcome, Some(RunOutcome::Finished) | None);
+        let waits_first = unfinished
+            || self.setup_ok == Some(false)
+            || self.last_builder_status == Some(BuilderStatus::Question)
+            || !self.pending_messages.is_empty();
+        let Some(latest) = self.reviews.last().filter(|_| !waits_first) else { return };
+        match &latest.outcome {
+            ReviewOutcome::Unparsed { .. } => {
+                self.reviews.pop();
+            }
+            ReviewOutcome::Findings(_) => {
+                let failed = self.verify.as_ref().is_some_and(|v| !flow::verified(v, &flow::to_fix(latest)));
+                if latest.fix_done && failed {
+                    self.verify = None;
+                }
+            }
+        }
+    }
+
     /// Events that touch only this task.
     fn apply(&mut self, kind: &EventKind) {
         match kind {
@@ -371,6 +395,7 @@ impl Task {
             }
             EventKind::TaskCancelled { close_pr } => self.cancelled = Some(*close_pr),
             EventKind::TaskRetried => {
+                self.retry_review_or_verify();
                 // An unfinished run (crashed, stopped, interrupted...) is resumed by the
                 // next step; a finished one's outcome is simply cleared.
                 self.last_run_outcome = match self.last_run_outcome {
@@ -394,6 +419,7 @@ mod tests {
     use super::*;
     use crate::event::Actor;
     use crate::findings::{Decision, Finding, FindingKind, VerifyResult, VerifyStatus};
+    use crate::flow::{next_step, HumanReason, NextStep, PromptInput};
     use crate::github::{Checks, MergeState, PrLifecycle, ReviewDecision};
     use crate::ids::EventId;
     use crate::usage::Window;
@@ -712,6 +738,118 @@ mod tests {
         let t = &s.tasks[&T];
         assert_eq!((t.setup_ok, t.pr_missing, t.last_run_outcome), (Some(true), false, None));
         assert!(t.open_pr_requested);
+    }
+
+    fn review(run: i64, round: u32, outcome: ReviewOutcome) -> Vec<EventKind> {
+        vec![
+            started(run, Role::Reviewer, Purpose::Review),
+            finished(run, RunOutcome::Finished, "review"),
+            EventKind::ReviewReported { run: RunId(run), round, outcome },
+        ]
+    }
+
+    fn built() -> Vec<EventKind> {
+        vec![
+            EventKind::WorktreeCreated { path: "/w/t1".into(), branch: "regie/t1-t".into(), port_base: 41000 },
+            started(1, Role::Builder, Purpose::Initial),
+            finished(1, RunOutcome::Finished, "Status: done"),
+        ]
+    }
+
+    fn next(s: &State) -> NextStep {
+        next_step(&s.tasks[&T], s, &crate::settings::Settings::default())
+    }
+
+    fn unparsed() -> ReviewOutcome {
+        ReviewOutcome::Unparsed { raw: "lgtm".into() }
+    }
+
+    fn ruled_fix(round: u32) -> EventKind {
+        EventKind::FindingsRuled {
+            round,
+            rulings: vec![Ruling { finding: 1, decision: Decision::Fix, note: String::new() }],
+        }
+    }
+
+    #[test]
+    fn retry_runs_an_unparsed_review_again() {
+        // R9: round 1 could not be read; a retry drops it and the reviewer runs again.
+        let kinds: Vec<EventKind> = built().into_iter().chain(review(2, 1, unparsed())).collect();
+        assert_eq!(next(&state_of(kinds.clone())), NextStep::AwaitHuman(HumanReason::ReviewUnparsed));
+        let s = state_of(kinds.into_iter().chain([EventKind::TaskRetried]).collect());
+        assert!(s.tasks[&T].reviews.is_empty());
+        let round = |round| NextStep::StartRun {
+            role: Role::Reviewer,
+            purpose: Purpose::Review,
+            input: PromptInput::Review { round },
+        };
+        assert_eq!(next(&s), round(1));
+
+        // round 2: round 1 stays, round 2 runs again
+        let kinds: Vec<EventKind> = built()
+            .into_iter()
+            .chain(review(2, 1, ReviewOutcome::Findings(vec![blocking_finding()])))
+            .chain([ruled_fix(1), started(3, Role::Builder, Purpose::Fix), finished(3, RunOutcome::Finished, "Status: done")])
+            .chain(review(4, 2, unparsed()))
+            .chain([EventKind::TaskRetried])
+            .collect();
+        let s = state_of(kinds);
+        assert_eq!(s.tasks[&T].reviews.iter().map(|r| r.round).collect::<Vec<_>>(), [1]);
+        assert_eq!(next(&s), round(2));
+
+        // a retry that resumes a crashed run keeps the review: the task was not waiting on it
+        let kinds: Vec<EventKind> = built()
+            .into_iter()
+            .chain(review(2, 1, unparsed()))
+            .chain([
+                EventKind::MessageQueued { text: "look again".into() },
+                started(3, Role::Builder, Purpose::Message),
+                finished(3, RunOutcome::Crashed, ""),
+                EventKind::TaskRetried,
+            ])
+            .collect();
+        assert_eq!(state_of(kinds).tasks[&T].reviews.len(), 1);
+    }
+
+    #[test]
+    fn retry_runs_a_failed_verify_again() {
+        let verify = |status| EventKind::VerifyReported {
+            run: RunId(7),
+            outcome: VerifyOutcome::Results(vec![VerifyResult { finding: 1, status, note: String::new() }]),
+        };
+        let two_rounds = |status| -> Vec<EventKind> {
+            built()
+                .into_iter()
+                .chain(review(2, 1, ReviewOutcome::Findings(vec![blocking_finding()])))
+                .chain([ruled_fix(1), started(3, Role::Builder, Purpose::Fix), finished(3, RunOutcome::Finished, "Status: done")])
+                .chain(review(4, 2, ReviewOutcome::Findings(vec![blocking_finding()])))
+                .chain([ruled_fix(2), started(5, Role::Builder, Purpose::Fix), finished(5, RunOutcome::Finished, "Status: done")])
+                .chain([started(6, Role::Verify, Purpose::Verify), finished(6, RunOutcome::Finished, "v"), verify(status)])
+                .collect()
+        };
+        // Frédéric has the builder fix it, then retries: verify runs again
+        let kinds: Vec<EventKind> = two_rounds(VerifyStatus::NotFixed)
+            .into_iter()
+            .chain([
+                EventKind::MessageQueued { text: "fix the panic".into() },
+                started(7, Role::Builder, Purpose::Message),
+                finished(7, RunOutcome::Finished, "Status: done"),
+            ])
+            .collect();
+        assert_eq!(next(&state_of(kinds.clone())), NextStep::AwaitHuman(HumanReason::VerifyFailed));
+        let s = state_of(kinds.into_iter().chain([EventKind::TaskRetried]).collect());
+        assert_eq!(s.tasks[&T].verify, None);
+        assert_eq!(
+            next(&s),
+            NextStep::StartRun {
+                role: Role::Verify,
+                purpose: Purpose::Verify,
+                input: PromptInput::Verify { findings: vec![blocking_finding()] },
+            }
+        );
+        // a verify that passed is kept
+        let s = state_of(two_rounds(VerifyStatus::Fixed).into_iter().chain([EventKind::TaskRetried]).collect());
+        assert!(s.tasks[&T].verify.is_some());
     }
 
     #[test]

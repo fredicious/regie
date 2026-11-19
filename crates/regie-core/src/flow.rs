@@ -23,6 +23,7 @@ pub enum HumanReason {
     PrClosed,
     FixNotPushed(LoopKind),
     RunCrashed,
+    AgentStopped,
 }
 
 /// What the next run's prompt is built from.
@@ -82,6 +83,7 @@ pub fn next_step(task: &Task, state: &State, settings: &Settings) -> NextStep {
     // 5. The last run did not finish.
     match task.last_run_outcome {
         Some(RunOutcome::Crashed) => return NextStep::AwaitHuman(HumanReason::RunCrashed),
+        Some(RunOutcome::Stopped) => return NextStep::AwaitHuman(HumanReason::AgentStopped),
         Some(RunOutcome::Interrupted | RunOutcome::Paused | RunOutcome::LimitHit) => {
             // R11: reviewer and verify runs are always fresh agents, so they restart.
             return match state.last_run(task.id).map_or(Role::Builder, |r| r.role) {
@@ -190,7 +192,7 @@ fn review_step(task: &Task, rounds: u32) -> Option<NextStep> {
 }
 
 /// The round's findings ruled `Fix`.
-fn to_fix(review: &ReviewRecord) -> Vec<Finding> {
+pub(crate) fn to_fix(review: &ReviewRecord) -> Vec<Finding> {
     let (ReviewOutcome::Findings(findings), Some(rulings)) = (&review.outcome, &review.rulings) else {
         return Vec::new();
     };
@@ -202,7 +204,7 @@ fn to_fix(review: &ReviewRecord) -> Vec<Finding> {
 }
 
 /// R8: every finding sent to verify has a result, and every result is `Fixed`.
-fn verified(outcome: &VerifyOutcome, sent: &[Finding]) -> bool {
+pub(crate) fn verified(outcome: &VerifyOutcome, sent: &[Finding]) -> bool {
     let VerifyOutcome::Results(results) = outcome else { return false };
     results.iter().all(|r| r.status == VerifyStatus::Fixed)
         && sent.iter().all(|f| results.iter().any(|r| r.finding == f.id))
@@ -671,6 +673,14 @@ mod tests {
             RESUME_NOTE,
             "You were interrupted. Continue where you left off; check the state of the worktree first."
         );
+    }
+
+    #[test]
+    fn stopped_agent_waits_for_frederic() {
+        for role in [Role::Builder, Role::Reviewer] {
+            let b = TaskB::new().built().run(role, Purpose::Review, Some(RunOutcome::Stopped));
+            assert_eq!(step(b), human(HumanReason::AgentStopped), "{role:?}");
+        }
     }
 
     #[test]

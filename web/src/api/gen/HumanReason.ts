@@ -4,4 +4,4 @@ import type { LoopKind } from "./LoopKind";
 /**
  * Why a task waits for Frédéric.
  */
-export type HumanReason = "BuilderQuestion" | "SetupFailed" | "ReviewUnparsed" | "VerifyFailed" | { "CapReached": LoopKind } | "ChangesRequested" | "PrNotFound" | "PrClosed" | { "FixNotPushed": LoopKind } | "RunCrashed";
+export type HumanReason = "BuilderQuestion" | "SetupFailed" | "ReviewUnparsed" | "VerifyFailed" | { "CapReached": LoopKind } | "ChangesRequested" | "PrNotFound" | "PrClosed" | { "FixNotPushed": LoopKind } | "RunCrashed" | "AgentStopped";

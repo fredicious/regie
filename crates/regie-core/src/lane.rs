@@ -214,6 +214,7 @@ mod tests {
             ("human changes requested", with_worktree(task()), None, NextStep::AwaitHuman(HumanReason::ChangesRequested), false, None, Lane::InReview, vec![Flag::NeedsMe(HumanReason::ChangesRequested)]),
             ("human question", with_worktree(task()), None, NextStep::AwaitHuman(HumanReason::BuilderQuestion), false, None, Lane::Working, vec![Flag::NeedsMe(HumanReason::BuilderQuestion)]),
             ("human crashed", with_worktree(task()), None, NextStep::AwaitHuman(HumanReason::RunCrashed), false, None, Lane::Working, vec![Flag::NeedsMe(HumanReason::RunCrashed)]),
+            ("human agent stopped", with_worktree(task()), None, NextStep::AwaitHuman(HumanReason::AgentStopped), false, None, Lane::Working, vec![Flag::NeedsMe(HumanReason::AgentStopped)]),
             // 6. open PR
             ("pr ready", with_pr(with_worktree(task()), open(Checks::Success, MergeState::Clean, false)), None, nothing.clone(), false, None, Lane::ReadyToMerge, vec![]),
             ("pr green, blocked", with_pr(with_worktree(task()), open(Checks::Success, MergeState::Blocked, false)), None, nothing.clone(), false, None, Lane::InReview, vec![]),
