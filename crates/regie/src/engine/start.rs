@@ -75,10 +75,14 @@ impl Engine {
             total += 1;
             *by_session.entry(t.session).or_insert(0) += 1;
         }
+        let mut openness = openness_now(&self.state, self.now(), &self.settings);
+        if self.deps.run_anyway {
+            openness.values_mut().for_each(|o| *o = Openness::Open);
+        }
         Capacity {
             running_total: total,
             running_by_session: by_session,
-            openness: openness_now(&self.state, self.now(), &self.settings),
+            openness,
             paused_sessions: self.state.sessions.values().filter(|s| s.paused).map(|s| s.id).collect(),
             paused_all: self.state.paused_all,
         }

@@ -50,6 +50,9 @@ pub struct Deps {
     pub probe: Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<Reading>> + Send + Sync>,
     pub clock: Arc<dyn Fn() -> Millis + Send + Sync>,
     pub caffeinate: bool,
+    /// `REGIE_RUN_ANYWAY=1`: every provider counts as open (usage thresholds
+    /// and limit blocks are ignored; the slot caps still hold).
+    pub run_anyway: bool,
 }
 
 /// What readers see: the state as of the latest event, and the live view.

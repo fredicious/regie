@@ -17,6 +17,15 @@ fn parse(args: &[&str]) -> Cli {
 }
 
 #[test]
+fn run_anyway_only_on_one() {
+    use regie::cli::run_anyway;
+    assert!(run_anyway(Some("1".into())));
+    for v in [None, Some("0".into()), Some("".into()), Some("yes".into())] {
+        assert!(!run_anyway(v.clone()), "{v:?}");
+    }
+}
+
+#[test]
 fn parses_task_new() {
     let repo = tempfile::tempdir().unwrap();
     let repo_arg = repo.path().to_str().unwrap();

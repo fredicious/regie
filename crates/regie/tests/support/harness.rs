@@ -37,6 +37,7 @@ pub struct Harness {
     pub probe_five_hour: Arc<Mutex<f64>>,
     pub engine: EngineHandle,
     probe: Probe,
+    run_anyway: bool,
 }
 
 type Probe = Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<Reading>> + Send + Sync>;
@@ -44,6 +45,18 @@ type Probe = Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<Reading>> + Send 
 impl Harness {
     /// `script` decides each run; it can change the fake GitHub as the agent would.
     pub async fn new(script: impl Fn(&RunSpec, &FakeGitHub) -> FakeOutcome + Send + Sync + 'static) -> Harness {
+        Self::build(script, false).await
+    }
+
+    /// An engine started as with `REGIE_RUN_ANYWAY=1`.
+    pub async fn run_anyway(script: impl Fn(&RunSpec, &FakeGitHub) -> FakeOutcome + Send + Sync + 'static) -> Harness {
+        Self::build(script, true).await
+    }
+
+    async fn build(
+        script: impl Fn(&RunSpec, &FakeGitHub) -> FakeOutcome + Send + Sync + 'static,
+        run_anyway: bool,
+    ) -> Harness {
         let repo = TempRepo::new();
         fake_github_origin(&repo);
         let data_dir = tempfile::tempdir().unwrap();
@@ -63,15 +76,15 @@ impl Harness {
                 Box::pin(async move { Ok(reading(used, at)) })
             })
         };
-        let engine = start(&data, &claude, &gh, &probe, &now).await;
-        Harness { repo, _data_dir: data_dir, data, claude, gh, now, probe_calls, probe_five_hour, engine, probe }
+        let engine = start(&data, &claude, &gh, &probe, &now, run_anyway).await;
+        Harness { repo, _data_dir: data_dir, data, claude, gh, now, probe_calls, probe_five_hour, engine, probe, run_anyway }
     }
 
     /// Stops the engine (as when Régie is killed: runs are left unfinished) and
     /// starts a new one on the same data dir, with the same fakes.
     pub async fn restart(&mut self) {
         self.engine.shutdown().await;
-        self.engine = start(&self.data, &self.claude, &self.gh, &self.probe, &self.now).await;
+        self.engine = start(&self.data, &self.claude, &self.gh, &self.probe, &self.now, self.run_anyway).await;
     }
 
     pub fn repo_path(&self) -> String {
@@ -200,12 +213,20 @@ impl Harness {
     }
 }
 
-async fn start(data: &DataDir, claude: &Arc<FakeClaude>, gh: &Arc<FakeGitHub>, probe: &Probe, now: &Arc<AtomicI64>) -> EngineHandle {
+async fn start(
+    data: &DataDir,
+    claude: &Arc<FakeClaude>,
+    gh: &Arc<FakeGitHub>,
+    probe: &Probe,
+    now: &Arc<AtomicI64>,
+    run_anyway: bool,
+) -> EngineHandle {
     let clock = {
         let now = now.clone();
         Arc::new(move || Millis(now.load(Ordering::SeqCst)))
     };
-    let deps = Deps { runner: claude.clone(), github: gh.clone(), probe: probe.clone(), clock, caffeinate: false };
+    let deps =
+        Deps { runner: claude.clone(), github: gh.clone(), probe: probe.clone(), clock, caffeinate: false, run_anyway };
     engine::start(data.clone(), Settings::default(), deps).await.unwrap()
 }
 

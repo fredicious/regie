@@ -417,6 +417,11 @@ async fn open_dashboard(data: &DataDir) -> anyhow::Result<()> {
     )
 }
 
+/// Whether `REGIE_RUN_ANYWAY` asks to start work past the usage thresholds: only `1` does.
+pub fn run_anyway(var: Option<std::ffi::OsString>) -> bool {
+    var.is_some_and(|v| v == "1")
+}
+
 /// Starts the engine with the real Claude and gh, serves the API, and stops
 /// cleanly on SIGINT or SIGTERM.
 pub async fn serve_command(data: DataDir, port: u16, no_open: bool) -> anyhow::Result<()> {
@@ -444,7 +449,11 @@ pub async fn serve_command(data: DataDir, port: u16, no_open: bool) -> anyhow::R
             Millis(ms)
         }),
         caffeinate: true,
+        run_anyway: run_anyway(std::env::var_os("REGIE_RUN_ANYWAY")),
     };
+    if deps.run_anyway {
+        eprintln!("regie: REGIE_RUN_ANYWAY=1: usage thresholds and limit blocks are ignored; slot caps still hold");
+    }
     let engine = engine::start(data.clone(), Settings::default(), deps).await?;
     if !no_open {
         let data = data.clone();

@@ -329,6 +329,20 @@ async fn caps_hold_third_task_in_session() {
 }
 
 #[tokio::test]
+async fn run_anyway_ignores_thresholds_but_keeps_caps() {
+    let h = Harness::run_anyway(|_, _| hangs()).await;
+    *h.probe_five_hour.lock().unwrap() = 0.80;
+    let s = h.create_session(ProjectFacts::default()).await;
+    let mut tasks = Vec::new();
+    for title in ["one", "two", "three"] {
+        tasks.push(h.create_task(s, title, vec![]).await);
+    }
+    h.wait_for("two running past the threshold", SECS, |h| h.claude.specs().len() == 2).await;
+    h.wait_for("third waits for a slot", SECS, |h| h.card(tasks[2]).flags == [Flag::Waiting(QueuedReason::Slot)])
+        .await;
+}
+
+#[tokio::test]
 async fn threshold_holds_new_work() {
     let h = Harness::new(|_, _| hangs()).await;
     *h.probe_five_hour.lock().unwrap() = 0.80;
