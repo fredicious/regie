@@ -7,23 +7,27 @@ pub mod findings;
 pub mod flow;
 pub mod github;
 pub mod ids;
+pub mod lane;
 pub mod ports;
 pub mod scheduler;
 pub mod settings;
 pub mod state;
 pub mod usage;
+pub mod views;
 
-pub use command::{Command, CommandError, CommandResult};
+pub use command::{validate, Command, CommandError, CommandResult};
 pub use event::{Actor, Event, EventKind, LoopKind, NewEvent, Purpose, RepoInfo, Role, RunOutcome};
 pub use facts::ProjectFacts;
 pub use findings::*;
 pub use flow::{next_step, HumanReason, NextStep, PromptInput, RESUME_NOTE};
 pub use github::{Checks, MergeState, PrComment, PrLifecycle, PrState, ReviewDecision};
 pub use ids::{EventId, Millis, RunId, SessionId, TaskId};
+pub use lane::{lane, Flag, Lane};
 pub use settings::{Caps, Effort, Level, LoopCaps, ModelChoice, Provider, Settings, Thresholds};
 pub use state::{LoopCounts, ReviewRecord, Run, Session, State, Task, Worktree};
 pub use ports::allocate_port_base;
 pub use scheduler::{pick, Candidate, Capacity, QueuedReason};
+pub use views::{board, task_detail, BoardView, LiveView, TaskCard, TaskDetail, UsageRow};
 pub use usage::{needs_probe, openness, week_elapsed, Openness, Reading, Window, WindowKind};
 
 #[cfg(test)]
