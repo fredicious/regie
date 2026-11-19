@@ -31,31 +31,58 @@ pub fn task_env(task: TaskId, port_base: u16) -> Vec<(String, String)> {
 }
 
 async fn git(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let out = Command::new("git")
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .await
-        .with_context(|| format!("running git {args:?}"))?;
+    git_with(dir, args, crate::proc::DEFAULT_TIMEOUT).await
+}
+
+/// The environment every git call gets: English output whatever the user's
+/// locale, and never a prompt. For network calls, ssh runs in batch mode
+/// unless the caller already chose an ssh command (`GIT_SSH_COMMAND` in the
+/// environment, or the repo's `core.sshCommand`, which `GIT_SSH_COMMAND` would override).
+async fn git_env(dir: &Path, args: &[&str]) -> Vec<(&'static str, String)> {
+    let mut env = vec![("LC_ALL", "C".to_string()), ("GIT_TERMINAL_PROMPT", "0".to_string())];
+    let network = matches!(args.first(), Some(&"fetch" | &"ls-remote"));
+    if network && std::env::var_os("GIT_SSH_COMMAND").is_none() {
+        let mut cmd = Command::new("git");
+        cmd.current_dir(dir).args(["config", "--get", "core.sshCommand"]).env("LC_ALL", "C");
+        let configured = crate::proc::output(cmd, crate::proc::DEFAULT_TIMEOUT)
+            .await
+            .is_ok_and(|o| o.status.success() && !o.stdout.trim_ascii().is_empty());
+        if !configured {
+            env.push(("GIT_SSH_COMMAND", "ssh -o BatchMode=yes".to_string()));
+        }
+    }
+    env
+}
+
+async fn git_with(dir: &Path, args: &[&str], limit: std::time::Duration) -> anyhow::Result<String> {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(dir).args(args).envs(git_env(dir, args).await);
+    let out = crate::proc::output(cmd, limit).await.with_context(|| format!("running git {args:?}"))?;
     if !out.status.success() {
         bail!("git {args:?} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The remote's default branch: `origin/HEAD` when set, else what the remote
+/// itself says (`ls-remote --symref`, whose output is not translated).
 pub async fn default_branch(repo: &Path) -> anyhow::Result<String> {
     if let Ok(r) = git(repo, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).await {
         if let Some(b) = r.strip_prefix("origin/") {
             return Ok(b.to_string());
         }
     }
-    let shown = git(repo, &["remote", "show", "origin"]).await?;
-    shown
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("HEAD branch:"))
-        .map(|b| b.trim().to_string())
-        .filter(|b| !b.is_empty() && b != "(unknown)")
-        .context("could not determine the default branch")
+    let listed = git(repo, &["ls-remote", "--symref", "origin", "HEAD"]).await?;
+    parse_symref(&listed).context("could not determine the default branch")
+}
+
+/// `ref: refs/heads/main<TAB>HEAD` gives `main`.
+fn parse_symref(listed: &str) -> Option<String> {
+    listed.lines().find_map(|l| {
+        let (target, name) = l.strip_prefix("ref:")?.trim().split_once('\t')?;
+        let branch = target.trim().strip_prefix("refs/heads/")?;
+        (name.trim() == "HEAD" && !branch.is_empty()).then(|| branch.to_string())
+    })
 }
 
 /// `owner/name` when origin is on github.com (SSH or HTTPS form).
@@ -150,6 +177,51 @@ mod tests {
         assert_eq!(branch_name(TaskId(7), "Add CSV export: v2!"), "regie/t7-add-csv-export-v2");
         assert_eq!(slug(&"a".repeat(60)).len(), 40);
         assert_eq!(slug("  --Hi--  "), "hi");
+    }
+
+    /// A repo whose origin "ssh" hangs, as a fetch waiting on a prompt would.
+    fn hanging_origin() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("git").current_dir(dir.path()).args(args).status().unwrap();
+            assert!(ok.success(), "{args:?}");
+        };
+        run(&["init", "-q"]);
+        run(&["remote", "add", "origin", "git@github.com:o/r.git"]);
+        run(&["config", "ssh.variant", "simple"]);
+        run(&["config", "core.sshCommand", "sh -c 'sleep 30' x"]);
+        dir
+    }
+
+    #[tokio::test]
+    async fn hung_git_times_out() {
+        let dir = hanging_origin();
+        let t = std::time::Instant::now();
+        let err = git_with(dir.path(), &["fetch", "origin"], std::time::Duration::from_millis(300)).await.unwrap_err();
+        assert!(format!("{err:#}").contains("timed out"), "{err:#}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "took {:?}", t.elapsed());
+    }
+
+    #[tokio::test]
+    async fn git_never_prompts() {
+        let dir = tempfile::tempdir().unwrap();
+        std::process::Command::new("git").current_dir(dir.path()).args(["init", "-q"]).status().unwrap();
+        let env = git_env(dir.path(), &["fetch", "origin"]).await;
+        assert!(env.contains(&("LC_ALL", "C".into())));
+        assert!(env.contains(&("GIT_TERMINAL_PROMPT", "0".into())));
+        if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+            assert!(env.contains(&("GIT_SSH_COMMAND", "ssh -o BatchMode=yes".into())), "{env:?}");
+        }
+        // A repo's own core.sshCommand is kept (GIT_SSH_COMMAND would override it).
+        let dir = hanging_origin();
+        let env = git_env(dir.path(), &["fetch", "origin"]).await;
+        assert!(!env.iter().any(|(k, _)| *k == "GIT_SSH_COMMAND"), "{env:?}");
+    }
+
+    #[test]
+    fn symref_lines() {
+        assert_eq!(parse_symref("ref: refs/heads/trunk\tHEAD\nabc123\tHEAD").as_deref(), Some("trunk"));
+        assert_eq!(parse_symref("abc123\tHEAD"), None);
     }
 
     #[test]

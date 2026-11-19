@@ -430,7 +430,7 @@ pub async fn serve_command(data: DataDir, port: u16, no_open: bool) -> anyhow::R
             bin: claude.clone(),
             runs_dir: data.runs(),
         }),
-        github: Arc::new(GhCli),
+        github: Arc::new(GhCli::default()),
         probe: Arc::new(
             move || -> BoxFuture<'static, anyhow::Result<regie_core::Reading>> {
                 let (bin, dir) = (claude.clone(), probe_dir.clone());

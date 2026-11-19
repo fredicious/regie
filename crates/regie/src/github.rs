@@ -1,6 +1,7 @@
 //! GitHub through the `gh` CLI: PR state, CI checks and comments.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Context;
 use regie_core::{Checks, MergeState, Millis, PrComment, PrLifecycle, PrState, ReviewDecision};
@@ -176,17 +177,26 @@ pub fn aggregate_checks(rollup: &[serde_json::Value]) -> Checks {
     }
 }
 
-/// The real thing: shells out to `gh` in the repo folder.
-pub struct GhCli;
+/// The real thing: shells out to `gh` (normally from `PATH`) in the repo folder.
+pub struct GhCli {
+    pub bin: PathBuf,
+    /// How long one `gh` call may take; a call that hangs counts as failed.
+    pub timeout: Duration,
+}
+
+impl Default for GhCli {
+    fn default() -> Self {
+        GhCli { bin: PathBuf::from("gh"), timeout: crate::proc::DEFAULT_TIMEOUT }
+    }
+}
 
 impl GhCli {
-    async fn gh(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
-        let out = tokio::process::Command::new("gh")
-            .args(args)
-            .current_dir(repo)
-            .output()
+    async fn gh(&self, repo: &Path, args: &[&str]) -> anyhow::Result<String> {
+        let mut cmd = tokio::process::Command::new(&self.bin);
+        cmd.args(args).current_dir(repo).env("GH_PROMPT_DISABLED", "1");
+        let out = crate::proc::output(cmd, self.timeout)
             .await
-            .context("running gh")?;
+            .with_context(|| format!("running gh {}", args.join(" ")))?;
         if !out.status.success() {
             anyhow::bail!(
                 "gh {} failed: {}",
@@ -201,7 +211,7 @@ impl GhCli {
 #[async_trait::async_trait]
 impl GitHub for GhCli {
     async fn pr_for_branch(&self, repo: &Path, branch: &str) -> anyhow::Result<Option<PrState>> {
-        let json = Self::gh(
+        let json = self.gh(
             repo,
             &[
                 "pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json",
@@ -213,7 +223,7 @@ impl GitHub for GhCli {
     }
 
     async fn pr_activity(&self, repo: &Path, number: u64) -> anyhow::Result<Vec<PrComment>> {
-        let json = Self::gh(
+        let json = self.gh(
             repo,
             &[
                 "pr",
@@ -228,7 +238,7 @@ impl GitHub for GhCli {
     }
 
     async fn close_pr(&self, repo: &Path, number: u64) -> anyhow::Result<()> {
-        Self::gh(repo, &["pr", "close", &number.to_string()]).await?;
+        self.gh(repo, &["pr", "close", &number.to_string()]).await?;
         Ok(())
     }
 }
@@ -358,6 +368,25 @@ mod tests {
         for (name, rollup, want) in rows {
             assert_eq!(aggregate_checks(&rollup), want, "{name}");
         }
+    }
+
+    /// A `gh` stand-in: a shell script in a temp folder.
+    fn fake_gh(dir: &tempfile::TempDir, body: &str, timeout: std::time::Duration) -> GhCli {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.path().join("gh");
+        std::fs::write(&bin, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        GhCli { bin, timeout }
+    }
+
+    #[tokio::test]
+    async fn hung_gh_times_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let gh = fake_gh(&dir, "sleep 30", std::time::Duration::from_millis(300));
+        let t = std::time::Instant::now();
+        let err = gh.pr_activity(dir.path(), 3).await.unwrap_err();
+        assert!(format!("{err:#}").contains("timed out"), "{err:#}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "took {:?}", t.elapsed());
     }
 
     #[test]

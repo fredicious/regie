@@ -9,6 +9,7 @@ pub mod engine;
 pub mod git;
 pub mod github;
 pub mod paths;
+pub mod proc;
 pub mod server;
 pub mod store;
 pub mod usage;
