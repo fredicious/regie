@@ -33,6 +33,15 @@ impl Store {
         Ok(Store { conn })
     }
 
+    /// Opens an existing database for reading only (the server's second connection);
+    /// waits up to 5 seconds when the engine is writing.
+    pub fn open_reader(path: &Path) -> anyhow::Result<Store> {
+        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let conn = Connection::open_with_flags(path, flags).with_context(|| format!("opening {}", path.display()))?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        Ok(Store { conn })
+    }
+
     /// Appends an event and returns it with its assigned id.
     pub fn append(&mut self, e: NewEvent) -> anyhow::Result<Event> {
         let payload = serde_json::to_value(&e.kind)?;

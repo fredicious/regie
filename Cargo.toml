@@ -17,11 +17,14 @@ tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "fs", "time", "io-util"] }
 
 # Declared here as each crate first uses it (the milestone-1 stack):
-# axum = "0.8"
 # clap = { version = "4", features = ["derive"] }
 # reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-# rust-embed = "8"
 # tracing = "0.1"
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+rust-embed = "8"
+rand = "0.9"
+tokio-stream = "0.1"
 uuid = { version = "1", features = ["v4"] }
 libc = "0.2"
 async-trait = "0.1"

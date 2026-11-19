@@ -13,9 +13,14 @@ serde.workspace = true
 async-trait.workspace = true
 uuid.workspace = true
 libc.workspace = true
+axum.workspace = true
+rust-embed.workspace = true
+rand.workspace = true
+tokio-stream.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tower.workspace = true
 
 [lints]
 workspace = true
