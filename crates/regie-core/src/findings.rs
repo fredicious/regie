@@ -99,13 +99,24 @@ pub struct Ruling {
 /// A builder is done only if its last non-empty line is `Status: done`.
 pub fn parse_builder_status(final_message: &str) -> BuilderStatus {
     let last = final_message.lines().map(str::trim).rfind(|l| !l.is_empty());
-    match last {
+    match last.map(unwrap_emphasis) {
         Some(l) if l.eq_ignore_ascii_case("Status: done") => BuilderStatus::Done,
         _ => BuilderStatus::Question,
     }
 }
 
-/// Body of the last complete ```json fenced block, if any.
+/// Strips one layer of markdown emphasis or inline code around a whole line.
+fn unwrap_emphasis(line: &str) -> &str {
+    for w in ["**", "__", "*", "_", "`"] {
+        if line.len() > 2 * w.len() && line.starts_with(w) && line.ends_with(w) {
+            return line[w.len()..line.len() - w.len()].trim();
+        }
+    }
+    line
+}
+
+/// Body of the last ```json fenced block, only if that block is closed; a
+/// truncated final block yields `None` rather than an earlier block.
 fn last_json_block(msg: &str) -> Option<String> {
     let mut best = None;
     let mut open: Option<Vec<&str>> = None;
@@ -127,7 +138,7 @@ fn last_json_block(msg: &str) -> Option<String> {
             }
         }
     }
-    best
+    if open.is_some() { None } else { best }
 }
 
 #[derive(Deserialize)]
@@ -318,6 +329,16 @@ mod tests {
         assert_eq!(parse_builder_status("Status: question"), BuilderStatus::Question);
         assert_eq!(parse_builder_status(""), BuilderStatus::Question);
         assert_eq!(parse_builder_status("Status: done soon"), BuilderStatus::Question);
+        assert_eq!(parse_builder_status("**Status: done**\nmore"), BuilderStatus::Question);
+        assert_eq!(parse_builder_status("**Status: question**"), BuilderStatus::Question);
+        assert_eq!(parse_builder_status("**Status: done"), BuilderStatus::Question);
+    }
+
+    #[test]
+    fn status_line_may_be_wrapped_in_emphasis_or_code() {
+        for l in ["**Status: done**", "*Status: done*", "_Status: done_", "`Status: done`", "  **STATUS: Done**  "] {
+            assert_eq!(parse_builder_status(&format!("Work.\n\n{l}\n\n")), BuilderStatus::Done, "{l}");
+        }
     }
 
     #[test]
@@ -398,6 +419,14 @@ mod tests {
         // other fence languages are ignored
         let msg = "```json\n{\"findings\":[]}\n```\n```text\nhi\n```";
         assert_eq!(parse_review(msg), ReviewOutcome::Findings(vec![]));
+    }
+
+    #[test]
+    fn unterminated_last_fence_is_unparsed() {
+        let rev = "```json\n{\"findings\":[]}\n```\nMore:\n```json\n{\"findings\":[{\"title\":\"x\"";
+        assert!(matches!(parse_review(rev), ReviewOutcome::Unparsed { .. }));
+        let ver = "```json\n{\"results\":[]}\n```\nMore:\n```json\n{\"results\":[{\"finding\":1";
+        assert!(matches!(parse_verify(ver), VerifyOutcome::Unparsed { .. }));
     }
 
     #[test]
