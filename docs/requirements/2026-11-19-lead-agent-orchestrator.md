@@ -1,10 +1,11 @@
 # Lead-agent orchestrator: requirements
 
-**Date:** 2026-11-19 (revision 3, after two reviews)
+**Date:** 2026-11-19 (revision 4: agent autonomy realigned during design)
 **Source:** Frédéric's request in conversation, quoted where possible.
 **Purpose:** the yardstick for building the next version of Régie.
 **Status:**
 - Decisions from both reviews applied (see `2026-11-19-lead-agent-orchestrator-fable-review.md`).
+- Revision 4: R12 and R14 rewritten. The earlier "the tool enforces limits on agents" rule came from the review, not from me; agents now work like my own sessions (see R14).
 - Spike done (see "Spike results").
 - Next: design.
 
@@ -29,7 +30,7 @@ The model is an engineering org, inspired by Miguel Ríos Berríos, *I ran my ag
 ### R1. Start from local folders, with no setup
 
 - I point a session at one or more local folders and tell the lead to start. No GitHub App, no connectors to configure in the tool, no company or org setup, no per-agent sign-in.
-- Agents run with **my own Claude Code and Codex setup**: the logins, plugins, MCP servers and connectors already on the machine. That is how they reach Jira and everything else. Permissions are narrowed by R14.
+- Agents run with **my own Claude Code and Codex setup**: the logins, plugins, MCP servers and connectors already on the machine. That is how they reach Jira and everything else. They work as autonomously as my own sessions (R14).
 - **GitHub only in the first version**, through my existing `gh` login.
 - **Which folders can get tasks:** a folder gets tasks only if it's a git repo with a GitHub remote. Any other folder in a session is read-only context.
 
@@ -51,8 +52,8 @@ The model is an engineering org, inspired by Miguel Ríos Berríos, *I ran my ag
 - **Preflight at session start:** check that the backlog can be reached. If not (for example the connector's sign-in has expired), escalate.
 - **Ticket updates:**
   - The lead may comment on a ticket and move it to the mapped "in progress" or "in review" status without asking. Any other change to a ticket needs my OK.
-  - The lead requests these updates as commands (R3). The tool carries them out through a Claude call that can use only those Jira tools.
-- **When the backlog's provider is blocked:** only Claude reaches Jira on this Mac. While Claude is blocked by its usage limit, backlog reads and ticket updates wait in a queue, and the rest of the work carries on.
+  - The lead makes these updates itself, with my connectors. The allowance is part of its instructions.
+- **When the backlog's provider is blocked:** only Claude reaches Jira on this Mac, and the lead runs on Claude. While Claude is blocked by its usage limit, the lead's decisions and ticket updates wait, and the rest of the work carries on.
 
 > "tickets come from where ever is possible connected via native claude or codex plugins"
 
@@ -66,16 +67,15 @@ The model is an engineering org, inspired by Miguel Ríos Berríos, *I ran my ag
   - an escalation being answered;
   - resuming after a pause.
 
-  Each call rebuilds the lead's picture of the session from the tool's state (R12). Its context stays small however long the day runs. (Open design point: Orchestrator.inc instead keeps one lead conversation and delivers events into it as messages. See "Reference design".)
-- **The lead acts only through commands the tool provides:**
+  Each call rebuilds the lead's picture of the session from the tool's state (R12). Its context stays small however long the day runs. (Settled in the design: one lead conversation fed with events as messages, with a board snapshot in each, replaceable from the tool's state. See `docs/superpowers/specs/2026-11-19-lead-agent-orchestrator-design.md`.)
+- **The lead orchestrates through commands the tool provides:**
   - create a task (with its tickets and dependencies);
   - assign it to a role and provider;
   - request a review;
   - escalate;
-  - propose a follow-up;
-  - request a ticket update.
+  - propose a follow-up.
 
-  The tool checks each command and carries it out. The lead has no other effects.
+  The tool checks each command and carries it out. Outside orchestration, the lead uses my setup like any session, for example to read and update Jira tickets.
 - **It works autonomously**, in the spirit of the article.
 - **It escalates whenever it's unsure or needs a human decision**, and each escalation comes with a suggested answer. It must escalate when:
   - The scope changes, or the acceptance criteria are unclear.
@@ -120,7 +120,7 @@ The model is an engineering org, inspired by Miguel Ríos Berríos, *I ran my ag
 - **Order for each task:** build → local checks (the project's build, test and lint commands) → adversarial review → the tool opens the PR → CI → ready to merge.
 - **Always reviewed by a different agent** from the one that wrote the work.
 - **By the other provider** when that provider is under its "no new work" threshold (R10); otherwise by a fresh agent on the same provider.
-- **The reviewer** works read-only in the task's worktree. It can run commands and tests, but can't edit.
+- **The reviewer** works in the task's worktree. It can run commands and tests, and is told not to edit.
 - **Review has to finish.** Unchecked, adversarial review keeps finding new edge cases every round (Régie bench, 2026-09-28). So:
   - **A round** is one review followed by one fix. At most **2 rounds**, then a **verify-only pass** limited to the earlier findings.
   - **A blocking finding needs evidence:** a command that reproduces it, a failing test, or an unmet acceptance criterion cited with file and line. Without evidence, a finding is advisory.
@@ -191,10 +191,10 @@ Why these numbers: each running agent uses quota roughly in proportion to its ti
 - A web server on my Mac. No hosting, no accounts, no cloud sync.
 - **It listens on 127.0.0.1 only and checks a per-launch token and the request origin,** because it can start agents with my credentials.
 
-### R12. The tool holds the state and performs the side effects
+### R12. The tool holds the state
 
 - **State:** sessions, tasks, ticket references, task logs, decisions, escalations, chat history and handover packages live in the tool's own storage, not in any agent's conversation.
-- **Side effects:** the tool, not the agents, commits, pushes, opens and updates PRs, and makes ticket updates (R2, R14).
+- **The work itself is done by the agents,** like my own sessions: builders commit, push and open their PR; the lead updates tickets. The tool prepares worktrees, schedules, watches PRs and CI, and cleans up. It never merges.
 
 ### R13. Resume after a restart
 
@@ -203,35 +203,18 @@ Why these numbers: each running agent uses quota roughly in proportion to its ti
 - **On start, the tool checks the agent processes it recorded.** It takes over the ones still running or stops them. No orphan keeps editing a worktree.
 - **The Mac stays awake while agents are running.**
 
-### R14. Isolation and permissions
+### R14. Autonomy and isolation
 
-The tool enforces these limits; they don't depend on agents following instructions.
+> "the whole point of the agents is to be autonomous, not baby sitted"
 
-How (from the spike):
-- **Agents run inside their CLI's sandbox:** writes only in their worktree, and no network route to GitHub.
-- **Connector tools are limited per agent profile:** an allowlist of what it may use, and write tools hidden.
-- **Rules on shell commands aren't relied on,** since they can be bypassed.
-
-- **Worktrees:**
-  - Each task works in its own worktree and branch, created from a freshly fetched `origin/<default branch>`.
-  - My working copy (its files, index and checked-out branch) is never changed.
-  - The tool copies the project's listed untracked files, such as `.env`, into new worktrees (R2).
-- **Agents may:**
-  - read anything in the session's repos;
-  - edit, build and test inside their task's worktree, and install dependencies there;
-  - use connectors' read tools.
-- **Agents may not:**
-  - commit, push, or write through `gh` (the tool does that, R12);
-  - use connectors' write tools (Slack, Confluence, Jira writes and the rest), which are denied by default;
-  - touch repos outside the session.
-- **The tool itself never:**
-  - merges;
-  - pushes to the default branch;
-  - force-pushes;
-  - deletes remote branches;
-  - changes a ticket beyond R2's allowance.
-- **Parallel test runs must not collide**, for example on ports or local databases. How is a design question.
-- **Cleanup:** after a merge or a cancel, the tool removes the task's worktree and local branch.
+- **Agents work like my own Claude Code and Codex sessions:** my plugins, skills, hooks and connectors, network access, and no prompts for permission. Claude runs in its auto mode; Codex in its autonomous mode.
+- **Start simple, restrict when a problem shows up.** No sandbox profiles or tool allowlists in the first version. Every agent's output is kept, so problems are visible when they happen.
+- **What stays, because it's the job rather than babysitting:**
+  - **Worktrees:** each task works in its own worktree and branch, created from a freshly fetched `origin/<default branch>`. My working copy (its files, index and checked-out branch) is never changed. The tool copies the project's listed untracked files, such as `.env`, into new worktrees (R2).
+  - **I merge.** Neither the tool nor the agents merge; agents are told so.
+  - **Parallel test runs must not collide**, for example on ports or local databases. How is a design question.
+  - **Cleanup:** after a merge or a cancel, the tool removes the task's worktree and local branch. It never deletes remote branches.
+- **Accepted risk:** an agent steered by a ticket, a PR comment or a web page could push elsewhere, post through a connector, or touch files outside its worktree. Only its instructions and, for Claude, auto mode's own judgement stand in the way.
 - **Recommended:** branch protection on each repo's default branch as a backstop.
 
 ### R15. The lead remembers each project
@@ -344,7 +327,7 @@ R15 covers the facts onboarding settles. This adds **lessons**: short things lea
   - a change to a setting: the caps and thresholds in R6 and R10, or the model and effort per role in R4;
   - a change to the project's stored facts (R15), such as a test command or the definition of done;
   - an addition to a role's standing instructions for this project, such as what the reviewer must check or when the lead should escalate.
-- **What it may not touch:** the permissions in R14, the tool's own code, or the built-in prompts. Project instructions are added on top of the built-in ones, not instead of them.
+- **What it may not touch:** R14's rules (agent autonomy, worktrees, I merge), the tool's own code, or the built-in prompts. Project instructions are added on top of the built-in ones, not instead of them.
 - **Who approves:** I do. The proposals from one reflection arrive as **one item** in the Needs me queue (R18), each with accept and reject. Lessons from R19 don't wait for this.
 - **Every accepted change is recorded** in the log (R23): what changed, why, when, and the old value, with a one-click **revert**.
 - **Did it help:** each proposal names the one metric it expects to move. After the next 10 merged tasks, the reflection reports that metric before and after, and suggests keeping or reverting. It's a before-and-after comparison on few tasks, not a proof, and the report says so.
@@ -432,7 +415,7 @@ The tool needs two things for testing: a **usage source that can be overridden**
    I click **accept suggestion** in the queue, and the item clears in the chat too.
 5. The simulated Claude 5-hour window crosses 75%. New work goes to Codex, and the usage panel shows why.
 6. I press **Pause**. Every agent in the session stops, and no further usage occurs. I press **Resume**, and the agents continue their sessions.
-7. The tool opens the PRs, CI runs, and the cards reach **Ready to merge**. The tool has commented on both Jira tickets and moved them to "in review".
+7. The builders open the PRs, CI runs, and the cards reach **Ready to merge**. The lead has commented on both Jira tickets and moved them to "in review".
 8. I kill the tool mid-run and start it again. Everything resumes, with no orphan agents.
 9. I merge the first PR. The blocked task starts. Merged cards move to **Merged**, and their worktrees are removed.
 
@@ -440,14 +423,13 @@ The tool needs two things for testing: a **usage source that can be overridden**
 
 - A real limit hit mid-run parks the task and restarts it on the other provider.
 - With both providers blocked, work waits, and the panel shows when each resets.
-- While Claude is blocked, Jira actions wait in the queue.
+- While Claude is blocked, the lead's decisions and Jira updates wait, and Codex work carries on.
 - The 2-round review cap leads to the verify pass, then an escalation.
 - A CI failure loops back to Working; after 3 failures, it escalates.
 - A merge conflict loops back to Working.
 - A task can be cancelled and retried.
 - A second session runs alongside the first, and I can switch between them. Items from both sessions appear in the one Needs me queue.
 - **Pause all** stops every session.
-- An agent trying to push, or to post to Slack, is refused.
 - I answer an escalation; the next task in that repo gets the lesson in its prompt, and the card lists it.
 - A lesson past 90 days unconfirmed is no longer injected.
 - After 10 merged tasks, one reflection item appears in the Needs me queue. I accept one proposal, and the log shows it with its metric and a revert button. I revert it from the log, the old value is back, and the revert is logged too.
@@ -459,7 +441,7 @@ Details in `docs/spikes/2026-11-19-lead-agent-spike.md`.
 
 1. **Headless Codex resume works**, including after the process is killed mid-turn. The context survives, and the prompt cache is reused.
 2. **Concurrent Codex runs on one login work.** A refresh race couldn't be provoked safely: the token lasts 240 hours. **Design choice:** run all Codex agents as threads of one `codex app-server`, which owns the login. It ran two turns at once, and its protocol also gives interrupt (R16), resume (R13), steering, and rate limits (R5).
-3. **Claude permissions:** `--permission-mode dontAsk` with an allowlist denies everything else, and `--disallowedTools` removes write tools (or whole connectors) from view. **Rules on shell commands are not a boundary:** `bash -c 'git push …'` got past a `git push` deny. The CLIs' sandboxes are: Claude's blocks network through an allowlist proxy, and Codex's workspace-write has no network. So R14 is enforced by sandboxing agents, with the tool doing git and GitHub work outside the sandbox.
+3. **Claude permissions:** `--permission-mode dontAsk` with an allowlist denies everything else, and `--disallowedTools` removes write tools (or whole connectors) from view. **Rules on shell commands are not a boundary:** `bash -c 'git push …'` got past a `git push` deny. The CLIs' sandboxes are: Claude's blocks network through an allowlist proxy, and Codex's workspace-write has no network. This led to sandboxed agents in revision 3; revision 4 dropped that in favour of autonomous agents (R14).
 
 ## Constraints found on this machine
 
